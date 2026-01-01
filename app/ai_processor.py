@@ -1,9 +1,11 @@
 import json
-import google.genai as genai
-from typing import Dict, Any
+import logging
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-from .config import settings
+from core.llm import LLMOrchestrator, LLMConfig
+
+logger = logging.getLogger(__name__)
 
 
 def get_thread_messages(db, thread_id: str, exclude_message_id: int = None) -> list:
@@ -59,11 +61,14 @@ def build_thread_context(messages: list, current_message_id: int = None) -> str:
 
 
 class AIProcessor:
-    def __init__(self, model_name: str = "gemini-3-flash-preview", prompts_dir: str = "prompts"):
-        self.model = model_name
+    def __init__(
+        self,
+        prompts_dir: str = "prompts",
+        llm_config: Optional[LLMConfig] = None,
+    ):
         self.prompts_dir = Path(prompts_dir)
         self._prompts_cache = {}
-        self.client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        self._orchestrator = LLMOrchestrator(config=llm_config)
 
     def _load_prompt(self, prompt_name: str) -> str:
         """Load a prompt from the prompts directory"""
@@ -123,19 +128,11 @@ class AIProcessor:
             prompt = prompt_template.format(sender=sender, subject=subject, body=body)
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
-            )
-            result_text = response.text.strip()
+            result = self._orchestrator.generate(prompt)
 
-            # Extract JSON from markdown code blocks if present
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
-
-            result = json.loads(result_text)
+            if result.get("_error"):
+                logger.warning(f"Failed to parse process_message response")
+                return self._empty_process_result()
 
             return {
                 'summary': result.get('summary', ''),
@@ -146,15 +143,19 @@ class AIProcessor:
                 'extracted_decisions': result.get('decisions', [])
             }
         except Exception as e:
-            print(f"Error processing message: {e}")
-            return {
-                'summary': 'Error processing message',
-                'needs_reply': None,
-                'extracted_tasks': [],
-                'extracted_dates': [],
-                'extracted_people': [],
-                'extracted_decisions': []
-            }
+            logger.error(f"Error processing message: {e}")
+            return self._empty_process_result()
+
+    def _empty_process_result(self) -> Dict[str, Any]:
+        """Return empty result structure for process_message"""
+        return {
+            'summary': '',
+            'needs_reply': None,
+            'extracted_tasks': [],
+            'extracted_dates': [],
+            'extracted_people': [],
+            'extracted_decisions': []
+        }
 
     def summarize(self, text: str, db=None, thread_id: str = None) -> str:
         """
@@ -180,14 +181,11 @@ class AIProcessor:
         prompt = prompt_template.format(text=text)
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
-            )
-            return response.text.strip()
+            result = self._orchestrator.generate(prompt)
+            return result.get('summary', '')
         except Exception as e:
-            print(f"Error summarizing: {e}")
-            return "Error generating summary"
+            logger.error(f"Error summarizing: {e}")
+            return ""
 
     def classify_needs_reply(self, subject: str, body: str, sender: str) -> bool:
         """Classify if message needs a reply"""
@@ -195,13 +193,10 @@ class AIProcessor:
         prompt = prompt_template.format(sender=sender, subject=subject, body=body)
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
-            )
-            return response.text.strip().lower() == "true"
+            result = self._orchestrator.generate(prompt)
+            return result.get('needs_reply', False)
         except Exception as e:
-            print(f"Error classifying: {e}")
+            logger.error(f"Error classifying: {e}")
             return False
 
     def extract_info(self, text: str, info_type: str) -> list:
@@ -210,21 +205,20 @@ class AIProcessor:
         prompt = prompt_template.format(text=text)
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
-            )
-            result_text = response.text.strip()
+            result = self._orchestrator.generate(prompt)
 
-            # Extract JSON array from markdown code blocks if present
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
+            if result.get("_error"):
+                logger.warning(f"Failed to parse extract_{info_type} response")
+                return []
 
-            return json.loads(result_text)
+            # Handle both list and dict responses
+            if isinstance(result, list):
+                return result
+            if isinstance(result, dict) and info_type in result:
+                return result[info_type]
+            return []
         except Exception as e:
-            print(f"Error extracting {info_type}: {e}")
+            logger.error(f"Error extracting {info_type}: {e}")
             return []
 
     # Scheduling keywords for quick detection (no LLM call)
@@ -348,32 +342,27 @@ class AIProcessor:
         )
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
-            )
-            draft = response.text.strip()
+            result = self._orchestrator.generate(prompt)
+            draft = result.get('draft', '')
+
+            if not draft or result.get('_error'):
+                return ""
 
             # Safety check: reject if it contains obvious placeholders
             placeholder_patterns = ["[Insert", "[Time]", "[Date]", "[Name]", "[Your", "[Their"]
             if any(p.lower() in draft.lower() for p in placeholder_patterns):
-                print(f"Warning: Draft contained placeholder text, regenerating...")
-                # Try once more with stronger instruction
+                logger.warning("Draft contained placeholder text, regenerating...")
                 retry_prompt = prompt + "\n\nIMPORTANT: Your previous response contained placeholder text like [Insert Time]. This is NOT allowed. Generate a real response without ANY bracketed placeholders."
-                retry_response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=retry_prompt
-                )
-                draft = retry_response.text.strip()
+                result = self._orchestrator.generate(retry_prompt)
+                draft = result.get('draft', '')
 
-                # If still has placeholders, return a safe fallback
                 if any(p.lower() in draft.lower() for p in placeholder_patterns):
                     return "Thank you for your email. I'll review this and get back to you shortly."
 
             return draft
         except Exception as e:
-            print(f"Error generating draft reply: {e}")
-            return "Error generating draft reply"
+            logger.error(f"Error generating draft reply: {e}")
+            return ""
 
     def extract_tasks_enhanced(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -400,23 +389,15 @@ class AIProcessor:
         )
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
-            )
-            result_text = response.text.strip()
+            result = self._orchestrator.generate(prompt)
 
-            # Extract JSON from markdown code blocks if present
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
+            if result.get("_error"):
+                logger.warning("Failed to parse extract_tasks_enhanced response")
+                return {"tasks": []}
 
-            result = json.loads(result_text)
             return result
-
         except Exception as e:
-            print(f"Error extracting enhanced tasks: {e}")
+            logger.error(f"Error extracting enhanced tasks: {e}")
             return {"tasks": []}
 
     def evaluate_reminder_context(self, context_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -443,26 +424,133 @@ class AIProcessor:
         )
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
-            )
-            result_text = response.text.strip()
+            result = self._orchestrator.generate(prompt)
 
-            # Extract JSON from markdown code blocks if present
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
+            if result.get("_error"):
+                logger.warning("Failed to parse evaluate_reminder_context response")
+                return self._empty_reminder_result("Parse error")
 
-            result = json.loads(result_text)
             return result
-
         except Exception as e:
-            print(f"Error evaluating reminder context: {e}")
-            return {
-                "should_remind": False,
-                "reason": f"Evaluation error: {str(e)}",
-                "reschedule_for": None,
-                "suggested_message": None
+            logger.error(f"Error evaluating reminder context: {e}")
+            return self._empty_reminder_result(str(e))
+
+    def _empty_reminder_result(self, reason: str) -> Dict[str, Any]:
+        """Return empty result for evaluate_reminder_context"""
+        return {
+            "should_remind": False,
+            "reason": f"Evaluation error: {reason}",
+            "reschedule_for": None,
+            "suggested_message": None
+        }
+
+    def process_messages_batch(
+        self,
+        messages: List[Dict[str, Any]],
+        db=None,
+    ) -> List[Dict[str, Any]]:
+        """Process multiple messages in a single batch operation."""
+        if not messages:
+            return []
+
+        prompts = []
+        for msg in messages:
+            subject = msg.get('subject', '')
+            body = msg.get('body', '')
+            sender = msg.get('sender', '')
+            thread_id = msg.get('thread_id')
+            message_id = msg.get('message_id')
+
+            thread_context = ""
+            if db and thread_id:
+                thread_messages = get_thread_messages(db, thread_id, exclude_message_id=message_id)
+                if thread_messages:
+                    thread_context = build_thread_context(thread_messages, current_message_id=message_id)
+
+            if thread_context:
+                prompt_template = self._load_prompt('process_message_thread')
+                prompt = prompt_template.format(
+                    sender=sender,
+                    subject=subject,
+                    body=body,
+                    thread_context=thread_context
+                )
+            else:
+                prompt_template = self._load_prompt('process_message')
+                prompt = prompt_template.format(sender=sender, subject=subject, body=body)
+
+            prompts.append(prompt)
+
+        try:
+            raw_results = self._orchestrator.generate_batch(prompts)
+        except Exception as e:
+            logger.error(f"Batch process_messages failed: {e}")
+            return [self._empty_process_result() for _ in messages]
+
+        return [
+            self._empty_process_result() if result.get("_error") else {
+                'summary': result.get('summary', ''),
+                'needs_reply': result.get('needs_reply', False),
+                'extracted_tasks': result.get('tasks', []),
+                'extracted_dates': result.get('dates', []),
+                'extracted_people': result.get('people', []),
+                'extracted_decisions': result.get('decisions', [])
             }
+            for result in raw_results
+        ]
+
+    def extract_tasks_batch(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Extract tasks from multiple messages in a single batch operation."""
+        if not messages:
+            return []
+
+        prompt_template = self._load_prompt('extract_tasks_enhanced')
+        prompts = [
+            prompt_template.format(
+                sender=msg.get('sender', ''),
+                subject=msg.get('subject', ''),
+                body=msg.get('body', ''),
+                custom_instructions=msg.get('custom_instructions', '') or "None"
+            )
+            for msg in messages
+        ]
+
+        try:
+            raw_results = self._orchestrator.generate_batch(prompts)
+        except Exception as e:
+            logger.error(f"Batch extract_tasks failed: {e}")
+            return [{"tasks": []} for _ in messages]
+
+        return [
+            {"tasks": []} if result.get("_error") else result
+            for result in raw_results
+        ]
+
+    def summarize_batch(self, texts: List[str]) -> List[str]:
+        """Summarize multiple texts in a single batch operation."""
+        if not texts:
+            return []
+
+        prompt_template = self._load_prompt('summarize')
+        prompts = [prompt_template.format(text=text) for text in texts]
+
+        try:
+            results = self._orchestrator.generate_batch(prompts)
+            return [r.get('summary', '') for r in results]
+        except Exception as e:
+            logger.error(f"Batch summarize failed: {e}")
+            return ["" for _ in texts]
+
+    # =========================================================================
+    # Lifecycle
+    # =========================================================================
+
+    def cleanup(self) -> None:
+        """Release LLM resources"""
+        self._orchestrator.cleanup()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()

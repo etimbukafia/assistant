@@ -15,7 +15,11 @@ ENV/
 # Database
 *.db
 *.db-journal
+
+#Files
 *.md
+!prompts/
+!prompts/*.md
 
 # Google credentials
 credentials.json

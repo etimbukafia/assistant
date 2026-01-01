@@ -40,7 +40,7 @@ class AssistantOrchestrator:
 
     def __init__(
         self,
-        model_name: str = "gemini-3-flash-preview",
+        model_name: str = "gemini-2.5-flash",
         prompts_dir: str = "prompts"
     ):
         """Initialize the orchestrator"""
