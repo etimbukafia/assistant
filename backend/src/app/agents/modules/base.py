@@ -7,8 +7,11 @@ Modules are specialized, stateless capabilities that:
 - Can be combined by the orchestrator
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from datetime import datetime, timezone
+
+if TYPE_CHECKING:
+    from core.llm import LLMConfig
 
 
 class BaseModule(ABC):
@@ -19,9 +22,34 @@ class BaseModule(ABC):
     The orchestrator manages state and decision-making.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        prompts_dir: str = "prompts",
+        llm_config: Optional["LLMConfig"] = None,
+    ):
         """Initialize the module"""
+        from pathlib import Path
+        from core.llm import LLMOrchestrator
+
         self.module_name = self.__class__.__name__
+        self.prompts_dir = Path(prompts_dir)
+        self._prompts_cache = {}
+        self._orchestrator = LLMOrchestrator(config=llm_config)
+
+    def _load_prompt(self, prompt_name: str) -> str:
+        """Load a prompt from the prompts directory"""
+        if prompt_name in self._prompts_cache:
+            return self._prompts_cache[prompt_name]
+
+        prompt_path = self.prompts_dir / f"{prompt_name}.md"
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                prompt = f.read()
+                self._prompts_cache[prompt_name] = prompt
+                return prompt
+        except FileNotFoundError:
+            # Fallback to module specific subfolder if needed, or raise
+            raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
 
     @abstractmethod
     def get_capabilities(self) -> Dict[str, str]:

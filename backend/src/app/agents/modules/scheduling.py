@@ -58,10 +58,27 @@ class SchedulingModule(BaseModule):
         Returns:
             Dict with has_intent, intent_type, confidence, and extracted details
         """
-        from ...ai_processor import AIProcessor
 
-        ai_processor = AIProcessor()
-        return ai_processor.detect_scheduling_intent(message_body, message_subject)
+        prompt_template = self._load_prompt('detect_scheduling_intent')
+        prompt = prompt_template.format(body=message_body, subject=message_subject)
+
+        try:
+            result = self._orchestrator.generate(prompt)
+            if result.get("_error"):
+                # Fallback
+                return {"has_intent": False, "intent_type": "none", "confidence": 0.0}
+            
+            # Map DB fields if needed, usually direct return is fine if prompt matches schema
+            return {
+                "has_intent": result.get("detected", False),
+                "intent_type": result.get("type", "none"),
+                "confidence": result.get("confidence", 0.0),
+                "meeting_with": result.get("meeting_with", ""),
+                "mentioned_times": result.get("mentioned_times", [])
+            }
+        except Exception as e:
+            logger.error(f"Error detecting scheduling intent: {e}")
+            return {"has_intent": False, "intent_type": "none", "confidence": 0.0}
 
     def extract_scheduling_details(
         self,
@@ -82,10 +99,23 @@ class SchedulingModule(BaseModule):
         Returns:
             Dict with participants, time_constraints, meeting_type, duration_minutes, timezone
         """
-        from ...ai_processor import AIProcessor
 
-        ai_processor = AIProcessor()
-        return ai_processor.extract_scheduling_details(message_body, message_subject, sender_email)
+        prompt_template = self._load_prompt('extract_scheduling_details')
+        prompt = prompt_template.format(
+            body=message_body, 
+            subject=message_subject,
+            sender=sender_email
+        )
+
+        try:
+            result = self._orchestrator.generate(prompt)
+            if result.get("_error"):
+                logger.warning("Failed to parse extract_scheduling_details response")
+                return {}
+            return result
+        except Exception as e:
+            logger.error(f"Error extracting scheduling details: {e}")
+            return {}
 
     def fetch_availability(
         self,
@@ -176,6 +206,47 @@ class SchedulingModule(BaseModule):
                 "timezone": "UTC"
             }
 
+    def get_availability_context_string(
+        self,
+        db: Session,
+        user_id: str,
+        days: int = 14
+    ) -> str:
+        """
+        Get a formatted string of availability for context injection.
+        """
+        try:
+            from datetime import datetime, timezone, timedelta
+            start = datetime.now(timezone.utc)
+            end = start + timedelta(days=days)
+            
+            result = self.fetch_availability(
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+                duration_minutes=30,
+                count=5,
+                db=db,
+                user_id=user_id
+            )
+            
+            if not result.get("success") or not result.get("suggested_slots"):
+                return ""
+                
+            slots = result.get("suggested_slots", [])
+            tz = result.get("timezone", "UTC")
+            
+            slot_texts = []
+            for slot in slots:
+                # slot['start_time'] is ISO string
+                dt = datetime.fromisoformat(slot['start_time'].replace('Z', '+00:00'))
+                slot_texts.append(dt.strftime("%A at %-I:%M%p").replace("AM", "am").replace("PM", "pm"))
+            
+            return f"\n- **Your available times ({tz}):** {', '.join(slot_texts)}"
+            
+        except Exception as e:
+            logger.error(f"Error generating availability context string: {e}")
+            return ""
+
     def generate_draft_reply(
         self,
         intent_type: str,
@@ -206,7 +277,8 @@ class SchedulingModule(BaseModule):
         Returns:
             Draft reply text
         """
-        from ...ai_processor import AIProcessor
+
+        pass # imports removed
 
         # Get Principal Memory context if db available
         memory_context = ""
@@ -289,8 +361,10 @@ class SchedulingModule(BaseModule):
             if memory_context:
                 additional_requirements += "\n- Apply any user preferences mentioned above (tone, formality, etc.)"
 
-        ai_processor = AIProcessor()
-        return ai_processor.generate_scheduling_reply(
+        # Generate draft directly using BaseModule's orchestrator
+        prompt_template = self._load_prompt('scheduling_draft_reply')
+        
+        prompt = prompt_template.format(
             intent_type=intent_type,
             context_details=context_details,
             sentence_limit=sentence_limit,
@@ -298,6 +372,13 @@ class SchedulingModule(BaseModule):
             additional_requirements=additional_requirements,
             example=f"Example: \"{example}\""
         )
+        
+        try:
+            result = self._orchestrator.generate(prompt)
+            return result.get('reply', '')
+        except Exception as e:
+            logger.error(f"Error generating scheduling reply: {e}")
+            return ""
 
     def generate_event_description(
         self,
@@ -316,10 +397,20 @@ class SchedulingModule(BaseModule):
         Returns:
             Event description text
         """
-        from ...ai_processor import AIProcessor
 
-        ai_processor = AIProcessor()
-        return ai_processor.generate_event_description(message_body, meeting_type, participants)
+        # Inline generation
+        prompt_template = self._load_prompt('generate_event_description')
+        prompt = prompt_template.format(
+            body=message_body,
+            meeting_type=meeting_type,
+            participants=", ".join(participants)
+        )
+        try:
+            result = self._orchestrator.generate(prompt)
+            return result.get("description", "")
+        except Exception as e:
+            logger.error(f"Error generating event description: {e}")
+            return ""
 
     def generate_suggestions(
         self,

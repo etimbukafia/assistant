@@ -433,14 +433,80 @@ def draft_reply(
 
     context = request.context if request else ""
 
-    # Pass db session for Principal Memory context injection
-    draft = ai_processor.generate_draft_reply(
-        message_data,
-        context,
-        db=db,
-        user_id=message.user_id,
-        scheduling_intent=message.scheduling_intent or False
-    )
+    # Determine which module to use based on intent
+    if message.scheduling_intent:
+        from app.agents.modules.scheduling import SchedulingModule
+        
+        
+        # Instantiate module (lightweight)
+        scheduling_module = SchedulingModule()
+        
+        # Use message intent type or default
+        intent_type = message.scheduling_intent_type or "availability_request"
+        
+        # Fetch slots for context
+        availability_context = scheduling_module.get_availability_context_string(
+            db=db, 
+            user_id=message.user_id
+        )
+        
+        
+        # Re-extract details to get full context for the draft
+        details = scheduling_module.extract_scheduling_details(
+            message_data['body'], 
+            message_data['subject'], 
+            message_data['sender']
+        )
+        
+        # Let's re-use the availability context string logic but we need detailed slots for 'generate_draft_reply'.
+        # For now, let's use a simplified flow or the detailed one.
+        
+        # Fetch actual availability data
+        from datetime import datetime, timezone, timedelta
+        start = datetime.now(timezone.utc)
+        settings = db.query(GmailAccount).filter(GmailAccount.user_id == message.user_id).first() # settings actually in UserSettings
+        # Skipping elaborate fetching here to keep it simple, or relying on what we can.
+        
+        # Let's call fetch_availability
+        av_result = scheduling_module.fetch_availability(
+            start_date=start.isoformat(),
+            end_date=(start + timedelta(days=14)).isoformat(),
+            db=db,
+            user_id=message.user_id
+        )
+        suggested_slots = av_result.get("suggested_slots", [])
+        tz = av_result.get("timezone", "UTC")
+        
+        draft = scheduling_module.generate_draft_reply(
+            intent_type=intent_type,
+            suggested_slots=suggested_slots,
+            meeting_type=details.get("meeting_type", "meeting"),
+            timezone_str=tz,
+            sender_name=message.sender.split('<')[0].strip('" '),
+            meeting_with=details.get("meeting_with", ""),
+            mentioned_times=details.get("mentioned_times", []),
+            sender_email=message.sender,
+            db=db,
+            user_id=message.user_id
+        )
+
+    else:
+        from app.agents.modules.communication import CommunicationModule
+        
+        comm_module = CommunicationModule()
+        
+        # Use generate_reply
+        result = comm_module.generate_reply(
+            message_body=message_data['body'],
+            message_subject=message_data['subject'],
+            sender_email=message_data['sender'],
+            intent="reply",
+            tone="Professional and helpful",
+            additional_context=context,
+            db=db,
+            user_id=message.user_id
+        )
+        draft = result.get("draft", "")
 
     # Save draft to database
     message.draft_reply = draft

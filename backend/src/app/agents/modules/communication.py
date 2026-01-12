@@ -254,7 +254,7 @@ class CommunicationModule(BaseModule):
         Returns:
             Dict with 'draft', 'subject_line', 'tone_used', 'confidence'
         """
-        from app.ai_processor import AIProcessor
+
 
         try:
             # If message_id provided, fetch the message
@@ -288,10 +288,18 @@ class CommunicationModule(BaseModule):
                 "additional_context": additional_context or ""
             }
 
-            # Generate using AI
-            ai_processor = AIProcessor()
-            result = ai_processor.generate_email_reply(reply_context)
+            # Inline generation
+            prompt_template = self._load_prompt('draft_reply')
+            
+            prompt = prompt_template.format(
+                sender=reply_context['sender'],
+                subject=reply_context['subject'],
+                body=reply_context['original_body'],
+                context_section=f"Intent: {reply_context['intent']}\nTone: {reply_context['requested_tone']}\nContext: {reply_context['additional_context']}"
+            )
 
+            result = self._orchestrator.generate(prompt)
+            
             return {
                 "success": True,
                 "draft": result.get("draft", ""),

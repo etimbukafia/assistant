@@ -164,7 +164,7 @@ class FollowUpModule(BaseModule):
         Returns:
             Dictionary with 'follow_up', 'subject_line', 'tone'
         """
-        from app.ai_processor import AIProcessor
+
 
         task = db.query(Task).filter(Task.id == task_id).first()
 
@@ -202,8 +202,28 @@ class FollowUpModule(BaseModule):
         }
 
         # Generate using AI
-        ai_processor = AIProcessor()
-        result = ai_processor.generate_follow_up_message(ai_context)
+        # Generate using AI
+        prompt_template = self._load_prompt('generate_follow_up')
+        prompt = prompt_template.format(
+            sender=ai_context['sender'],
+            subject=ai_context['subject'],
+            snippet=ai_context['snippet'],
+            task_title=ai_context['task_title'],
+            task_type=ai_context['task_type'],
+            days_since=ai_context['days_since'],
+            reminder_count=ai_context['reminder_count'],
+            context=ai_context['additional_context']
+        )
+        
+        try:
+            result = self._orchestrator.generate(prompt)
+            if result.get("_error"):
+                logger.warning("Failed to parse generate_follow_up response")
+                return {"follow_up": "", "subject_line": "", "tone": "error"}
+            return result
+        except Exception as e:
+            logger.error(f"Error generating follow-up message: {e}")
+            return {"follow_up": "", "subject_line": "", "tone": "error"}
 
         return result
 
@@ -226,7 +246,7 @@ class FollowUpModule(BaseModule):
         Returns:
             Dictionary with follow_ups list, reasoning, and status
         """
-        from app.ai_processor import AIProcessor
+
         from sqlalchemy import or_
 
         event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
@@ -321,8 +341,25 @@ class FollowUpModule(BaseModule):
         }
 
         # Generate via AI
-        ai_processor = AIProcessor()
-        ai_result = ai_processor.generate_meeting_followups(meeting_context)
+        # Generate via AI
+        prompt_template = self._load_prompt('generate_meeting_followups')
+        prompt = prompt_template.format(
+            title=meeting_context['title'],
+            meeting_date=meeting_context['meeting_date'],
+            attendees=meeting_context['attendees'],
+            agenda=meeting_context['agenda'],
+            related_emails=meeting_context['related_emails'],
+            open_tasks=meeting_context['open_tasks'],
+            prep_warnings=meeting_context['prep_warnings']
+        )
+        
+        try:
+            ai_result = self._orchestrator.generate(prompt)
+            if ai_result.get("_error"):
+                ai_result = {"follow_ups": [], "reasoning": "Failed to generate"}
+        except Exception as e:
+            logger.error(f"Error generating meeting follow-ups: {e}")
+            ai_result = {"follow_ups": [], "reasoning": str(e)}
 
         return {
             'event_id': event.id,
@@ -331,4 +368,61 @@ class FollowUpModule(BaseModule):
             'reasoning': ai_result.get('reasoning', ''),
             'total': len(ai_result.get('follow_ups', [])),
             'status': 'pending_approval'
+        }
+
+    def evaluate_reminder_context(self, context_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Evaluate if a reminder should be sent based on current context.
+        """
+        try:
+            prompt_template = self._load_prompt('evaluate_reminder_context')
+            
+            # Format context data safely
+            # Map keys from worker usage if standard keys missing
+            task_desc = context_data.get('task_description') or context_data.get('task_title', '')
+            
+            original_msg = context_data.get('original_message_snippet')
+            if not original_msg:
+                # Construct from worker keys
+                subject = context_data.get('message_subject', '')
+                sender = context_data.get('message_sender', '')
+                original_msg = f"From: {sender}\nSubject: {subject}"
+            
+            recent_activity = context_data.get('recent_activity')
+            if not recent_activity:
+                 reminded_at = context_data.get('last_reminded_at', 'Never')
+                 count = context_data.get('reminder_count', 0)
+                 recent_activity = f"Last reminded: {reminded_at}, Reminder Count: {count}"
+
+            time_elapsed = context_data.get('time_since_creation')
+            if not time_elapsed:
+                 created_at = context_data.get('task_created_at', 'Unknown')
+                 current = context_data.get('current_time', 'Unknown')
+                 time_elapsed = f"Created: {created_at}, Current: {current}"
+            
+            prompt = prompt_template.format(
+                task_description=task_desc,
+                original_message=original_msg[:1000],
+                recent_activity=recent_activity,
+                time_elapsed=time_elapsed
+            )
+
+            result = self._orchestrator.generate(prompt)
+            
+            if result.get("_error"):
+                logger.warning("Failed to parse evaluate_reminder_context response")
+                return self._empty_reminder_result("AI parsing error")
+
+            return result
+        except Exception as e:
+            logger.error(f"Error evaluating reminder context: {e}")
+            return self._empty_reminder_result(str(e))
+
+    def _empty_reminder_result(self, reason: str) -> Dict[str, Any]:
+        """Return empty result for evaluate_reminder_context"""
+        return {
+            "should_remind": True, # Default to remind if unsure
+            "reason": reason,
+            "reschedule_for": None,
+            "suggested_message": ""
         }

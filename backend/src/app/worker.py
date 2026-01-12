@@ -335,8 +335,10 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
         message = db.query(Message).filter(Message.id == task.message_id).first()
 
         # Use AI to evaluate context
-        ai_processor = AIProcessor()
-        evaluation = ai_processor.evaluate_reminder_context({
+        from app.agents.modules.follow_up import FollowUpModule
+        follow_up_module = FollowUpModule()
+        
+        evaluation = follow_up_module.evaluate_reminder_context({
             "task_title": task.title,
             "task_created_at": task.created_at.isoformat(),
             "reminder_context": task.reminder_context,
