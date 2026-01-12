@@ -1,0 +1,355 @@
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import and_, func
+
+from app.auth import get_current_user, get_db_for_user, AuthenticatedUser
+from app.models import Task, Message
+from app.schemas import (
+    TasksListResponse, TaskResponse, TaskCreateRequest, 
+    ManualTaskCreateRequest, TaskUpdateRequest, TaskSnoozeRequest
+)
+from app.pattern_tracker import track_task_action
+from app.queue import enqueue_task
+
+router = APIRouter(prefix="/tasks", tags=["Tasks"])
+
+@router.get("/", response_model=TasksListResponse)
+def get_tasks(
+    status: str = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db_for_user)
+):
+    """Get tasks with optional status filter"""
+    query = db.query(Task)
+
+    if status:
+        query = query.filter(Task.status == status)
+
+    total = query.count()
+    tasks = query.order_by(Task.created_at.desc()).offset(skip).limit(limit).all()
+
+    return TasksListResponse(tasks=tasks, total=total)
+
+
+@router.post("/", response_model=TaskResponse)
+def create_task(
+    request: TaskCreateRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user)
+):
+    """
+    Create a new task (e.g., from extracted_tasks text approved by user)
+
+    This allows users to convert AI-detected text into real actionable tasks.
+    """
+
+    # Verify message exists
+    message = db.query(Message).filter(Message.id == request.message_id).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Create task
+    task = Task(
+        user_id=user.user_id,
+        message_id=request.message_id,
+        title=request.title,
+        description=request.description,
+        source_snippet=request.source_snippet,
+        task_type=request.task_type,
+        priority=request.priority,
+        status=request.status,
+        confidence_score=1.0,  # User-approved = full confidence
+        approved_at=datetime.now(timezone.utc) if request.status == "approved" else None
+    )
+
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+
+    # Remove from extracted_tasks if it exists there
+    if message.extracted_tasks and request.title in message.extracted_tasks:
+        message.extracted_tasks = [t for t in message.extracted_tasks if t != request.title]
+        db.commit()
+
+    # Build response with source message
+    task_dict = {
+        "id": task.id,
+        "message_id": task.message_id,
+        "title": task.title,
+        "description": task.description,
+        "source_snippet": task.source_snippet,
+        "task_type": task.task_type,
+        "priority": task.priority,
+        "status": task.status,
+        "approved_at": task.approved_at,
+        "completed_at": task.completed_at,
+        "dismissed_at": task.dismissed_at,
+        "reminder_context": task.reminder_context,
+        "scheduled_reminder_at": task.scheduled_reminder_at,
+        "last_reminded_at": task.last_reminded_at,
+        "reminder_count": task.reminder_count or 0,
+        "snoozed_until": task.snoozed_until,
+        "related_people": task.related_people or [],
+        "related_dates": task.related_dates or [],
+        "confidence_score": task.confidence_score,
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+        "source_message": message
+    }
+
+    return TaskResponse(**task_dict)
+
+
+@router.post("/manual", response_model=TaskResponse)
+def create_manual_task(
+    request: ManualTaskCreateRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user)
+):
+    """
+    Create a task manually (not from email).
+
+    This allows users to add standalone tasks that aren't linked to any email.
+    We use a placeholder message ID for database consistency.
+    """
+
+    # Get or create a placeholder message for manual tasks
+    # (manual tasks need a message_id due to foreign key constraint)
+    placeholder_message = db.query(Message).filter(
+        Message.message_id == "__manual_tasks_placeholder__"
+    ).first()
+
+    if not placeholder_message:
+        placeholder_message = Message(
+            user_id=user.user_id,
+            message_id="__manual_tasks_placeholder__",
+            thread_id="__manual_tasks__",
+            subject="Manual Tasks",
+            sender="user",
+            recipient="user",
+            body="",
+            received_at=datetime.now(timezone.utc),
+            processed=True,
+            status="archived"
+        )
+        db.add(placeholder_message)
+        db.commit()
+        db.refresh(placeholder_message)
+
+    # Create task
+    task = Task(
+        user_id=user.user_id,
+        message_id=placeholder_message.id,
+        thread_id="__manual_tasks__",
+        title=request.title,
+        description=request.description,
+        task_type="explicit",  # Manual tasks are always explicit
+        priority=request.priority,
+        status="approved",  # Manual tasks start as approved
+        confidence_score=1.0,  # User-created = full confidence
+        approved_at=datetime.now(timezone.utc),
+        # Deadline fields
+        deadline=request.deadline,
+        deadline_source="explicit" if request.deadline else None,
+        deadline_user_confirmed=True if request.deadline else False,
+        urgency_suggested_by_ai=False
+    )
+
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+
+    return task
+
+
+@router.get("/stats")
+def get_task_stats(db: Session = Depends(get_db_for_user)):
+    """Get task statistics"""
+
+    pending_approval = db.query(Task).filter(Task.status == "pending_approval").count()
+    approved = db.query(Task).filter(Task.status == "approved").count()
+    completed = db.query(Task).filter(Task.status == "completed").count()
+    overdue = db.query(Task).filter(
+        Task.scheduled_reminder_at < datetime.now(timezone.utc),
+        Task.status.in_(["approved", "pending_approval"])
+    ).count()
+
+    return {
+        "pending_approval": pending_approval,
+        "approved": approved,
+        "completed": completed,
+        "overdue": overdue,
+        "total": pending_approval + approved + completed
+    }
+
+
+@router.get("/{task_id}", response_model=TaskResponse)
+def get_task(task_id: int, db: Session = Depends(get_db_for_user)):
+    """Get a specific task with source message"""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Include source message
+    message = db.query(Message).filter(Message.id == task.message_id).first()
+
+    # Convert to dict and add source_message
+    task_dict = {
+        "id": task.id,
+        "message_id": task.message_id,
+        "title": task.title,
+        "description": task.description,
+        "task_type": task.task_type,
+        "priority": task.priority,
+        "status": task.status,
+        "approved_at": task.approved_at,
+        "completed_at": task.completed_at,
+        "dismissed_at": task.dismissed_at,
+        "reminder_context": task.reminder_context,
+        "scheduled_reminder_at": task.scheduled_reminder_at,
+        "last_reminded_at": task.last_reminded_at,
+        "reminder_count": task.reminder_count,
+        "snoozed_until": task.snoozed_until,
+        "related_people": task.related_people or [],
+        "related_dates": task.related_dates or [],
+        "confidence_score": task.confidence_score,
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+        "source_message": message
+    }
+
+    return TaskResponse(**task_dict)
+
+
+@router.post("/{task_id}/approve")
+def approve_task(task_id: int, db: Session = Depends(get_db_for_user)):
+    """Approve a pending task"""
+
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task.status = "approved"
+    task.approved_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # Track pattern for learning
+    track_task_action(db, "approve", task)
+
+    # Schedule reminder if needed
+    if task.scheduled_reminder_at:
+        enqueue_task(
+            task_type="evaluate_reminder",
+            payload={"task_id": task.id, "user_id": task.user_id},
+            scheduled_for=task.scheduled_reminder_at,
+            db=db
+        )
+
+    return {"message": "Task approved", "task_id": task_id}
+
+
+@router.post("/{task_id}/dismiss")
+def dismiss_task(task_id: int, db: Session = Depends(get_db_for_user)):
+    """Dismiss a task (mark as not relevant)"""
+
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task.status = "dismissed"
+    task.dismissed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # Track pattern for learning
+    track_task_action(db, "dismiss", task)
+
+    return {"message": "Task dismissed", "task_id": task_id}
+
+
+@router.put("/{task_id}", response_model=TaskResponse)
+def update_task(
+    task_id: int,
+    request: TaskUpdateRequest,
+    db: Session = Depends(get_db_for_user)
+):
+    """Update task details (one-click edit)
+
+    Handles:
+    - title, description, priority, scheduled_reminder_at (standard fields)
+    - deadline: User-provided deadline (sets deadline_source='explicit', deadline_user_confirmed=True)
+    - deadline_confirmed: Confirm AI-suggested deadline (sets deadline_user_confirmed=True)
+    - mark_urgent: Confirm AI-suggested urgency (sets priority='urgent', urgency_suggested_by_ai=False)
+    """
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Update standard fields
+    if request.title is not None:
+        task.title = request.title
+    if request.description is not None:
+        task.description = request.description
+    if request.priority is not None:
+        task.priority = request.priority
+        # If user explicitly sets priority, it's no longer AI-suggested
+        task.urgency_suggested_by_ai = False
+    if request.scheduled_reminder_at is not None:
+        task.scheduled_reminder_at = request.scheduled_reminder_at
+
+    # Handle deadline updates (Smart Todo List)
+    if request.deadline is not None:
+        # User explicitly setting deadline overrides AI suggestion
+        task.deadline = request.deadline
+        task.deadline_source = "explicit"
+        task.deadline_user_confirmed = True
+        task.deadline_confidence = None  # Clear AI confidence since user set it
+
+    # Handle deadline confirmation (user approving AI suggestion)
+    if request.deadline_confirmed is True:
+        task.deadline_user_confirmed = True
+
+    # Handle urgency confirmation (user approving AI-suggested urgency)
+    if request.mark_urgent is True:
+        task.priority = "urgent"
+        task.urgency_suggested_by_ai = False  # Now confirmed by user
+
+    db.commit()
+    db.refresh(task)
+
+    return task
+
+
+@router.post("/{task_id}/complete")
+def complete_task(task_id: int, db: Session = Depends(get_db_for_user)):
+    """Mark task as completed"""
+
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task.status = "completed"
+    task.completed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {"message": "Task completed", "task_id": task_id}
+
+
+@router.post("/{task_id}/snooze")
+def snooze_task(
+    task_id: int,
+    request: TaskSnoozeRequest,
+    db: Session = Depends(get_db_for_user)
+):
+    """Snooze task reminders until specified time"""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task.snoozed_until = request.snooze_until
+    task.status = "snoozed"
+    db.commit()
+
+    return {"message": "Task snoozed", "snoozed_until": request.snooze_until}
