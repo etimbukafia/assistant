@@ -79,8 +79,13 @@ async def sync_messages(
             message_ids.append(message.id)
             synced_count += 1
 
-        # Store history ID for deletion tracking
-        account = db.query(GmailAccount).first()
+        # Store history ID for deletion tracking - Scoped to user
+        account = db.query(GmailAccount).filter(GmailAccount.user_id == user.user_id).first()
+        # Fallback: Try linking by email if not yet linked
+        if not account:
+            account = db.query(GmailAccount).filter(GmailAccount.email == user.email).first()
+            if account and not account.user_id:
+                account.user_id = user.user_id
         if account and not account.last_history_id:
             history_id = gmail_client.get_current_history_id()
             if history_id:
@@ -129,6 +134,7 @@ async def sync_messages(
 @router.post("/sync/deletions")
 def sync_deletions(
     db: Session = Depends(get_db_for_user),
+    user: AuthenticatedUser = Depends(get_current_user),
     gmail_client: GmailClient = Depends(get_gmail_client)
 ):
     """
@@ -138,7 +144,7 @@ def sync_deletions(
     from Gmail after being synced to our system.
     """
     # Get account with history ID
-    account = db.query(GmailAccount).first()
+    account = db.query(GmailAccount).filter(GmailAccount.user_id == user.user_id).first()
     if not account:
         raise HTTPException(status_code=400, detail="No Gmail account connected")
 
@@ -183,6 +189,7 @@ def sync_deletions(
 @router.post("/sync/sent")
 def sync_sent_messages(
     db: Session = Depends(get_db_for_user),
+    user: AuthenticatedUser = Depends(get_current_user),
     gmail_client: GmailClient = Depends(get_gmail_client)
 ):
     """
@@ -194,7 +201,7 @@ def sync_sent_messages(
     """
     
     # Get account info
-    account = db.query(GmailAccount).first()
+    account = db.query(GmailAccount).filter(GmailAccount.user_id == user.user_id).first()
     if not account:
         raise HTTPException(status_code=400, detail="No Gmail account connected")
     

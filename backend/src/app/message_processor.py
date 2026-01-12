@@ -20,10 +20,11 @@ from app.queue import enqueue_task
 logger = logging.getLogger(__name__)
 
 
-def get_user_id(db: Session) -> str:
-    """Get current user ID from Gmail account (or default)"""
-    account = db.query(GmailAccount).first()
-    return account.email if account else "default"
+# def get_user_id(db: Session) -> str:
+#     """Get current user ID from Gmail account (or default) - DEPRECATED/UNSAFE"""
+#     # account = db.query(GmailAccount).first()
+#     # return account.email if account else "default"
+#     pass
 
 
 def process_message(

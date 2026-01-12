@@ -41,6 +41,15 @@ async def enqueue_message_for_processing(event: Dict[str, Any], payload: Dict[st
 
     db = SessionLocal()
     try:
+        # Require user_id from payload for RLS context
+        user_id = payload.get("user_id")
+        if not user_id:
+             logger.error("No user_id in payload for message processing - cannot proceed safely", extra={"correlation_id": event["correlation_id"]})
+             return
+
+        # Set RLS context
+        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
         # Validate message exists and isn't already processed
         message = db.query(Message).filter(Message.id == message_id).first()
 
@@ -51,11 +60,7 @@ async def enqueue_message_for_processing(event: Dict[str, Any], payload: Dict[st
         if message.processed:
             logger.info(f"Message {message_id} already processed", extra={"correlation_id": event["correlation_id"]})
             return
-
-        # Get user_id for batch grouping
-        from app.message_processor import get_user_id
-        user_id = get_user_id(db)
-
+        
         # Enqueue for batch processing
         enqueue_task(
             task_type="process_email",

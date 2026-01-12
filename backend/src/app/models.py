@@ -81,6 +81,7 @@ class GmailAccount(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
+    user_id = Column(String, index=True, nullable=True) # Nullable for migration, should be required later
 
     # OAuth tokens (encrypted)
     access_token = Column(Text, nullable=False)  # Encrypted

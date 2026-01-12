@@ -102,11 +102,19 @@ async def extract_and_create_tasks_DEPRECATED(event: Dict[str, Any], payload: Di
     message_id = payload.get("message_id")
 
     if not message_id:
-        logger.error("No message_id in payload", extra={"correlation_id": event["correlation_id"]})
+        logger.error("No message_id in payload", extra={"correlation_id": event.get("correlation_id")})
         return
+
+    user_id = payload.get("user_id")
+    if not user_id:
+       logger.warning("No user_id in payload for task extraction - skipping RLS context")
 
     db = SessionLocal()
     try:
+        # Set RLS context if user_id is available
+        if user_id:
+            db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
         # Get message from database
         message = db.query(Message).filter(Message.id == message_id).first()
 
