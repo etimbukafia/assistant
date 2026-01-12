@@ -11,6 +11,7 @@ from app.database import SessionLocal
 from app.models import Message, Task, UserSettings
 from app.ai_processor import AIProcessor
 from app.queue import enqueue_task
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -226,12 +227,19 @@ async def schedule_task_reminders(event: Dict[str, Any], payload: Dict[str, Any]
     Works for all task sources: ThreadStateService, manual, Smart Todo, etc.
     """
     task_id = payload.get("task_id")
+    user_id = payload.get("user_id")
     
     if not task_id:
         logger.warning("task_created event missing task_id")
         return
+
+    if not user_id:
+        logger.warning(f"task_created event missing user_id for task {task_id}")
+        return
     
     db = SessionLocal()
+    # Set RLS context
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
     try:
         task = db.query(Task).filter(Task.id == task_id).first()
         if not task:

@@ -333,7 +333,7 @@ async def sync_messages(
             for msg_id in message_ids:
                 emit_event(
                     event_name="message_received",
-                    payload={"message_id": msg_id},
+                    payload={"message_id": msg_id, "user_id": user.user_id},
                     background_tasks=background_tasks
                 )
 

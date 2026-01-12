@@ -96,6 +96,7 @@ def process_message(
                 "event_name": "scheduling_intent_detected",
                 "event_payload": {
                     "message_id": message.id,
+                    "user_id": message.user_id,
                     "thread_id": message.thread_id,
                     "intent_type": ai_results["scheduling_intent_type"],
                     "confidence": ai_results["scheduling_intent_confidence"]
@@ -191,6 +192,7 @@ def process_messages_batch(
                             "event_name": "scheduling_intent_detected",
                             "event_payload": {
                                 "message_id": message.id,
+                                "user_id": message.user_id,
                                 "thread_id": message.thread_id,
                                 "intent_type": ai_results["scheduling_intent_type"],
                                 "confidence": ai_results["scheduling_intent_confidence"]
