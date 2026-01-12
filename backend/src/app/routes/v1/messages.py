@@ -431,6 +431,7 @@ def draft_reply(
         message_data,
         context,
         db=db,
+        user_id=message.user_id,
         scheduling_intent=message.scheduling_intent or False
     )
 
