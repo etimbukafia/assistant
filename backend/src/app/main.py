@@ -316,14 +316,14 @@ async def sync_messages(
             for msg_id in message_ids:
                 queue_service.enqueue(
                     task_type="process_email",
-                    payload={"message_id": msg_id},
-                    user_id=user_id,
+                    payload={"message_id": msg_id, "user_id": user.user_id},
+                    user_id=user.user_id,
                     db=db
                 )
 
             # Trigger immediate batch processing
             await queue_service.process_batch_now(
-                user_id=user_id,
+                user_id=user.user_id,
                 task_type="process_email",
                 handler=handle_process_email_batch,
                 db=db
@@ -887,7 +887,7 @@ def trigger_digest_now(
     
     enqueue_task(
         task_type="generate_digest",
-        payload={"user_email": user_email, "digest_type": digest_type},
+        payload={"user_email": user_email, "digest_type": digest_type, "user_id": user.user_id},
         db=db
     )
     
@@ -1110,7 +1110,7 @@ def approve_task(task_id: int, db: Session = Depends(get_db_for_user)):
         from app.queue import enqueue_task
         enqueue_task(
             task_type="evaluate_reminder",
-            payload={"task_id": task.id},
+            payload={"task_id": task.id, "user_id": task.user_id},
             scheduled_for=task.scheduled_reminder_at,
             db=db
         )

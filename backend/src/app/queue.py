@@ -5,7 +5,7 @@ Generic queue operations that work with any SQLAlchemy setup.
 Pass your TaskQueue model and SessionLocal to use.
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Callable
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,7 @@ class QueueService:
         correlation_id: Optional[str] = None,
         scheduled_for: Optional[datetime] = None,
         max_attempts: int = 3,
+        user_id: Optional[str] = None,
         db: Optional[Session] = None
     ):
         """
@@ -54,6 +55,7 @@ class QueueService:
             correlation_id: Optional correlation ID for tracking related tasks
             scheduled_for: When to run the task (default: now)
             max_attempts: Maximum retry attempts
+            user_id: Optional user ID for RLS context
             db: Optional database session (creates new one if not provided)
 
         Returns:
@@ -69,7 +71,8 @@ class QueueService:
                 task_type=task_type,
                 payload=payload,
                 correlation_id=correlation_id,
-                scheduled_for=scheduled_for or datetime.now(timezone.utc),
+                user_id=user_id,
+                scheduled_for=scheduled_for or datetime.utcnow(),
                 max_attempts=max_attempts,
                 status="pending"
             )
@@ -120,7 +123,7 @@ class QueueService:
         try:
             query = db.query(self.TaskQueue).filter(
                 self.TaskQueue.status == "pending",
-                self.TaskQueue.scheduled_for <= datetime.now(timezone.utc),
+                self.TaskQueue.scheduled_for <= datetime.utcnow(),
                 self.TaskQueue.attempts < self.TaskQueue.max_attempts
             )
 
@@ -155,7 +158,7 @@ class QueueService:
                 return False
 
             task.status = "in_progress"
-            task.started_at = datetime.now(timezone.utc)
+            task.started_at = datetime.utcnow()
             task.attempts += 1
 
             db.commit()
@@ -189,7 +192,7 @@ class QueueService:
                 return False
 
             task.status = "completed"
-            task.completed_at = datetime.now(timezone.utc)
+            task.completed_at = datetime.utcnow()
 
             db.commit()
 
@@ -245,7 +248,7 @@ class QueueService:
                 task.status = "pending"
                 # Exponential backoff: 1min, 5min, 25min
                 delay_minutes = 1 * (5 ** (task.attempts - 1))
-                task.scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+                task.scheduled_for = datetime.utcnow() + timedelta(minutes=delay_minutes)
 
                 logger.warning(
                     f"Task failed, will retry: {task.task_type} (id={task.id}, attempt={task.attempts}/{task.max_attempts})",
@@ -293,7 +296,7 @@ class QueueService:
             should_close_db = True
 
         try:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            cutoff = datetime.utcnow() - timedelta(days=days)
 
             count = db.query(self.TaskQueue).filter(
                 self.TaskQueue.status.in_(["completed", "failed"]),

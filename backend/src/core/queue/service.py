@@ -43,6 +43,7 @@ class QueueService:
         correlation_id: Optional[str] = None,
         scheduled_for: Optional[datetime] = None,
         max_attempts: int = 3,
+        user_id: Optional[str] = None,
         db: Optional[Session] = None
     ):
         """
@@ -54,6 +55,7 @@ class QueueService:
             correlation_id: Optional correlation ID for tracking related tasks
             scheduled_for: When to run the task (default: now)
             max_attempts: Maximum retry attempts
+            user_id: Optional user ID for RLS context
             db: Optional database session (creates new one if not provided)
 
         Returns:
@@ -69,6 +71,7 @@ class QueueService:
                 task_type=task_type,
                 payload=payload,
                 correlation_id=correlation_id,
+                user_id=user_id,
                 scheduled_for=scheduled_for or datetime.now(timezone.utc),
                 max_attempts=max_attempts,
                 status="pending"
