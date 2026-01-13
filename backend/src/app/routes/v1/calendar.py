@@ -9,9 +9,9 @@ from app.schemas import (
     CalendarSettingsResponse, CalendarSettingsUpdateRequest,
     CalendarAvailabilityResponse, CalendarInfoResponse
 )
-from app.calendar_service import CalendarService
+from ...services.calendar import CalendarService
+from ...services.briefing import generate_briefing_for_event, generate_follow_ups_for_event
 from app.agents.modules.scheduling import SchedulingModule
-from app.briefing_service import generate_follow_ups_for_event
 
 router = APIRouter(prefix="/calendar", tags=["Calendar"])
 

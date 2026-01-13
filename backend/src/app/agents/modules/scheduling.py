@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 
 from .base import BaseModule
-from ...calendar_service import CalendarService, TimeSlot
+from app.services.calendar import CalendarService, TimeSlot
 from ...models import UserSettings, SchedulingSuggestion, CalendarEvent, Message
 
 logger = logging.getLogger(__name__)

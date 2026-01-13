@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings, Settings
 from app.database import SessionLocal, get_db
 from app.models import UserSettings
-from app.polar_service import get_polar_service, PolarService
+from ..services.polar import get_polar_service, PolarService
 from app.auth import get_user_settings, get_db_for_user
 
 logger = logging.getLogger(__name__)

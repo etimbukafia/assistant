@@ -562,7 +562,7 @@ async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[s
     """
     from app.models import CalendarEvent
     from app.database import SessionLocal
-    from app.briefing_service import BriefingService
+    from app.services.briefing import BriefingService
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -695,7 +695,7 @@ async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str
     """
     from app.models import UserSettings, Digest
     from app.database import SessionLocal
-    from app.digest_service import DigestService
+    from app.services.digest import DigestService
     from app.queue import enqueue_task
 
     # Extract user_id from payload for RLS context
