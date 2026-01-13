@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user, User
 from ..database import get_db_for_user
-from ..chat_service import ChatService
+from ..chat import ChatService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 

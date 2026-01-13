@@ -497,6 +497,62 @@ async def handle_data_cleanup(task_id: int, task_type: str, payload: Dict[str, A
         db.close()
 
 
+def get_next_chat_cleanup_time() -> datetime:
+    """Calculate next hourly chat cleanup time (15 minutes past each hour)."""
+    now = datetime.now(timezone.utc)
+    # Next hour, 15 minutes in
+    next_hour = now.replace(minute=15, second=0, microsecond=0)
+    if next_hour <= now:
+        next_hour = next_hour + timedelta(hours=1)
+    return next_hour
+
+
+async def handle_chat_cleanup(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'chat_cleanup' tasks
+
+    Runs hourly to:
+    1. Delete reflection sessions older than 24 hours
+    2. Delete command sessions older than 30 days
+    3. Expire pending actions on deleted sessions
+    """
+    from app.chat import ChatService
+    from app.database import SessionLocal
+    from app.queue import enqueue_task
+
+    db = SessionLocal()
+    try:
+        # ChatService cleanup doesn't need user_id for bulk cleanup
+        service = ChatService(db, user_id=None)
+        result = service.cleanup_expired_sessions()
+        
+        reflection_deleted = result.get("reflection_deleted", 0)
+        command_deleted = result.get("command_deleted", 0)
+        
+        if reflection_deleted > 0 or command_deleted > 0:
+            logger.info(
+                f"Chat cleanup: deleted {reflection_deleted} reflection sessions, "
+                f"{command_deleted} command sessions"
+            )
+
+        # Reschedule for next hour
+        next_run = get_next_chat_cleanup_time()
+        enqueue_task(
+            task_type="chat_cleanup",
+            payload={},
+            scheduled_for=next_run,
+            db=db
+        )
+        logger.info(f"Chat cleanup complete. Next run scheduled for {next_run}")
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Chat cleanup failed: {str(e)}", exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
 async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
     """
     Handler for 'generate_briefing' tasks
@@ -887,6 +943,7 @@ TASK_HANDLERS = {
     "trigger_agent": handle_trigger_agent,
     "evaluate_reminder": handle_evaluate_reminder,
     "data_cleanup": handle_data_cleanup,
+    "chat_cleanup": handle_chat_cleanup,
     "generate_briefing": handle_generate_briefing,
     "generate_digest": handle_generate_digest,
     "deliver_digest": handle_deliver_digest,
