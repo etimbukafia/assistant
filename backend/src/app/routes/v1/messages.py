@@ -14,8 +14,8 @@ from app.schemas import (
 from app.worker import handle_process_email_batch
 from app.queue import queue_service
 from core.events import emit_event
-from app.ai_processor import AIProcessor
-from app.thread_state_service import ThreadStateService
+from app.processors.ai import AIProcessor
+from ...services.thread_state import ThreadStateService
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
 

@@ -14,12 +14,11 @@ from core.events import register_handler
 from app.database import SessionLocal
 from app.models import Message
 from app.queue import enqueue_task
-from app.document_processor import document_processor
+from app.processors.document import document_processor
 from app.gmail_integration import GmailClient
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
-
 
 @register_handler("message_received")
 async def enqueue_message_for_processing(event: Dict[str, Any], payload: Dict[str, Any]):

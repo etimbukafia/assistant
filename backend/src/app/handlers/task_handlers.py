@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from core.events import register_handler
 from app.database import SessionLocal
 from app.models import Message, Task, UserSettings
-from app.ai_processor import AIProcessor
+from app.processors.ai import AIProcessor
 from app.queue import enqueue_task
 from sqlalchemy import text
 

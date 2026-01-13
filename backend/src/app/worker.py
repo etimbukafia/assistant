@@ -39,7 +39,7 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
     The actual processing logic is in app.message_processor, making it
     reusable across channels (email, Slack, WhatsApp).
     """
-    from app.message_processor import process_messages_batch
+    from app.processors.message import process_messages_batch
     from app.database import SessionLocal
 
     # Require user_id for RLS context
@@ -259,7 +259,7 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
     """
     from app.models import Task, Message, UserSettings, TaskReminder
     from app.database import SessionLocal
-    from app.ai_processor import AIProcessor
+    from app.processors.ai import AIProcessor
     from app.queue import enqueue_task
 
     # Extract user_id from payload for RLS context
