@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Optional
 
 from sqlalchemy.orm import Session
 from app.models import Message, GmailAccount
-from app.thread_state_service import ThreadStateService
+from .services.thread_state import ThreadStateService
 from app.queue import enqueue_task
 
 logger = logging.getLogger(__name__)
