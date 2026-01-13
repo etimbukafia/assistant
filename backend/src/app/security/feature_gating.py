@@ -152,8 +152,8 @@ def require_feature(feature: Feature) -> Callable:
     Returns:
         FastAPI dependency function
     """
-    from app.auth import get_current_user, get_user_settings
-    from app.models import UserSettings
+    from app.security.auth import get_current_user, get_user_settings
+    from app.data.models import UserSettings
     
     def dependency(
         user = Depends(get_current_user),
@@ -188,8 +188,8 @@ def require_any_feature(*features: Feature) -> Callable:
         ):
             ...
     """
-    from app.auth import get_current_user, get_user_settings
-    from app.models import UserSettings
+    from app.security.auth import get_current_user, get_user_settings
+    from app.data.models import UserSettings
     
     def dependency(
         user = Depends(get_current_user),

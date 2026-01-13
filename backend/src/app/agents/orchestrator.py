@@ -13,8 +13,8 @@ import google.genai as genai
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
-from app.models import Message, Task, UserSettings, AgentActivityLog
+from app.infra.config import get_settings
+from app.data.models import Message, Task, UserSettings, AgentActivityLog
 from .modules import (
     BaseModule,
     FollowUpModule,

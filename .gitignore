@@ -17,7 +17,7 @@ ENV/
 *.db-journal
 
 #Files
-*.md
+docs/
 !prompts/
 !prompts/*.md
 

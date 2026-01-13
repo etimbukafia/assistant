@@ -1,4 +1,9 @@
-export const API_BASE_URL = 'http://localhost:8000';
+// API base URL - defaults to localhost:8000 for development
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+// Supabase configuration - set these in your environment or replace with actual values
+export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 /**
  * Task Status Model:
@@ -7,10 +12,14 @@ export const API_BASE_URL = 'http://localhost:8000';
  * - in_progress: Task being worked on (optional)
  * - completed: Done - hidden inline, visible in history
  * - dismissed: Hidden everywhere
+ * - snoozed: Temporarily hidden until snooze time
+ * - superseded: Replaced by a newer task in thread (state-based processing)
  *
  * Task Types:
- * - explicit: Actionable task
+ * - explicit: Actionable task (directly requested)
+ * - implied_followup: Task inferred from context
  * - waiting_for: Blocking/dependency task
+ * - meeting_prep: Task related to meeting preparation
  */
 
 export const MOCK_MESSAGES = [
@@ -36,7 +45,11 @@ export const MOCK_MESSAGES = [
                 type: "explicit",
                 priority: "urgent",
                 status: "approved",
-                deadline: "Wednesday",
+                deadline: "2026-01-08T17:00:00",
+                deadline_source: "explicit",
+                deadline_confidence: 0.95,
+                deadline_user_confirmed: true,
+                urgency_suggested_by_ai: false,
                 source_snippet: "Could you please send over the Q4 budget breakdown by Wednesday?",
                 confidence: 0.95
             },
@@ -46,6 +59,11 @@ export const MOCK_MESSAGES = [
                 type: "explicit",
                 priority: "high",
                 status: "pending_approval",
+                deadline: "2026-01-10T12:00:00",
+                deadline_source: "inferred",
+                deadline_confidence: 0.75,
+                deadline_user_confirmed: false,
+                urgency_suggested_by_ai: true,
                 source_snippet: "I specifically want to review the marketing spend details",
                 confidence: 0.88
             }
@@ -88,7 +106,11 @@ export const MOCK_MESSAGES = [
                 type: "explicit",
                 priority: "high",
                 status: "approved",
-                deadline: "Thursday 2pm",
+                deadline: "2026-01-09T14:00:00",
+                deadline_source: "explicit",
+                deadline_confidence: 0.92,
+                deadline_user_confirmed: true,
+                urgency_suggested_by_ai: false,
                 source_snippet: "Can we move our Tuesday call to Thursday at 2pm instead?",
                 confidence: 0.92
             },

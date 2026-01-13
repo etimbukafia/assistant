@@ -8,8 +8,8 @@ import logging
 from typing import Dict, Any
 
 from core.events import register_handler
-from app.database import SessionLocal
-from app.models import Message, SchedulingSuggestion
+from app.infra.database import SessionLocal
+from app.data.models import Message, SchedulingSuggestion
 from app.agents.modules.scheduling import SchedulingModule
 from sqlalchemy import text
 

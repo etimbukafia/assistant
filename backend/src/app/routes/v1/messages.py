@@ -4,18 +4,18 @@ from typing import List
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, get_db_for_user, AuthenticatedUser
-from app.gmail_integration import GmailClient, get_gmail_client, encrypt_body
-from app.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion
-from app.schemas import (
+from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser
+from app.integrations.gmail import GmailClient, get_gmail_client, encrypt_body
+from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion
+from app.data.schemas import (
     SyncResponse, MessagesListResponse, MessageResponse, 
     DraftReplyRequest, DraftReplyResponse
 )
-from app.worker import handle_process_email_batch
-from app.queue import queue_service
+from app.jobs.worker import handle_process_email_batch
+from app.jobs.queue import queue_service
 from core.events import emit_event
 from app.processors.ai import AIProcessor
-from ...services.thread_state import ThreadStateService
+from app.services.thread_state import ThreadStateService
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
 
@@ -583,7 +583,7 @@ def update_message_status(
 @router.post("/{message_id}/done")
 def mark_message_done(message_id: int, db: Session = Depends(get_db_for_user)):
     """Mark a message as done"""
-    from app.pattern_tracker import track_message_action
+    from app.intelligence.pattern_tracker import track_message_action
 
     message = db.query(Message).filter(Message.id == message_id).first()
     if not message:

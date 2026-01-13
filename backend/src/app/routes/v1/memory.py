@@ -4,14 +4,14 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, get_db_for_user, AuthenticatedUser
-from app.models import PrincipalMemory, DecisionPattern, ContactContext
-from app.schemas import (
+from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser
+from app.data.models import PrincipalMemory, DecisionPattern, ContactContext
+from app.data.schemas import (
     PrincipalMemoryResponse, PrincipalMemoryCreate, PrincipalMemoryUpdate, PrincipalMemoryListResponse,
-    DecisionPatternListResponse, DecisionPatternActionRequest,
-    ContactContextResponse, ContactContextUpdateRequest, ContactContextListResponse
+    DecisionPatternListResponse, DecisionPatternActionRequest, DecisionPatternResponse,
+    ContactContextResponse, ContactContextUpdateRequest, ContactContextListResponse, ContextPacket
 )
-from app.context_builder import ContextBuilder
+from app.intelligence.context_builder import ContextBuilder
 
 router = APIRouter(prefix="/memory", tags=["Memory"])
 

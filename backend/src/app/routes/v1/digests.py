@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import get_user_settings, get_db_for_user, get_current_user, AuthenticatedUser
-from app.models import UserSettings, Digest
-from app.schemas import DigestPreferences, DigestsListResponse, DigestResponse
-from app.worker import schedule_digest_jobs_if_needed
-from app.queue import enqueue_task
+from app.security.auth import get_user_settings, get_db_for_user, get_current_user, AuthenticatedUser
+from app.data.models import UserSettings, Digest
+from app.data.schemas import DigestPreferences, DigestsListResponse, DigestResponse
+from app.jobs.worker import schedule_digest_jobs_if_needed
+from app.jobs.queue import enqueue_task
 
 router = APIRouter(prefix="/digests", tags=["Digests"])
 

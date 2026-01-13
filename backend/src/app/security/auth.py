@@ -23,9 +23,9 @@ from sqlalchemy.orm import Session
 import jwt
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 
-from .config import get_settings, Settings
-from .database import get_db
-from .models import UserSettings
+from app.infra.config import get_settings, Settings
+from app.infra.database import get_db
+from app.data.models import UserSettings
 
 
 # =============================================================================

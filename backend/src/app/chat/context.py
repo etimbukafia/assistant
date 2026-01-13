@@ -9,11 +9,11 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 
-from app.models import (
+from app.data.models import (
     ChatSession, ChatMessage, Message, Task, CalendarEvent,
     UserSettings, PrincipalMemory
 )
-from app.context_builder import ContextBuilder
+from app.intelligence.context_builder import ContextBuilder
 
 
 @dataclass

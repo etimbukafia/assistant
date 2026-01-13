@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CheckCircle2, AlertTriangle, CheckSquare, Clock, Sparkles, ChevronDown, ChevronRight } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, CheckSquare, Clock, Sparkles, ChevronDown, ChevronRight, Plus, X } from 'lucide-react';
 import InlineTaskItem from '../components/InlineTaskItem';
 
 /**
@@ -33,9 +33,11 @@ const FilterChip = ({ active, onClick, label, count, color = 'blue' }) => {
     );
 };
 
-const TaskHub = ({ messages, onNavigate, onToggleTask, onApproveTask, onDismissTask }) => {
+const TaskHub = ({ messages, onNavigate, onToggleTask, onApproveTask, onDismissTask, onUpdateTask, onConfirmDeadline, onConfirmUrgency, onCreateTask }) => {
     const [activeFilter, setActiveFilter] = useState('active'); // 'all', 'pending', 'active', 'waiting'
     const [showCompleted, setShowCompleted] = useState(false);
+    const [showAddTask, setShowAddTask] = useState(false);
+    const [newTask, setNewTask] = useState({ title: '', priority: 'normal', deadline: '' });
 
     // Flatten all tasks from messages
     const allTasks = useMemo(() => {
@@ -47,7 +49,7 @@ const TaskHub = ({ messages, onNavigate, onToggleTask, onApproveTask, onDismissT
     const activeTasks = allTasks.filter(t =>
         (t.status === 'approved' || t.status === 'in_progress') && t.type !== 'waiting_for'
     );
-    const waitingTasks = allTasks.filter(t => t.type === 'waiting_for' && t.status !== 'completed' && t.status !== 'dismissed');
+    const waitingTasks = allTasks.filter(t => t.type === 'waiting_for' && t.status !== 'completed' && t.status !== 'dismissed' && t.status !== 'superseded');
 
     // Only show completed tasks from the last 24 hours
     const now = new Date();
@@ -89,6 +91,19 @@ const TaskHub = ({ messages, onNavigate, onToggleTask, onApproveTask, onDismissT
 
     const filtered = getFilteredTasks();
     const totalActionable = pendingApprovalTasks.length + activeTasks.length + waitingTasks.length;
+
+    const handleAddTask = () => {
+        if (!newTask.title.trim()) return;
+        if (onCreateTask) {
+            onCreateTask({
+                title: newTask.title.trim(),
+                priority: newTask.priority,
+                deadline: newTask.deadline ? new Date(newTask.deadline).toISOString() : null
+            });
+        }
+        setNewTask({ title: '', priority: 'normal', deadline: '' });
+        setShowAddTask(false);
+    };
 
     return (
         <div className="min-h-screen bg-gray-50 pb-24">
@@ -156,6 +171,9 @@ const TaskHub = ({ messages, onNavigate, onToggleTask, onApproveTask, onDismissT
                                     onToggle={onToggleTask}
                                     onApprove={onApproveTask}
                                     onDismiss={onDismissTask}
+                                    onUpdate={onUpdateTask}
+                                    onConfirmDeadline={onConfirmDeadline}
+                                    onConfirmUrgency={onConfirmUrgency}
                                 />
                             ))}
                         </div>
@@ -179,6 +197,9 @@ const TaskHub = ({ messages, onNavigate, onToggleTask, onApproveTask, onDismissT
                                             onToggle={onToggleTask}
                                             onApprove={onApproveTask}
                                             onDismiss={onDismissTask}
+                                            onUpdate={onUpdateTask}
+                                            onConfirmDeadline={onConfirmDeadline}
+                                            onConfirmUrgency={onConfirmUrgency}
                                         />
                                     ))}
                                 </div>
@@ -199,6 +220,9 @@ const TaskHub = ({ messages, onNavigate, onToggleTask, onApproveTask, onDismissT
                                             onToggle={onToggleTask}
                                             onApprove={onApproveTask}
                                             onDismiss={onDismissTask}
+                                            onUpdate={onUpdateTask}
+                                            onConfirmDeadline={onConfirmDeadline}
+                                            onConfirmUrgency={onConfirmUrgency}
                                         />
                                     ))}
                                 </div>
@@ -266,6 +290,66 @@ const TaskHub = ({ messages, onNavigate, onToggleTask, onApproveTask, onDismissT
                     </section>
                 )}
             </div>
+
+            {/* Floating Add Task Button */}
+            <button
+                onClick={() => setShowAddTask(true)}
+                className="fixed bottom-24 right-4 w-14 h-14 bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-blue-700 transition-colors z-20"
+                title="Add task"
+            >
+                <Plus className="w-6 h-6" />
+            </button>
+
+            {/* Add Task Modal */}
+            {showAddTask && (
+                <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50" onClick={() => setShowAddTask(false)}>
+                    <div
+                        className="bg-white w-full max-w-lg rounded-t-2xl p-4 space-y-4"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-lg font-bold text-gray-800">Add Task</h2>
+                            <button onClick={() => setShowAddTask(false)} className="text-gray-400 hover:text-gray-600">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <input
+                            type="text"
+                            value={newTask.title}
+                            onChange={(e) => setNewTask(prev => ({ ...prev, title: e.target.value }))}
+                            placeholder="What needs to be done?"
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            autoFocus
+                        />
+                        <div className="flex gap-3">
+                            <select
+                                value={newTask.priority}
+                                onChange={(e) => setNewTask(prev => ({ ...prev, priority: e.target.value }))}
+                                className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                            >
+                                <option value="low">Low Priority</option>
+                                <option value="normal">Normal</option>
+                                <option value="high">High Priority</option>
+                                <option value="urgent">Urgent</option>
+                            </select>
+                            <input
+                                type="datetime-local"
+                                value={newTask.deadline}
+                                onChange={(e) => setNewTask(prev => ({ ...prev, deadline: e.target.value }))}
+                                className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                                placeholder="Deadline (optional)"
+                            />
+                        </div>
+                        <button
+                            onClick={handleAddTask}
+                            disabled={!newTask.title.trim()}
+                            className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                        >
+                            Add Task
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

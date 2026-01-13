@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.models import ThreadState, Task, Message
+from app.data.models import ThreadState, Task, Message
 from app.processors.ai import AIProcessor
 
 logger = logging.getLogger(__name__)
@@ -343,7 +343,7 @@ class ThreadStateService:
         self.db.flush()  # Get task.id for event emission
         
         # Emit task_created event for reminder scheduling
-        from app.queue import enqueue_task
+        from app.jobs.queue import enqueue_task
         enqueue_task(
             task_type="emit_event",
             payload={

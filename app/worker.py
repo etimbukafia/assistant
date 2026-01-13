@@ -9,15 +9,104 @@ Run with:
 """
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime, timedelta, time, timezone
 from fastapi import BackgroundTasks
 
 from core.events import emit_event
-from core.queue import Worker
+from core.queue import Worker, BatchWorker
 from app.queue import queue_service
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Batch Handlers (for user-isolated LLM processing)
+# =============================================================================
+
+async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
+    """
+    Batch handler for processing multiple emails for a single user.
+
+    This handler:
+    1. Receives all pending email tasks for ONE user
+    2. Processes them using the message_processor module
+    3. Leverages shared LLM provider (no reinitialization)
+
+    Critical: All tasks belong to the same user - no data leakage possible.
+
+    The actual processing logic is in app.message_processor, making it
+    reusable across channels (email, Slack, WhatsApp).
+    """
+    from app.message_processor import process_messages_batch
+
+    if not tasks:
+        return
+
+    logger.info(f"Processing batch of {len(tasks)} emails for user {user_id}")
+
+    # Extract message IDs from tasks
+    message_ids = []
+    for task in tasks:
+        message_id = task["payload"].get("message_id")
+        if message_id:
+            message_ids.append(message_id)
+        else:
+            logger.warning(f"Task {task['task_id']} missing message_id in payload")
+
+    if not message_ids:
+        logger.warning(f"No valid message IDs to process for user {user_id}")
+        return
+
+    # Get correlation_id from first task
+    correlation_id = tasks[0].get("correlation_id") if tasks else None
+
+    # Process using the reusable message processor
+    try:
+        results = process_messages_batch(message_ids, correlation_id=correlation_id)
+        logger.info(f"Batch complete: processed {len(results)} emails for user {user_id}")
+    except Exception as e:
+        logger.error(f"Batch processing failed for user {user_id}: {e}", exc_info=True)
+        raise
+
+
+# Batch handlers map
+BATCH_HANDLERS = {
+    "process_email": handle_process_email_batch,
+}
+
+
+async def handle_process_email(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'process_email' tasks.
+    
+    Processes a single email through the message processor.
+    """
+    from app.database import SessionLocal
+    from app.models import GmailAccount
+    
+    message_id = payload.get("message_id")
+    if not message_id:
+        logger.warning(f"process_email task (id={task_id}) missing message_id in payload")
+        return
+    
+    db = SessionLocal()
+    try:
+        # Get user ID (for now, single-user MVP uses account email)
+        account = db.query(GmailAccount).first()
+        user_id = account.email if account else "default"
+        
+        # Wrap as batch task format and delegate to batch handler
+        batch_task = {
+            "task_id": task_id,
+            "payload": payload,
+            "correlation_id": correlation_id
+        }
+        
+        await handle_process_email_batch(user_id, [batch_task])
+        logger.info(f"Processed email: message_id={message_id}")
+    finally:
+        db.close()
 
 
 async def handle_emit_event(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
@@ -372,19 +461,378 @@ async def handle_data_cleanup(task_id: int, task_type: str, payload: Dict[str, A
         db.close()
 
 
+async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'generate_briefing' tasks
+
+    Generates a meeting briefing for an upcoming calendar event.
+    Scheduled to run 1-2 hours before the meeting.
+    """
+    from app.models import CalendarEvent
+    from app.database import SessionLocal
+    from app.briefing_service import BriefingService
+
+    db = SessionLocal()
+    try:
+        event_id = payload.get("event_id")
+        event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+
+        if not event:
+            logger.warning(f"Event {event_id} not found for briefing generation")
+            return
+
+        # Skip if already generated
+        if event.briefing_generated_at:
+            logger.info(f"Briefing already generated for event {event_id}")
+            return
+
+        # Skip if event already passed
+        if event.start_time < datetime.now(timezone.utc):
+            logger.info(f"Event {event_id} already passed, skipping briefing")
+            return
+
+        # Generate briefing
+        service = BriefingService(db)
+        briefing = service.generate_briefing(event)
+
+        logger.info(
+            f"Generated briefing for event {event_id}: {event.title}",
+            extra={"task_id": task_id, "correlation_id": correlation_id}
+        )
+
+        # Emit event for UI notification
+        from app.queue import enqueue_task
+        enqueue_task(
+            task_type="emit_event",
+            payload={
+                "event_name": "briefing_ready",
+                "event_payload": {
+                    "event_id": event_id,
+                    "title": event.title,
+                    "start_time": event.start_time.isoformat(),
+                    "message_count": briefing.get("message_count", 0),
+                    "task_count": briefing.get("task_count", 0)
+                }
+            },
+            correlation_id=correlation_id,
+            db=db
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to generate briefing for event {payload.get('event_id')}: {str(e)}", exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
+# =============================================================================
+# Digest Handlers
+# =============================================================================
+
+def get_next_digest_time(digest_type: str, preferences: Dict, user_timezone: str = "UTC") -> datetime:
+    """
+    Calculate next scheduled time for a digest type in user's timezone.
+    
+    Args:
+        digest_type: morning_briefing | end_of_day | weekly_review
+        preferences: User's digest preferences
+        user_timezone: IANA timezone string (e.g., "Africa/Johannesburg")
+        
+    Returns:
+        Next scheduled datetime (UTC)
+    """
+    from zoneinfo import ZoneInfo
+    
+    config = preferences.get(digest_type, {})
+    
+    if not config.get("enabled", False):
+        return None
+    
+    # Parse user's timezone
+    try:
+        user_tz = ZoneInfo(user_timezone)
+    except Exception:
+        user_tz = timezone.utc
+    
+    # Get current time in user's timezone
+    now_utc = datetime.now(timezone.utc)
+    now_user = now_utc.astimezone(user_tz)
+    
+    time_str = config.get("time", "08:00")
+    hour, minute = map(int, time_str.split(":"))
+    target_time = time(hour, minute)
+    
+    if digest_type == "weekly_review":
+        # Find next occurrence of specified day (in user's timezone)
+        day_name = config.get("day", "monday").lower()
+        days = {
+            "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+            "friday": 4, "saturday": 5, "sunday": 6
+        }
+        target_day = days.get(day_name, 0)
+        days_ahead = target_day - now_user.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        next_date = now_user.date() + timedelta(days=days_ahead)
+    else:
+        # Daily digest - next occurrence of time (in user's timezone)
+        next_date = now_user.date()
+        if now_user.time() >= target_time:
+            next_date += timedelta(days=1)
+    
+    # Create datetime in user's timezone, then convert to UTC
+    local_dt = datetime.combine(next_date, target_time, tzinfo=user_tz)
+    return local_dt.astimezone(timezone.utc)
+
+
+async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'generate_digest' tasks.
+    
+    Generates a scheduled digest and queues it for delivery.
+    Self-reschedules for next occurrence.
+    """
+    from app.models import UserSettings, Digest
+    from app.database import SessionLocal
+    from app.digest_service import DigestService
+    from app.queue import enqueue_task
+    
+    db = SessionLocal()
+    try:
+        user_email = payload.get("user_email")
+        digest_type = payload.get("digest_type")
+        
+        # Get user settings
+        settings = db.query(UserSettings).filter(
+            UserSettings.user_email == user_email
+        ).first()
+        
+        if not settings:
+            logger.warning(f"No settings found for user {user_email}")
+            return
+        
+        prefs = settings.digest_preferences or {}
+        
+        # Check if this digest type is enabled
+        if not prefs.get("enabled") or not prefs.get(digest_type, {}).get("enabled"):
+            logger.info(f"Digest {digest_type} disabled for user {user_email}")
+            # Still reschedule to check next time
+            next_time = get_next_digest_time(digest_type, prefs, settings.default_timezone)
+            if next_time:
+                enqueue_task(
+                    task_type="generate_digest",
+                    payload={"user_email": user_email, "digest_type": digest_type},
+                    scheduled_for=next_time,
+                    db=db
+                )
+            return
+        
+        # Check quiet hours
+        if is_quiet_hours(settings.reminder_preferences or {}):
+            next_available = get_next_available_time(settings.reminder_preferences or {})
+            enqueue_task(
+                task_type="generate_digest",
+                payload={"user_email": user_email, "digest_type": digest_type},
+                scheduled_for=next_available,
+                db=db
+            )
+            logger.info(f"Digest delayed until {next_available} (quiet hours)")
+            return
+        
+        # Generate digest content
+        service = DigestService(db, user_email)
+        
+        if digest_type == "morning_briefing":
+            content = service.generate_morning_briefing()
+        elif digest_type == "end_of_day":
+            content = service.generate_end_of_day()
+        elif digest_type == "weekly_review":
+            content = service.generate_weekly_review()
+        else:
+            logger.error(f"Unknown digest type: {digest_type}")
+            return
+        
+        # Calculate counts from content
+        stats = content.get("stats", {})
+        task_count = stats.get("urgent_count", 0) + stats.get("due_today_count", 0)
+        thread_count = stats.get("threads_needing_reply_count", 0)
+        event_count = stats.get("events_count", 0)
+        
+        # Create digest record
+        digest = Digest(
+            user_email=user_email,
+            digest_type=digest_type,
+            period_start=datetime.fromisoformat(content["period"]["start"]) if "period" in content else None,
+            period_end=datetime.fromisoformat(content["period"]["end"]) if "period" in content else None,
+            content=content,
+            delivery_channel=prefs.get("delivery_channel", "email"),
+            task_count=task_count,
+            thread_count=thread_count,
+            event_count=event_count
+        )
+        db.add(digest)
+        db.commit()
+        
+        # Queue delivery
+        enqueue_task(
+            task_type="deliver_digest",
+            payload={"digest_id": digest.id},
+            correlation_id=correlation_id,
+            db=db
+        )
+        
+        # Schedule next occurrence
+        next_time = get_next_digest_time(digest_type, prefs, settings.default_timezone)
+        if next_time:
+            enqueue_task(
+                task_type="generate_digest",
+                payload={"user_email": user_email, "digest_type": digest_type},
+                scheduled_for=next_time,
+                db=db
+            )
+            logger.info(f"Next {digest_type} scheduled for {next_time}")
+        
+        logger.info(f"Generated {digest_type} digest for {user_email}")
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to generate digest: {e}", exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
+async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'deliver_digest' tasks.
+    
+    Delivers a generated digest via the configured channel.
+    """
+    from app.models import Digest
+    from app.database import SessionLocal
+    from app.queue import enqueue_task
+    
+    db = SessionLocal()
+    try:
+        digest_id = payload.get("digest_id")
+        digest = db.query(Digest).filter(Digest.id == digest_id).first()
+        
+        if not digest:
+            logger.warning(f"Digest {digest_id} not found")
+            return
+        
+        channel = digest.delivery_channel
+        
+        # Render content for channel
+        if channel == "email":
+            # TODO: Render HTML email template and send
+            logger.info(f"Would send email digest to {digest.user_email}")
+        elif channel == "telegram":
+            # TODO: Send via Telegram bot
+            logger.info(f"Would send Telegram digest to {digest.user_email}")
+        elif channel == "push":
+            # TODO: Send push notification
+            logger.info(f"Would send push digest to {digest.user_email}")
+        
+        # Update delivery status
+        digest.delivery_status = "sent"
+        digest.delivered_at = datetime.now(timezone.utc)
+        db.commit()
+        
+        # Emit event for UI
+        enqueue_task(
+            task_type="emit_event",
+            payload={
+                "event_name": "digest_delivered",
+                "event_payload": {
+                    "digest_id": digest.id,
+                    "digest_type": digest.digest_type,
+                    "user_email": digest.user_email
+                }
+            },
+            correlation_id=correlation_id,
+            db=db
+        )
+        
+        logger.info(f"Delivered {digest.digest_type} digest to {digest.user_email}")
+        
+    except Exception as e:
+        if digest:
+            digest.delivery_status = "failed"
+            digest.delivery_error = str(e)
+            db.commit()
+        logger.error(f"Failed to deliver digest: {e}", exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
+def schedule_digest_jobs_if_needed(db):
+    """
+    Schedule digest jobs for all users with enabled digests.
+
+    Called on startup and when preferences change.
+    Ensures exactly one pending job per (user, digest_type) combination.
+    """
+    from app.models import UserSettings, TaskQueue
+    from app.queue import enqueue_task
+
+    # Query all pending digest jobs once (O(1) queries, not O(users * types))
+    pending_jobs = db.query(TaskQueue).filter(
+        TaskQueue.task_type == "generate_digest",
+        TaskQueue.status == "pending"
+    ).all()
+
+    # Build set of already-scheduled (user_email, digest_type) pairs
+    scheduled = {
+        (job.payload.get("user_email"), job.payload.get("digest_type"))
+        for job in pending_jobs
+    }
+
+    settings_list = db.query(UserSettings).all()
+
+    for settings in settings_list:
+        prefs = settings.digest_preferences or {}
+        if not prefs.get("enabled"):
+            continue
+
+        for digest_type in ["morning_briefing", "end_of_day", "weekly_review"]:
+            if not prefs.get(digest_type, {}).get("enabled"):
+                continue
+
+            # Skip if already scheduled for this user + digest_type
+            if (settings.user_email, digest_type) in scheduled:
+                logger.debug(f"Digest {digest_type} already scheduled for {settings.user_email}")
+                continue
+
+            next_time = get_next_digest_time(digest_type, prefs, settings.default_timezone)
+            if next_time:
+                enqueue_task(
+                    task_type="generate_digest",
+                    payload={"user_email": settings.user_email, "digest_type": digest_type},
+                    scheduled_for=next_time,
+                    db=db
+                )
+                logger.info(f"Scheduled {digest_type} for {settings.user_email} at {next_time}")
+
+
 # Map task types to handlers
 TASK_HANDLERS = {
+    "process_email": handle_process_email,
     "emit_event": handle_emit_event,
     "send_notification": handle_send_notification,
     "trigger_agent": handle_trigger_agent,
     "evaluate_reminder": handle_evaluate_reminder,
     "data_cleanup": handle_data_cleanup,
+    "generate_briefing": handle_generate_briefing,
+    "generate_digest": handle_generate_digest,
+    "deliver_digest": handle_deliver_digest,
 }
 
 
 def run_worker(poll_interval: int = 2):
     """
-    Run the email assistant worker
+    Run the email assistant worker (single-task processing)
 
     Args:
         poll_interval: Seconds between polls (default: 2)
@@ -398,8 +846,30 @@ def run_worker(poll_interval: int = 2):
     worker.run()
 
 
-if __name__ == "__main__":
-    # Import handlers to register them with event system
-    import app.handlers
+def run_email_batch_worker(poll_interval: int = 2, limit_per_user: int = 30, max_users: int = 5):
+    """
+    Run the batch worker for user-isolated email processing.
 
-    run_worker()
+    Groups emails by user and processes them in batches for LLM efficiency.
+    No data leakage between users.
+
+    Args:
+        poll_interval: Seconds between polls (default: 2)
+        limit_per_user: Max emails per user per batch (default: 30)
+        max_users: Max users to process per cycle (default: 5)
+    """
+    worker = BatchWorker(
+        queue_service=queue_service,
+        handlers=BATCH_HANDLERS,
+        poll_interval=poll_interval,
+        limit_per_user=limit_per_user,
+        max_users=max_users
+    )
+
+    worker.run()
+
+
+if __name__ == "__main__":
+    import app.handlers
+    # Use batch worker for efficient LLM batching by user
+    run_email_batch_worker()

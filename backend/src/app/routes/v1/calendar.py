@@ -2,15 +2,15 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import get_db_for_user, get_user_settings
-from app.models import CalendarEvent, UserSettings
-from app.schemas import (
+from app.security.auth import get_db_for_user, get_user_settings
+from app.data.models import CalendarEvent, UserSettings
+from app.data.schemas import (
     CalendarEventCreateRequest, CalendarEventResponse, 
     CalendarSettingsResponse, CalendarSettingsUpdateRequest,
     CalendarAvailabilityResponse, CalendarInfoResponse
 )
-from ...services.calendar import CalendarService
-from ...services.briefing import generate_briefing_for_event, generate_follow_ups_for_event
+from app.services.calendar import CalendarService
+from app.services.briefing import generate_briefing_for_event, generate_follow_ups_for_event
 from app.agents.modules.scheduling import SchedulingModule
 
 router = APIRouter(prefix="/calendar", tags=["Calendar"])

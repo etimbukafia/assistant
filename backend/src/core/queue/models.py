@@ -13,7 +13,7 @@ def create_task_queue_model(Base):
     Factory function to create TaskQueue model with your Base class
 
     Usage:
-        from app.database import Base
+        from app.infra.database import Base
         from core.queue.models import create_task_queue_model
 
         TaskQueue = create_task_queue_model(Base)

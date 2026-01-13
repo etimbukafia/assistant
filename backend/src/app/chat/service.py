@@ -11,7 +11,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory
+from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory
 from .orchestrator import ChatOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ class ChatService:
         Generate and store a draft reply using CommunicationModule.
         """
         from app.agents.modules.communication import CommunicationModule
-        from app.models import Message
+        from app.data.models import Message
         
         email_id = data.get("email_id")
         if not email_id:
@@ -333,7 +333,7 @@ class ChatService:
     
     def _execute_add_calendar(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Create calendar event."""
-        from app.models import CalendarEvent
+        from app.data.models import CalendarEvent
         
         start_time = datetime.fromisoformat(data["start_time"].replace("Z", "+00:00"))
         end_time = datetime.fromisoformat(data["end_time"].replace("Z", "+00:00"))
@@ -357,7 +357,7 @@ class ChatService:
     
     def _execute_cancel_meeting(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Cancel a calendar event."""
-        from app.models import CalendarEvent
+        from app.data.models import CalendarEvent
         
         event_id = data.get("event_id")
         event = self.db.query(CalendarEvent).filter(
@@ -375,7 +375,7 @@ class ChatService:
     
     def _execute_reschedule_meeting(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Reschedule a calendar event."""
-        from app.models import CalendarEvent
+        from app.data.models import CalendarEvent
         
         event_id = data.get("event_id")
         event = self.db.query(CalendarEvent).filter(

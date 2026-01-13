@@ -11,7 +11,7 @@ import logging
 from functools import lru_cache
 from typing import Optional, Dict, Any
 
-from app.config import get_settings
+from app.infra.config import get_settings
 
 logger = logging.getLogger(__name__)
 

@@ -285,6 +285,10 @@ class CalendarService:
             List of TimeSlot objects
         """
         try:
+            # Defensive: ensure numeric params are not None
+            duration_minutes = duration_minutes or 30
+            buffer_minutes = buffer_minutes or 15
+
             # Get busy slots for the range
             busy_slots = await self.get_availability(start_date, end_date, calendar_ids)
 
@@ -410,7 +414,26 @@ class CalendarService:
                 event['location'] = location
 
             if attendees:
-                event['attendees'] = [{'email': email} for email in attendees]
+                # Extract clean emails from "Name <email>" format and filter invalid
+                import re
+                clean_attendees = []
+                for a in attendees:
+                    if not a:
+                        continue
+                    # Check if it's "Name <email>" format
+                    match = re.search(r'<([^>]+@[^>]+)>', a)
+                    if match:
+                        email = match.group(1).strip()
+                    else:
+                        email = a.strip()
+                    # Basic email validation
+                    if '@' in email and '.' in email.split('@')[-1]:
+                        clean_attendees.append(email)
+                    else:
+                        logger.warning(f"Skipping invalid attendee email: {a}")
+                
+                if clean_attendees:
+                    event['attendees'] = [{'email': email} for email in clean_attendees]
 
             created_event = service.events().insert(
                 calendarId=calendar_id,
@@ -451,3 +474,167 @@ class CalendarService:
         except Exception as e:
             logger.error(f"Failed to get event {event_id}: {e}")
             return None
+
+    async def get_upcoming_events(
+        self,
+        days_ahead: int = 7,
+        calendar_ids: Optional[List[str]] = None,
+        max_results: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Get upcoming events from Google Calendar.
+
+        Args:
+            days_ahead: Number of days to look ahead
+            calendar_ids: Calendars to fetch from (uses primary if None)
+            max_results: Maximum events per calendar
+
+        Returns:
+            List of normalized event dicts
+        """
+        try:
+            service = self._get_service()
+
+            if not calendar_ids:
+                calendar_ids = ["primary"]
+
+            now = datetime.now(timezone.utc)
+            time_max = now + timedelta(days=days_ahead)
+
+            all_events = []
+
+            for cal_id in calendar_ids:
+                events_result = service.events().list(
+                    calendarId=cal_id,
+                    timeMin=now.isoformat(),
+                    timeMax=time_max.isoformat(),
+                    maxResults=max_results,
+                    singleEvents=True,
+                    orderBy='startTime'
+                ).execute()
+
+                for event in events_result.get('items', []):
+                    # Skip all-day events
+                    if 'dateTime' not in event.get('start', {}):
+                        continue
+
+                    all_events.append(self._normalize_event(event, cal_id))
+
+            all_events.sort(key=lambda x: x['start_time'])
+            return all_events
+
+        except Exception as e:
+            logger.error(f"Failed to get upcoming events: {e}")
+            raise
+
+    def _normalize_event(self, event: Dict[str, Any], calendar_id: str) -> Dict[str, Any]:
+        """Normalize Google Calendar event to our format."""
+        start = event.get('start', {})
+        end = event.get('end', {})
+
+        attendees = [
+            {
+                'email': att.get('email'),
+                'name': att.get('displayName'),
+                'response_status': att.get('responseStatus')
+            }
+            for att in event.get('attendees', [])
+        ]
+
+        return {
+            'external_event_id': event.get('id'),
+            'calendar_id': calendar_id,
+            'title': event.get('summary', 'No Title'),
+            'description': event.get('description'),
+            'start_time': datetime.fromisoformat(start.get('dateTime').replace('Z', '+00:00')),
+            'end_time': datetime.fromisoformat(end.get('dateTime').replace('Z', '+00:00')),
+            'timezone': start.get('timeZone', 'UTC'),
+            'location': event.get('location'),
+            'organizer': event.get('organizer', {}).get('email'),
+            'attendees': attendees,
+            'status': event.get('status', 'confirmed')
+        }
+
+    async def sync_upcoming_events(self, days_ahead: int = 7, briefing_hours_before: int = 2) -> Dict[str, int]:
+        """
+        Sync upcoming events from Google Calendar to database.
+        Schedules briefing generation for new events.
+
+        Args:
+            days_ahead: Number of days to look ahead
+            briefing_hours_before: Hours before meeting to generate briefing
+
+        Returns:
+            Dict with created, updated, unchanged counts
+        """
+        from .models import CalendarEvent
+        from .queue import enqueue_task
+
+        events = await self.get_upcoming_events(days_ahead=days_ahead)
+        now = datetime.now(timezone.utc)
+
+        created = 0
+        updated = 0
+        unchanged = 0
+
+        for event_data in events:
+            existing = self.db.query(CalendarEvent).filter(
+                CalendarEvent.external_event_id == event_data['external_event_id']
+            ).first()
+
+            if existing:
+                # Update if changed
+                if (existing.title != event_data['title'] or
+                    existing.start_time != event_data['start_time'] or
+                    existing.participants != event_data['attendees']):
+
+                    existing.title = event_data['title']
+                    existing.description = event_data['description']
+                    existing.start_time = event_data['start_time']
+                    existing.end_time = event_data['end_time']
+                    existing.location = event_data['location']
+                    existing.organizer = event_data['organizer']
+                    existing.participants = event_data['attendees']
+                    existing.timezone = event_data['timezone']
+                    existing.last_synced_at = now
+                    updated += 1
+                else:
+                    existing.last_synced_at = now
+                    unchanged += 1
+            else:
+                # Create new
+                new_event = CalendarEvent(
+                    external_event_id=event_data['external_event_id'],
+                    calendar_id=event_data['calendar_id'],
+                    title=event_data['title'],
+                    description=event_data['description'],
+                    start_time=event_data['start_time'],
+                    end_time=event_data['end_time'],
+                    location=event_data['location'],
+                    organizer=event_data['organizer'],
+                    participants=event_data['attendees'],
+                    timezone=event_data['timezone'],
+                    source='synced',
+                    status='upcoming',
+                    last_synced_at=now
+                )
+                self.db.add(new_event)
+                self.db.flush()  # Get the ID
+
+                # Schedule briefing generation
+                briefing_time = event_data['start_time'] - timedelta(hours=briefing_hours_before)
+                if briefing_time > now:
+                    enqueue_task(
+                        task_type="generate_briefing",
+                        payload={"event_id": new_event.id},
+                        scheduled_for=briefing_time,
+                        db=self.db
+                    )
+                    logger.info(f"Scheduled briefing for event {new_event.id} at {briefing_time}")
+
+                created += 1
+
+        self.db.commit()
+
+        logger.info(f"Calendar sync complete: {created} created, {updated} updated, {unchanged} unchanged")
+        return {'created': created, 'updated': updated, 'unchanged': unchanged}

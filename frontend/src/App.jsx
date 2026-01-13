@@ -1,26 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL, MOCK_MESSAGES, MOCK_STATS } from './utils/constants';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { SubscriptionProvider, useSubscription } from './contexts/SubscriptionContext';
+import { api } from './utils/api';
 import BottomNav from './components/BottomNav';
+import TrialBanner from './components/TrialBanner';
+import TrialExpiredPrompt from './components/TrialExpiredPrompt';
 import LandingPage from './views/LandingPage';
+import AuthPage from './views/AuthPage';
 import Dashboard from './views/Dashboard';
 import TaskHub from './views/TaskHub';
 import SettingsView from './views/SettingsView';
 import MessageDetail from './views/MessageDetail';
 import DraftReply from './views/DraftReply';
+import CalendarEventsView from './views/CalendarEventsView';
+import BillingView from './views/BillingView';
+import CheckoutSuccess from './views/CheckoutSuccess';
+import CheckoutCancel from './views/CheckoutCancel';
+import ChatView from './views/ChatView';
 import DeleteConfirmDialog from './components/DeleteConfirmDialog';
 
-const App = () => {
+const AppContent = () => {
+    const { isAuthenticated, loading: authLoading, user } = useAuth();
+    const { isTrialUser, isTrialExpired, isActive, loading: subscriptionLoading } = useSubscription();
+
     // Navigation State
     const [currentView, setCurrentView] = useState('landing');
     const [viewParams, setViewParams] = useState({});
 
     // Data State
-    const [demoMode, setDemoMode] = useState(true);
+    const [demoMode, setDemoMode] = useState(false);
     const [messages, setMessages] = useState([]);
     const [stats, setStats] = useState(null);
     const [isSyncing, setIsSyncing] = useState(false);
     const [filter, setFilter] = useState('all');
-    const [isAuthenticated, setIsAuthenticated] = useState(false);
 
     // Scheduling State
     const [schedulingSuggestions, setSchedulingSuggestions] = useState({});
@@ -29,35 +42,38 @@ const App = () => {
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
     const [messageToDelete, setMessageToDelete] = useState(null);
 
-    // Check authentication on mount
+    // Polling State (Phase 1 Notification Strategy)
+    const [lastFetchTime, setLastFetchTime] = useState(null);
+    const [newItemsCount, setNewItemsCount] = useState(0);
+    const [pendingMessages, setPendingMessages] = useState([]);
+    const [focusMode, setFocusMode] = useState(false);
+
+    // Handle auth state changes and URL-based routing
     useEffect(() => {
-        const checkAuth = async () => {
-            const path = window.location.pathname;
+        if (authLoading) return;
 
-            if (path === '/dashboard') {
-                try {
-                    const res = await fetch(`${API_BASE_URL}/auth/gmail/status`);
-                    const data = await res.json();
+        const path = window.location.pathname;
 
-                    if (data.authenticated) {
-                        setIsAuthenticated(true);
-                        setDemoMode(false);
-                        setCurrentView('dashboard');
-                        window.history.replaceState({}, '', '/dashboard');
-                    } else {
-                        setCurrentView('landing');
-                        window.history.replaceState({}, '', '/');
-                    }
-                } catch (err) {
-                    console.error("Auth check failed", err);
-                    setCurrentView('landing');
-                    window.history.replaceState({}, '', '/');
-                }
+        if (isAuthenticated) {
+            // Handle URL-based routing for authenticated users
+            if (path === '/checkout-success') {
+                setCurrentView('checkout-success');
+            } else if (path === '/checkout-cancel') {
+                setCurrentView('checkout-cancel');
+            } else if (path === '/billing') {
+                setCurrentView('billing');
+            } else if (currentView === 'landing' || currentView === 'auth' || path === '/dashboard') {
+                setCurrentView('dashboard');
+                window.history.replaceState({}, '', '/dashboard');
             }
-        };
-
-        checkAuth();
-    }, []);
+        } else if (!demoMode) {
+            // Not authenticated and not in demo mode - go to landing
+            if (currentView !== 'landing' && currentView !== 'auth') {
+                setCurrentView('landing');
+                window.history.replaceState({}, '', '/');
+            }
+        }
+    }, [isAuthenticated, authLoading, demoMode]);
 
     // Load initial data - only on first load or when demoMode changes, NOT on view change
     useEffect(() => {
@@ -77,6 +93,7 @@ const App = () => {
         if (demoMode) {
             setMessages(MOCK_MESSAGES);
             setStats(MOCK_STATS);
+            setLastFetchTime(new Date().toISOString());
             return;
         }
 
@@ -84,6 +101,7 @@ const App = () => {
             const msgRes = await fetch(`${API_BASE_URL}/messages`);
             const msgData = await msgRes.json();
             setMessages(msgData.messages);
+            setLastFetchTime(new Date().toISOString());
 
             const statsRes = await fetch(`${API_BASE_URL}/stats`);
             const statsData = await statsRes.json();
@@ -91,6 +109,38 @@ const App = () => {
         } catch (err) {
             console.error("Failed to fetch data", err);
         }
+    };
+
+    // Polling for new items (Phase 1 Notification Strategy)
+    // Only polls when not in focus mode and on dashboard
+    useEffect(() => {
+        if (demoMode || focusMode || currentView !== 'dashboard' || !lastFetchTime) return;
+
+        const fetchNewItems = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/messages/new?since=${encodeURIComponent(lastFetchTime)}`);
+                const data = await res.json();
+
+                if (data.messages && data.messages.length > 0) {
+                    setPendingMessages(prev => [...data.messages, ...prev]);
+                    setNewItemsCount(prev => prev + data.messages.length);
+                    // Update lastFetchTime to avoid fetching same messages
+                    setLastFetchTime(new Date().toISOString());
+                }
+            } catch (err) {
+                console.error("Polling failed", err);
+            }
+        };
+
+        const interval = setInterval(fetchNewItems, 30000); // 30 second poll
+        return () => clearInterval(interval);
+    }, [demoMode, focusMode, currentView, lastFetchTime]);
+
+    // Helper: Load pending messages into main feed
+    const loadPendingMessages = () => {
+        setMessages(prev => [...pendingMessages, ...prev]);
+        setPendingMessages([]);
+        setNewItemsCount(0);
     };
 
     const handleSync = async () => {
@@ -300,6 +350,212 @@ const App = () => {
                         )
                     };
                 }));
+            }
+        }
+    };
+
+    /**
+     * Update a task (Smart Todo List - inline edit)
+     * Calls PUT /tasks/{task_id} in live mode
+     */
+    const handleUpdateTask = async (taskId, updates) => {
+        // Store original task for rollback
+        let originalTask = null;
+        for (const msg of messages) {
+            const task = (msg.tasks || []).find(t => t.id === taskId);
+            if (task) {
+                originalTask = { ...task };
+                break;
+            }
+        }
+
+        // Optimistic update
+        setMessages(prev => prev.map(msg => {
+            if (!msg.tasks) return msg;
+            return {
+                ...msg,
+                tasks: msg.tasks.map(t =>
+                    t.id === taskId ? { ...t, ...updates } : t
+                )
+            };
+        }));
+
+        // Call backend in live mode
+        if (!demoMode) {
+            try {
+                const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(updates)
+                });
+
+                if (!res.ok) {
+                    throw new Error('Failed to update task');
+                }
+            } catch (err) {
+                console.error("Update task failed", err);
+                // Rollback on error
+                if (originalTask) {
+                    setMessages(prev => prev.map(msg => {
+                        if (!msg.tasks) return msg;
+                        return {
+                            ...msg,
+                            tasks: msg.tasks.map(t =>
+                                t.id === taskId ? originalTask : t
+                            )
+                        };
+                    }));
+                }
+            }
+        }
+    };
+
+    /**
+     * Confirm AI-suggested deadline
+     * Calls PUT /tasks/{task_id} with deadline_confirmed: true
+     */
+    const handleConfirmDeadline = async (taskId) => {
+        // Optimistic update
+        setMessages(prev => prev.map(msg => {
+            if (!msg.tasks) return msg;
+            return {
+                ...msg,
+                tasks: msg.tasks.map(t =>
+                    t.id === taskId ? { ...t, deadline_user_confirmed: true } : t
+                )
+            };
+        }));
+
+        // Call backend in live mode
+        if (!demoMode) {
+            try {
+                const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ deadline_confirmed: true })
+                });
+
+                if (!res.ok) {
+                    throw new Error('Failed to confirm deadline');
+                }
+            } catch (err) {
+                console.error("Confirm deadline failed", err);
+                // Rollback
+                setMessages(prev => prev.map(msg => {
+                    if (!msg.tasks) return msg;
+                    return {
+                        ...msg,
+                        tasks: msg.tasks.map(t =>
+                            t.id === taskId ? { ...t, deadline_user_confirmed: false } : t
+                        )
+                    };
+                }));
+            }
+        }
+    };
+
+    /**
+     * Confirm AI-suggested urgency
+     * Calls PUT /tasks/{task_id} with mark_urgent: true
+     */
+    const handleConfirmUrgency = async (taskId) => {
+        // Optimistic update
+        setMessages(prev => prev.map(msg => {
+            if (!msg.tasks) return msg;
+            return {
+                ...msg,
+                tasks: msg.tasks.map(t =>
+                    t.id === taskId ? { ...t, urgency_suggested_by_ai: false } : t
+                )
+            };
+        }));
+
+        // Call backend in live mode
+        if (!demoMode) {
+            try {
+                const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mark_urgent: true })
+                });
+
+                if (!res.ok) {
+                    throw new Error('Failed to confirm urgency');
+                }
+            } catch (err) {
+                console.error("Confirm urgency failed", err);
+                // Rollback
+                setMessages(prev => prev.map(msg => {
+                    if (!msg.tasks) return msg;
+                    return {
+                        ...msg,
+                        tasks: msg.tasks.map(t =>
+                            t.id === taskId ? { ...t, urgency_suggested_by_ai: true } : t
+                        )
+                    };
+                }));
+            }
+        }
+    };
+
+    /**
+     * Create a manual task (not from email)
+     * Calls POST /tasks/manual
+     */
+    const handleCreateTask = async (taskData) => {
+        const tempTask = {
+            id: Date.now(),
+            ...taskData,
+            status: 'approved',
+            type: 'explicit',
+            created_at: new Date().toISOString()
+        };
+
+        // For manual tasks, we need to add them to a special "manual" message or create standalone
+        // For now, add to first message for display purposes
+        setMessages(prev => {
+            if (prev.length === 0) return prev;
+            const [first, ...rest] = prev;
+            return [{ ...first, tasks: [...(first.tasks || []), tempTask] }, ...rest];
+        });
+
+        // Call backend in live mode
+        if (!demoMode) {
+            try {
+                const res = await fetch(`${API_BASE_URL}/tasks/manual`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(taskData)
+                });
+
+                if (!res.ok) {
+                    throw new Error('Failed to create task');
+                }
+
+                const createdTask = await res.json();
+
+                // Update with real task from backend
+                setMessages(prev => {
+                    if (prev.length === 0) return prev;
+                    const [first, ...rest] = prev;
+                    return [{
+                        ...first,
+                        tasks: first.tasks.map(t =>
+                            t.id === tempTask.id ? { ...createdTask, type: createdTask.type || createdTask.task_type } : t
+                        )
+                    }, ...rest];
+                });
+            } catch (err) {
+                console.error("Create task failed", err);
+                // Rollback
+                setMessages(prev => {
+                    if (prev.length === 0) return prev;
+                    const [first, ...rest] = prev;
+                    return [{
+                        ...first,
+                        tasks: (first.tasks || []).filter(t => t.id !== tempTask.id)
+                    }, ...rest];
+                });
             }
         }
     };
@@ -675,17 +931,29 @@ const App = () => {
         }
     };
 
+    // Show loading state while checking auth
+    if (authLoading) {
+        return (
+            <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+            </div>
+        );
+    }
+
     // Router Switch
     let content;
     switch (currentView) {
         case 'landing':
             return (
                 <LandingPage
-                    onConnect={handleConnectGmail}
+                    onConnect={() => navigate('auth')}
                     demoMode={demoMode}
                     setDemoMode={setDemoMode}
                 />
             );
+
+        case 'auth':
+            return <AuthPage onNavigate={navigate} />;
 
         case 'dashboard':
             // Filter to only show inbox messages (not done or archived)
@@ -707,6 +975,13 @@ const App = () => {
                     onMarkDone={handleMarkDone}
                     onArchive={handleArchive}
                     onDelete={handleDelete}
+                    onConfirmDeadline={handleConfirmDeadline}
+                    onConfirmUrgency={handleConfirmUrgency}
+                    // Polling props (Phase 1 Notification Strategy)
+                    newItemsCount={newItemsCount}
+                    onLoadNewItems={loadPendingMessages}
+                    focusMode={focusMode}
+                    setFocusMode={setFocusMode}
                 />
             );
             break;
@@ -730,6 +1005,8 @@ const App = () => {
                     onMarkDone={handleMarkDone}
                     onArchive={handleArchive}
                     onDelete={handleDelete}
+                    onConfirmDeadline={handleConfirmDeadline}
+                    onConfirmUrgency={handleConfirmUrgency}
                     isArchiveView={true}
                 />
             );
@@ -743,13 +1020,45 @@ const App = () => {
                     onToggleTask={handleToggleTask}
                     onApproveTask={handleApproveTask}
                     onDismissTask={handleDismissTask}
+                    onUpdateTask={handleUpdateTask}
+                    onConfirmDeadline={handleConfirmDeadline}
+                    onConfirmUrgency={handleConfirmUrgency}
+                    onCreateTask={handleCreateTask}
+                />
+            );
+            break;
+
+        case 'calendar':
+            content = (
+                <CalendarEventsView
+                    onNavigateToDetail={(id) => navigate('detail', { id })}
+                    demoMode={demoMode}
+                />
+            );
+            break;
+
+        case 'chat':
+            content = (
+                <ChatView
+                    onNavigate={navigate}
+                    demoMode={demoMode}
                 />
             );
             break;
 
         case 'settings':
-            content = <SettingsView demoMode={demoMode} />;
+            content = <SettingsView demoMode={demoMode} onNavigate={navigate} />;
             break;
+
+        case 'billing':
+            content = <BillingView />;
+            break;
+
+        case 'checkout-success':
+            return <CheckoutSuccess onNavigate={navigate} />;
+
+        case 'checkout-cancel':
+            return <CheckoutCancel onNavigate={navigate} />;
 
         case 'detail':
             const msg = messages.find(m => m.id === viewParams.id);
@@ -788,9 +1097,17 @@ const App = () => {
     }
 
     return (
-        <div className="max-w-md mx-auto min-h-screen bg-gray-50 shadow-2xl overflow-hidden relative">
-            {content}
-            {currentView !== 'landing' && (
+        <div className="max-w-md mx-auto min-h-screen bg-gray-50 shadow-2xl overflow-hidden relative flex flex-col">
+            {/* Trial Banner - shown for active trial users */}
+            {isAuthenticated && isTrialUser && isActive && !demoMode && currentView !== 'landing' && currentView !== 'auth' && (
+                <TrialBanner />
+            )}
+
+            <div className="flex-1 overflow-auto">
+                {content}
+            </div>
+
+            {currentView !== 'landing' && currentView !== 'billing' && currentView !== 'checkout-success' && currentView !== 'checkout-cancel' && currentView !== 'chat' && (
                 <BottomNav currentView={currentView} onNavigate={navigate} />
             )}
 
@@ -808,8 +1125,22 @@ const App = () => {
                 suggestionsCount={0}
                 demoMode={demoMode}
             />
+
+            {/* Trial Expired Prompt - blocks app when trial expired */}
+            {isAuthenticated && isTrialExpired && !demoMode && (
+                <TrialExpiredPrompt />
+            )}
         </div>
     );
 };
+
+// Wrap with AuthProvider and SubscriptionProvider
+const App = () => (
+    <AuthProvider>
+        <SubscriptionProvider>
+            <AppContent />
+        </SubscriptionProvider>
+    </AuthProvider>
+);
 
 export default App;

@@ -15,7 +15,7 @@ from fastapi import BackgroundTasks
 
 from core.events import emit_event
 from core.queue import Worker, BatchWorker
-from app.queue import queue_service
+from app.jobs.queue import queue_service
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
     reusable across channels (email, Slack, WhatsApp).
     """
     from app.processors.message import process_messages_batch
-    from app.database import SessionLocal
+    from app.infra.database import SessionLocal
 
     # Require user_id for RLS context
     if not user_id:
@@ -168,7 +168,7 @@ async def handle_trigger_agent(task_id: int, task_type: str, payload: Dict[str, 
     Triggers the orchestrator to evaluate and take autonomous actions.
     """
     from app.agents.orchestrator import AssistantOrchestrator
-    from app.database import SessionLocal
+    from app.infra.database import SessionLocal
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id") or payload.get("event_payload", {}).get("user_id")
@@ -257,10 +257,10 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
     Evaluates if a task reminder should be sent now using AI.
     Respects quiet hours, frequency limits, and context.
     """
-    from app.models import Task, Message, UserSettings, TaskReminder
-    from app.database import SessionLocal
+    from app.data.models import Task, Message, UserSettings, TaskReminder
+    from app.infra.database import SessionLocal
     from app.processors.ai import AIProcessor
-    from app.queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -426,9 +426,9 @@ async def handle_data_cleanup(task_id: int, task_type: str, payload: Dict[str, A
 
     This is the main data lifecycle cleanup job.
     """
-    from app.models import Message, Task
-    from app.database import SessionLocal
-    from app.queue import enqueue_task
+    from app.data.models import Message, Task
+    from app.infra.database import SessionLocal
+    from app.jobs.queue import enqueue_task
 
     RETENTION_DAYS = 30
 
@@ -517,8 +517,8 @@ async def handle_chat_cleanup(task_id: int, task_type: str, payload: Dict[str, A
     3. Expire pending actions on deleted sessions
     """
     from app.chat import ChatService
-    from app.database import SessionLocal
-    from app.queue import enqueue_task
+    from app.infra.database import SessionLocal
+    from app.jobs.queue import enqueue_task
 
     db = SessionLocal()
     try:
@@ -560,8 +560,8 @@ async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[s
     Generates a meeting briefing for an upcoming calendar event.
     Scheduled to run 1-2 hours before the meeting.
     """
-    from app.models import CalendarEvent
-    from app.database import SessionLocal
+    from app.data.models import CalendarEvent
+    from app.infra.database import SessionLocal
     from app.services.briefing import BriefingService
 
     # Extract user_id from payload for RLS context
@@ -602,7 +602,7 @@ async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[s
         )
 
         # Emit event for UI notification
-        from app.queue import enqueue_task
+        from app.jobs.queue import enqueue_task
         enqueue_task(
             task_type="emit_event",
             payload={
@@ -693,10 +693,10 @@ async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str
     Generates a scheduled digest and queues it for delivery.
     Self-reschedules for next occurrence.
     """
-    from app.models import UserSettings, Digest
-    from app.database import SessionLocal
+    from app.data.models import UserSettings, Digest
+    from app.infra.database import SessionLocal
     from app.services.digest import DigestService
-    from app.queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -818,9 +818,9 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
 
     Delivers a generated digest via the configured channel.
     """
-    from app.models import Digest
-    from app.database import SessionLocal
-    from app.queue import enqueue_task
+    from app.data.models import Digest
+    from app.infra.database import SessionLocal
+    from app.jobs.queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -893,8 +893,8 @@ def schedule_digest_jobs_if_needed(db):
     Called on startup and when preferences change.
     Ensures exactly one pending job per (user, digest_type) combination.
     """
-    from app.models import UserSettings, TaskQueue
-    from app.queue import enqueue_task
+    from app.data.models import UserSettings, TaskQueue
+    from app.jobs.queue import enqueue_task
 
     # Query all pending digest jobs once (O(1) queries, not O(users * types))
     pending_jobs = db.query(TaskQueue).filter(

@@ -75,12 +75,12 @@ const SchedulingSuggestionCard = ({
     }
 
     return (
-        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mt-3">
+        <div className="bg-gradient-to-br from-sky-50 to-cyan-50 border border-sky-200 rounded-xl p-4 mt-3">
             {/* Header */}
             <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-blue-600" />
-                    <span className="text-xs font-semibold text-blue-800 uppercase tracking-wide">
+                    <Calendar className="w-4 h-4 text-sky-600" />
+                    <span className="text-xs font-semibold text-sky-800 uppercase tracking-wide">
                         Scheduling Detected
                     </span>
                     {created_at && (
@@ -93,7 +93,7 @@ const SchedulingSuggestionCard = ({
                     <button
                         onClick={() => onRefresh?.(suggestion.message_id)}
                         disabled={isRefreshing}
-                        className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 disabled:opacity-50"
+                        className="text-xs text-sky-600 hover:text-sky-700 flex items-center gap-1 disabled:opacity-50"
                         title="Refresh with latest availability"
                     >
                         <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -132,8 +132,8 @@ const SchedulingSuggestionCard = ({
                                 className={`
                                     px-3 py-1.5 rounded-lg text-sm font-medium transition-all
                                     ${selectedSlotIndex === idx
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-white border border-gray-200 text-gray-700 hover:border-blue-300'
+                                        ? 'bg-sky-600 text-white'
+                                        : 'bg-white border border-gray-200 text-gray-700 hover:border-sky-300'
                                     }
                                     ${slot.has_conflict ? 'ring-2 ring-amber-400' : ''}
                                 `}
@@ -165,7 +165,7 @@ const SchedulingSuggestionCard = ({
                     <div className="text-xs font-medium text-gray-500">Draft Reply</div>
                     <button
                         onClick={() => setIsEditing(!isEditing)}
-                        className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                        className="text-xs text-sky-600 hover:text-sky-700 flex items-center gap-1"
                     >
                         {isEditing ? <Check className="w-3 h-3" /> : <Edit2 className="w-3 h-3" />}
                         {isEditing ? 'Done' : 'Edit'}
@@ -175,7 +175,7 @@ const SchedulingSuggestionCard = ({
                     <textarea
                         value={editedReply}
                         onChange={(e) => setEditedReply(e.target.value)}
-                        className="w-full p-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        className="w-full p-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-sky-500 outline-none"
                         rows={2}
                     />
                 ) : (
@@ -190,7 +190,7 @@ const SchedulingSuggestionCard = ({
                 <button
                     onClick={handleSend}
                     disabled={isLoading}
-                    className="flex-1 flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                 >
                     <Send className="w-4 h-4" />
                     Send Availability

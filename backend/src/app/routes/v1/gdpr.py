@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.auth import get_db_for_user
-from app.models import (
+from app.security.auth import get_db_for_user
+from app.data.models import (
     Message, Task, TaskReminder, SchedulingSuggestion,
     CalendarEvent, AgentActivityLog,
     PrincipalMemory, DecisionPattern, ContactContext,

@@ -1,5 +1,5 @@
 from typing import Dict, Any, TypedDict
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class Event(TypedDict):
@@ -19,6 +19,6 @@ def create_event(
     return Event(
         name=name,
         payload=payload,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         correlation_id=correlation_id
     )

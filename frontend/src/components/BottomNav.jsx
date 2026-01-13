@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mail, CheckSquare, Settings, Archive } from 'lucide-react';
+import { Mail, CheckSquare, Calendar, Settings, MessageCircle } from 'lucide-react';
 
 const NavButton = ({ active, onClick, icon: Icon, label }) => (
     <button
@@ -27,10 +27,16 @@ const BottomNav = ({ currentView, onNavigate }) => (
             label="Tasks"
         />
         <NavButton
-            active={currentView === 'archive'}
-            onClick={() => onNavigate('archive')}
-            icon={Archive}
-            label="Archive"
+            active={currentView === 'chat'}
+            onClick={() => onNavigate('chat')}
+            icon={MessageCircle}
+            label="Chat"
+        />
+        <NavButton
+            active={currentView === 'calendar'}
+            onClick={() => onNavigate('calendar')}
+            icon={Calendar}
+            label="Calendar"
         />
         <NavButton
             active={currentView === 'settings'}

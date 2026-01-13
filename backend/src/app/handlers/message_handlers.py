@@ -11,11 +11,11 @@ from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 
 from core.events import register_handler
-from app.database import SessionLocal
-from app.models import Message
-from app.queue import enqueue_task
+from app.infra.database import SessionLocal
+from app.data.models import Message
+from app.jobs.queue import enqueue_task
 from app.processors.document import document_processor
-from app.gmail_integration import GmailClient
+from app.integrations.gmail import GmailClient
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)

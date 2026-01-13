@@ -7,10 +7,10 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from core.events import register_handler
-from app.database import SessionLocal
-from app.models import Message, Task, UserSettings
+from app.infra.database import SessionLocal
+from app.data.models import Message, Task, UserSettings
 from app.processors.ai import AIProcessor
-from app.queue import enqueue_task
+from app.jobs.queue import enqueue_task
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)

@@ -2,10 +2,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
-from app.auth import get_db_for_user, get_db
-from app.gmail_integration import GmailClient, get_gmail_client
-from app.models import SchedulingSuggestion, Message, Task
-from app.schemas import SchedulingSuggestionResponse, SchedulingSuggestionSendRequest
+from app.security.auth import get_db_for_user, get_db
+from app.integrations.gmail import GmailClient, get_gmail_client
+from app.data.models import SchedulingSuggestion, Message, Task
+from app.data.schemas import SchedulingSuggestionResponse, SchedulingSuggestionSendRequest
 from app.agents.modules.scheduling import SchedulingModule
 
 router = APIRouter(prefix="/scheduling", tags=["Scheduling"])

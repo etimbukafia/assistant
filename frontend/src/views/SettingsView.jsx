@@ -1,8 +1,13 @@
 import React from 'react';
 import CalendarPreferencesPanel from '../components/CalendarPreferencesPanel';
 import PreferencesPanel from '../components/PreferencesPanel';
+import { useSubscription } from '../contexts/SubscriptionContext';
+import { TIER_NAMES, formatDaysRemaining } from '../utils/subscription';
 
-const SettingsView = ({ demoMode = false }) => (
+const SettingsView = ({ demoMode = false, onNavigate }) => {
+    const { tier, daysRemaining, isTrialUser, isProUser, isCanceled } = useSubscription();
+
+    return (
     <div className="min-h-screen bg-gray-50 pb-24">
         <div className="bg-white border-b border-gray-200 sticky top-0 z-10 px-4 py-3 shadow-sm">
             <h1 className="text-lg font-bold text-gray-800">Settings</h1>
@@ -50,8 +55,39 @@ const SettingsView = ({ demoMode = false }) => (
                     placeholder="e.g., Always mark emails from @investors.com as urgent..."
                 ></textarea>
             </div>
+
+            {/* Subscription Section */}
+            {!demoMode && (
+                <div className="bg-white p-4 rounded-xl border border-gray-200">
+                    <h3 className="font-semibold text-gray-900 mb-4">Subscription</h3>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <div className="text-sm font-medium text-gray-800">
+                                {TIER_NAMES[tier] || tier}
+                            </div>
+                            {isTrialUser && daysRemaining !== null && (
+                                <div className="text-xs text-gray-500">
+                                    {formatDaysRemaining(daysRemaining)}
+                                </div>
+                            )}
+                            {isProUser && isCanceled && (
+                                <div className="text-xs text-yellow-600">
+                                    Subscription canceled
+                                </div>
+                            )}
+                        </div>
+                        <button
+                            onClick={() => onNavigate && onNavigate('billing')}
+                            className="px-4 py-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                        >
+                            Manage
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     </div>
-);
+    );
+};
 
 export default SettingsView;

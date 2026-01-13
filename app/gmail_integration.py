@@ -311,6 +311,61 @@ class GmailClient:
 
         return detailed_messages
 
+    def get_sent_messages(self, since: datetime = None, max_results: int = 50) -> list:
+        """
+        Fetch sent messages from Gmail for outbound reply detection.
+        
+        Args:
+            since: Only fetch messages sent after this datetime (optional)
+            max_results: Maximum number of messages to fetch
+            
+        Returns:
+            List of sent message details with thread_id, message_id, sent_at
+        """
+        if not self.service:
+            if not self.load_credentials():
+                raise Exception("Not authenticated. Please authenticate first.")
+        
+        # Build query for sent mail
+        query = "in:sent"
+        if since:
+            # Gmail date format: YYYY/MM/DD
+            date_str = since.strftime("%Y/%m/%d")
+            query += f" after:{date_str}"
+        
+        results = self.service.users().messages().list(
+            userId='me',
+            maxResults=max_results,
+            q=query
+        ).execute()
+        
+        messages = results.get('messages', [])
+        sent_messages = []
+        
+        for msg in messages:
+            try:
+                # Get minimal message details (no full body needed)
+                message = self.service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='metadata',
+                    metadataHeaders=['From', 'Date']
+                ).execute()
+                
+                headers = message.get('payload', {}).get('headers', [])
+                date = next((h['value'] for h in headers if h['name'] == 'Date'), None)
+                
+                sent_messages.append({
+                    'message_id': message['id'],
+                    'thread_id': message['threadId'],
+                    'sent_at': self._parse_date(date) if date else datetime.now(timezone.utc)
+                })
+            except Exception as e:
+                print(f"Failed to get sent message {msg['id']}: {e}")
+                continue
+        
+        return sent_messages
+
     def get_message_detail(self, message_id: str):
         """Get detailed message information"""
         if not self.service:
@@ -337,8 +392,67 @@ class GmailClient:
             'sender': sender,
             'recipient': recipient,
             'body': body,
-            'received_at': self._parse_date(date) if date else datetime.now(timezone.utc)
+            'received_at': self._parse_date(date) if date else datetime.now(timezone.utc),
+            'attachments': self._get_attachment_metadata(message['payload'], message['id'])
         }
+
+    def _get_attachment_metadata(self, payload, message_id: str) -> list:
+        """
+        Extract attachment metadata from message payload.
+        
+        Returns:
+            List of dicts with: filename, mime_type, size, attachment_id
+        """
+        attachments = []
+        self._extract_attachments_recursive(payload, message_id, attachments)
+        return attachments
+
+    def _extract_attachments_recursive(self, part, message_id: str, attachments: list):
+        """Recursively extract attachments from multipart messages."""
+        # Check if this part is an attachment
+        if 'filename' in part and part['filename']:
+            attachment_id = part['body'].get('attachmentId')
+            if attachment_id:
+                attachments.append({
+                    'filename': part['filename'],
+                    'mime_type': part.get('mimeType', 'application/octet-stream'),
+                    'size': part['body'].get('size', 0),
+                    'attachment_id': attachment_id,
+                    'message_id': message_id
+                })
+        
+        # Recurse into parts
+        if 'parts' in part:
+            for subpart in part['parts']:
+                self._extract_attachments_recursive(subpart, message_id, attachments)
+
+    def download_attachment(self, message_id: str, attachment_id: str) -> Optional[bytes]:
+        """
+        Download attachment content from Gmail.
+        
+        Args:
+            message_id: Gmail message ID
+            attachment_id: Attachment ID from _get_attachment_metadata
+            
+        Returns:
+            Raw file bytes, or None if download failed
+        """
+        if not self.service:
+            if not self.load_credentials():
+                return None
+
+        try:
+            attachment = self.service.users().messages().attachments().get(
+                userId='me',
+                messageId=message_id,
+                id=attachment_id
+            ).execute()
+            
+            data = attachment.get('data', '')
+            return base64.urlsafe_b64decode(data)
+        except Exception as e:
+            print(f"Failed to download attachment: {e}")
+            return None
 
     def _get_message_body(self, payload):
         """Extract message body from payload"""

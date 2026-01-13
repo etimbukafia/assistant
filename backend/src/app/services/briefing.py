@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
-from app.models import CalendarEvent, Message, Task
+from app.data.models import CalendarEvent, Message, Task
 from app.processors.ai import AIProcessor
 
 logger = logging.getLogger(__name__)

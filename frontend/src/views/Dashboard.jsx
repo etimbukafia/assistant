@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
-import { RefreshCw, Sparkles, CheckCircle2, Archive, Check, Trash2, RotateCcw } from 'lucide-react';
+import { RefreshCw, Sparkles, CheckCircle2, Archive, Check, Trash2, RotateCcw, Focus } from 'lucide-react';
 import InlineTaskItem from '../components/InlineTaskItem';
 import ExtractedTaskSuggestion from '../components/ExtractedTaskSuggestion';
 import PatternSuggestionBanner from '../components/PatternSuggestionBanner';
+import NewItemsIndicator from '../components/NewItemsIndicator';
+import { MessageChips } from '../components/MessageChip';
 import { timeAgo } from '../utils/helpers';
 import { API_BASE_URL } from '../utils/constants';
+import { hasUrgentTasks, isUrgentTask } from '../utils/urgency';
+import { classifyMessage } from '../utils/classifyMessage';
 
 const FilterButton = ({ active, onClick, label, count, urgent }) => (
     <button
@@ -29,7 +33,7 @@ const FilterButton = ({ active, onClick, label, count, urgent }) => (
  * Extracted tasks (raw AI extraction):
  * Show only if no structured tasks exist OR behind "Detected by AI" label
  */
-const MessageCard = ({ message, onClick, onToggleTask, onApproveTask, onDismissTask, onApproveExtractedTask, onMarkDone, onArchive, onDelete, isArchiveView }) => {
+const MessageCard = ({ message, onClick, onToggleTask, onApproveTask, onDismissTask, onApproveExtractedTask, onMarkDone, onArchive, onDelete, onConfirmDeadline, onConfirmUrgency, isArchiveView }) => {
     // Filter tasks for inline display: only pending_approval and approved (not completed/dismissed)
     const inlineTasks = (message.tasks || []).filter(task =>
         task.status === 'pending_approval' ||
@@ -43,16 +47,28 @@ const MessageCard = ({ message, onClick, onToggleTask, onApproveTask, onDismissT
     // Show extracted_tasks only if no structured tasks exist
     const showExtractedTasks = !hasStructuredTasks && (message.extracted_tasks || []).length > 0;
 
+    // Check for urgent tasks (Phase 3 - visual highlighting only)
+    const isUrgent = hasUrgentTasks(message);
+
+    // Get classification chips for this message
+    const chips = classifyMessage(message);
+
     return (
         <div
             onClick={onClick}
-            className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm active:scale-[0.99] transition-transform cursor-pointer"
+            className={`bg-white p-4 rounded-xl border shadow-sm active:scale-[0.99] transition-transform cursor-pointer
+                ${isUrgent
+                    ? 'border-l-4 border-l-red-500 border-t-gray-100 border-r-gray-100 border-b-gray-100 bg-red-50/30'
+                    : 'border-gray-100'
+                }`}
         >
             {/* Header */}
             <div className="flex justify-between items-start mb-3">
                 <div className="flex items-center gap-2">
-                    {message.needs_reply && (
-                        <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
+                    {isUrgent ? (
+                        <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" title="Urgent" />
+                    ) : message.needs_reply && (
+                        <div className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" title="Needs reply" />
                     )}
                     <span className={`font-semibold ${message.needs_reply ? 'text-gray-900' : 'text-gray-600'}`}>
                         {message.sender.split('@')[0]}
@@ -64,12 +80,19 @@ const MessageCard = ({ message, onClick, onToggleTask, onApproveTask, onDismissT
             <h3 className="font-medium text-gray-800 mb-1">{message.subject}</h3>
 
             {/* AI Summary */}
-            <div className="text-sm text-gray-600 leading-relaxed mb-4 p-3 bg-blue-50/50 rounded-lg border border-blue-100/50">
+            <div className="text-sm text-gray-600 leading-relaxed mb-3 p-3 bg-blue-50/50 rounded-lg border border-blue-100/50">
                 <div className="flex items-center gap-1 text-blue-800 text-xs font-semibold mb-1">
                     <Sparkles className="w-3 h-3" /> ASSISTANT SUMMARY
                 </div>
                 {message.summary}
             </div>
+
+            {/* Classification Chips */}
+            {chips.length > 0 && (
+                <div className="mb-3">
+                    <MessageChips chips={chips} />
+                </div>
+            )}
 
             {/* Task Intelligence Layer - Primary Tasks */}
             {inlineTasks.length > 0 && (
@@ -85,6 +108,9 @@ const MessageCard = ({ message, onClick, onToggleTask, onApproveTask, onDismissT
                                 onToggle={onToggleTask}
                                 onApprove={onApproveTask}
                                 onDismiss={onDismissTask}
+                                onConfirmDeadline={onConfirmDeadline}
+                                onConfirmUrgency={onConfirmUrgency}
+                                inboxView={true}
                             />
                         ))}
                     </div>
@@ -185,7 +211,14 @@ const Dashboard = ({
     onMarkDone,
     onArchive,
     onDelete,
-    isArchiveView = false
+    onConfirmDeadline,
+    onConfirmUrgency,
+    isArchiveView = false,
+    // Polling props (Phase 1 Notification Strategy)
+    newItemsCount = 0,
+    onLoadNewItems,
+    focusMode = false,
+    setFocusMode
 }) => {
     const [showDebug, setShowDebug] = useState(false);
     const [debugLog, setDebugLog] = useState('');
@@ -233,6 +266,16 @@ const Dashboard = ({
             <div className="bg-white border-b border-gray-200 sticky top-0 z-10 px-4 py-3 flex justify-between items-center shadow-sm">
                 <h1 className="text-lg font-bold text-gray-800">{isArchiveView ? 'Archive' : 'Inbox'}</h1>
                 <div className="flex gap-2">
+                    {/* Focus Mode Toggle (Phase 1 Notification Strategy) */}
+                    {!isArchiveView && setFocusMode && (
+                        <button
+                            onClick={() => setFocusMode(!focusMode)}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${focusMode ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                }`}
+                        >
+                            {focusMode ? `Focus · ${newItemsCount} queued` : 'Focus Mode'}
+                        </button>
+                    )}
                     {!demoMode && !isArchiveView && (
                         <button
                             onClick={() => setShowDebug(!showDebug)}
@@ -293,7 +336,7 @@ const Dashboard = ({
             {!isArchiveView && (
                 <div className="px-4 py-3 flex gap-2 overflow-x-auto no-scrollbar">
                     <FilterButton active={filter === 'all'} onClick={() => setFilter('all')} label="All" count={allCount} />
-                    <FilterButton active={filter === 'urgent'} onClick={() => setFilter('urgent')} label="Urgent" count={urgentCount} urgent />
+                    <FilterButton active={filter === 'urgent'} onClick={() => setFilter('urgent')} label="Needs Reply" count={urgentCount} />
                     <FilterButton active={filter === 'today'} onClick={() => setFilter('today')} label="Today" count={todayCount} />
                 </div>
             )}
@@ -303,6 +346,11 @@ const Dashboard = ({
                 <div className="px-4">
                     <PatternSuggestionBanner demoMode={demoMode} />
                 </div>
+            )}
+
+            {/* New Items Indicator (Phase 1 Notification Strategy) */}
+            {!isArchiveView && !focusMode && newItemsCount > 0 && (
+                <NewItemsIndicator count={newItemsCount} onLoad={onLoadNewItems} />
             )}
 
             {/* Feed */}
@@ -324,6 +372,8 @@ const Dashboard = ({
                             onMarkDone={onMarkDone}
                             onArchive={onArchive}
                             onDelete={onDelete}
+                            onConfirmDeadline={onConfirmDeadline}
+                            onConfirmUrgency={onConfirmUrgency}
                             isArchiveView={isArchiveView}
                         />
                     ))

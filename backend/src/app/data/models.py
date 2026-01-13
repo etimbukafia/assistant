@@ -8,8 +8,8 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import relationship
 
 
-from app.database import Base
-from app.config import get_settings
+from app.infra.database import Base
+from app.infra.config import get_settings
 from core.queue.models import create_task_queue_model
 
 TaskQueue = create_task_queue_model(Base)
@@ -70,7 +70,7 @@ class Message(Base):
         if self.content_expired:
             return "[Content expired]"
         if self.body_encrypted:
-            from app.encryption import decrypt_body
+            from app.security.encryption import decrypt_body
             return decrypt_body(self.body)
         return self.body
 

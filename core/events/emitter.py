@@ -1,6 +1,6 @@
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from fastapi import BackgroundTasks
 
@@ -100,7 +100,7 @@ async def _execute_handler(
     event_name = event["name"]
     correlation_id = event["correlation_id"]
 
-    start_time = datetime.utcnow()
+    start_time = datetime.now(timezone.utc)
 
     try:
         logger.info(
@@ -114,7 +114,7 @@ async def _execute_handler(
 
         await handler(event, payload)
 
-        execution_time = (datetime.utcnow() - start_time).total_seconds()
+        execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
 
         logger.info(
             f"Handler completed: {handler_name}",
@@ -128,7 +128,7 @@ async def _execute_handler(
         )
 
     except Exception as e:
-        execution_time = (datetime.utcnow() - start_time).total_seconds()
+        execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
 
         logger.error(
             f"Handler failed: {handler_name} - {str(e)}",

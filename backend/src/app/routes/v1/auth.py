@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from app.config import get_settings, Settings
-from app.auth import get_db_for_user, get_settings as get_app_settings # Watch out for name collision with config.get_settings
-from app.gmail_integration import GmailClient, get_gmail_client
+from app.infra.config import get_settings, Settings
+from app.security.auth import get_db_for_user, get_settings as get_app_settings # Watch out for name collision with config.get_settings
+from app.integrations.gmail import GmailClient, get_gmail_client
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -79,7 +79,7 @@ def revoke_gmail_auth(db: Session = Depends(get_db_for_user)):
 
     Only UserSettings are preserved.
     """
-    from app.models import (
+    from app.data.models import (
         GmailAccount, Message, Task, TaskQueue,
         PrincipalMemory, DecisionPattern, ContactContext,
         CalendarEvent, AgentActivity, SchedulingSuggestion

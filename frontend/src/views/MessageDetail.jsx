@@ -3,6 +3,7 @@ import { ChevronLeft, Sparkles, Calendar, User, MoreVertical, CheckCircle2 } fro
 import InlineTaskItem from '../components/InlineTaskItem';
 import ExtractedTaskSuggestion from '../components/ExtractedTaskSuggestion';
 import SchedulingSuggestionCard from '../components/SchedulingSuggestionCard';
+import ThreadContext from '../components/ThreadContext';
 import { timeAgo } from '../utils/helpers';
 
 /**
@@ -71,6 +72,9 @@ const MessageDetail = ({
                     <div className="text-sm text-gray-400">{timeAgo(message.received_at)}</div>
                 </div>
 
+                {/* Thread Context - History Awareness */}
+                <ThreadContext message={message} />
+
                 {/* AI Summary */}
                 <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
                     <div className="flex items-center gap-2 mb-2 text-blue-800 font-semibold text-sm">
@@ -79,8 +83,8 @@ const MessageDetail = ({
                     <p className="text-blue-900 leading-relaxed text-sm">{message.summary}</p>
                 </div>
 
-                {/* Scheduling Suggestion */}
-                {schedulingSuggestion && (
+                {/* Scheduling Suggestion or Generate Prompt */}
+                {schedulingSuggestion ? (
                     <SchedulingSuggestionCard
                         suggestion={schedulingSuggestion}
                         onSend={onSendScheduling}
@@ -89,6 +93,36 @@ const MessageDetail = ({
                         onRefresh={onRefreshScheduling}
                         isRefreshing={isRefreshingScheduling}
                     />
+                ) : message.scheduling_intent && (
+                    <div className="bg-gradient-to-br from-sky-50 to-cyan-50 border border-sky-200 rounded-xl p-4 mt-3">
+                        <div className="flex items-center gap-2 mb-3">
+                            <Calendar className="w-4 h-4 text-sky-600" />
+                            <span className="text-xs font-semibold text-sky-800 uppercase tracking-wide">
+                                Scheduling Request Detected
+                            </span>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-3">
+                            This email appears to be requesting to schedule a meeting.
+                            Generate suggestions to see available time slots and a draft reply.
+                        </p>
+                        <button
+                            onClick={() => onRefreshScheduling?.(message.id)}
+                            disabled={isRefreshingScheduling}
+                            className="flex items-center justify-center gap-2 w-full bg-sky-600 hover:bg-sky-700 text-white py-2 px-4 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                        >
+                            {isRefreshingScheduling ? (
+                                <>
+                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    Generating...
+                                </>
+                            ) : (
+                                <>
+                                    <Calendar className="w-4 h-4" />
+                                    Generate Scheduling Suggestions
+                                </>
+                            )}
+                        </button>
+                    </div>
                 )}
 
                 {/* Task Intelligence - Primary Tasks */}

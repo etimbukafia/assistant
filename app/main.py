@@ -3,7 +3,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
-
+from datetime import datetime
 from .config import settings
 
 from core.events import emit_event, get_registered_handlers
@@ -12,7 +12,7 @@ from .models import Message, GmailAccount, TaskQueue, Task, UserSettings, Princi
 from .schemas import (
     MessageResponse, SyncResponse, DraftReplyRequest, DraftReplyResponse, MessagesListResponse,
     UserSettingsResponse, UserSettingsUpdateRequest,
-    TaskResponse, TasksListResponse, TaskCreateRequest, TaskUpdateRequest, TaskSnoozeRequest,
+    TaskResponse, TasksListResponse, TaskCreateRequest, TaskUpdateRequest, TaskSnoozeRequest, ManualTaskCreateRequest,
     SchedulingSuggestionResponse, SchedulingSuggestionSendRequest,
     CalendarEventCreateRequest, CalendarEventResponse,
     CalendarAvailabilityRequest, CalendarAvailabilityResponse,
@@ -20,9 +20,11 @@ from .schemas import (
     PrincipalMemoryCreate, PrincipalMemoryUpdate, PrincipalMemoryResponse, PrincipalMemoryListResponse,
     DecisionPatternResponse, DecisionPatternListResponse, DecisionPatternActionRequest,
     ContactContextResponse, ContactContextUpdateRequest, ContactContextListResponse,
+    DigestPreferences, DigestResponse, DigestsListResponse,
 )
 from .gmail_integration import GmailClient
 from .ai_processor import AIProcessor
+from .thread_state_service import ThreadStateService
 from .encryption import encrypt_body
 
 # Import handlers to register them with event system
@@ -225,19 +227,33 @@ def revoke_gmail_auth(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Failed to delete data: {str(e)}")
 
 @app.post("/sync", response_model=SyncResponse)
-def sync_messages(
+async def sync_messages(
     background_tasks: BackgroundTasks,
-    max_results: int = 2,
+    max_results: int = 3,
     query: str = "",
     db: Session = Depends(get_db),
     gmail_client: GmailClient = Depends(get_gmail_client)
 ):
-    """Sync messages from Gmail and emit events for processing"""
+    """
+    Sync messages from Gmail and process with batched LLM calls.
+
+    Flow:
+    1. Fetch messages from Gmail
+    2. Save to database
+    3. Enqueue process_email tasks
+    4. Trigger immediate batch processing (no delay)
+    """
+    from app.message_processor import get_user_id
+    from app.worker import handle_process_email_batch
+    from app.queue import queue_service
+
     try:
         # Fetch messages from Gmail
         messages = gmail_client.get_messages(max_results=max_results, query=query)
 
         synced_count = 0
+        message_ids = []
+        user_id = get_user_id(db)
 
         for msg_data in messages:
             # Check if message already exists
@@ -248,8 +264,8 @@ def sync_messages(
             if existing:
                 continue
 
-            # Save message to database first (synchronously)
-            # Encrypt body at rest for privacy
+            # Save message to database
+            attachments = msg_data.get('attachments') or []
             message = Message(
                 message_id=msg_data['message_id'],
                 thread_id=msg_data['thread_id'],
@@ -259,22 +275,17 @@ def sync_messages(
                 body=encrypt_body(msg_data['body']),
                 body_encrypted=True,
                 received_at=msg_data['received_at'],
-                processed=False  # Will be set to True by event handler
+                processed=False,
+                has_attachments=bool(attachments),
+                attachments=attachments,
             )
 
             db.add(message)
-            db.flush()  # Get the ID without committing
-
-            # Emit event for background processing
-            emit_event(
-                event_name="message_received",
-                payload={"message_id": message.id},
-                background_tasks=background_tasks
-            )
-
+            db.flush()
+            message_ids.append(message.id)
             synced_count += 1
 
-        # Store history ID for deletion tracking if not already set
+        # Store history ID for deletion tracking
         account = db.query(GmailAccount).first()
         if account and not account.last_history_id:
             history_id = gmail_client.get_current_history_id()
@@ -283,10 +294,37 @@ def sync_messages(
 
         db.commit()
 
+        # Process messages in batch (immediate, no queue delay)
+        if message_ids:
+            # Enqueue tasks for tracking/retry purposes
+            for msg_id in message_ids:
+                queue_service.enqueue(
+                    task_type="process_email",
+                    payload={"message_id": msg_id},
+                    user_id=user_id,
+                    db=db
+                )
+
+            # Trigger immediate batch processing
+            await queue_service.process_batch_now(
+                user_id=user_id,
+                task_type="process_email",
+                handler=handle_process_email_batch,
+                db=db
+            )
+
+            # Emit events for other handlers (attachments, task extraction, etc.)
+            for msg_id in message_ids:
+                emit_event(
+                    event_name="message_received",
+                    payload={"message_id": msg_id},
+                    background_tasks=background_tasks
+                )
+
         return SyncResponse(
             synced_count=synced_count,
-            processed_count=synced_count,  # Processing happens in background
-            message=f"Successfully synced {synced_count} new messages. AI processing started in background."
+            processed_count=synced_count,
+            message=f"Successfully synced and processed {synced_count} messages."
         )
 
     except Exception as e:
@@ -348,10 +386,69 @@ def sync_deletions(
     }
 
 
+@app.post("/sync/sent")
+def sync_sent_messages(
+    db: Session = Depends(get_db),
+    gmail_client: GmailClient = Depends(get_gmail_client)
+):
+    """
+    Sync sent messages from Gmail to update ThreadState.needs_reply.
+    
+    Rule: "Any outbound message from the user clears ThreadState.needs_reply."
+    
+    This is deterministic (no LLM) - if sender is user, clear needs_reply.
+    """
+    from .models import ThreadState
+    from datetime import datetime, timezone, timedelta
+    
+    # Get account info
+    account = db.query(GmailAccount).first()
+    if not account:
+        raise HTTPException(status_code=400, detail="No Gmail account connected")
+    
+    user_email = account.email
+    
+    # Fetch sent messages from last 7 days (to catch any we missed)
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    
+    try:
+        sent_messages = gmail_client.get_sent_messages(since=since, max_results=100)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch sent messages: {str(e)}")
+    
+    updated_count = 0
+    thread_ids_updated = []
+    
+    for sent_msg in sent_messages:
+        thread_id = sent_msg['thread_id']
+        sent_at = sent_msg['sent_at']
+        
+        # Find the thread state
+        thread_state = db.query(ThreadState).filter(
+            ThreadState.thread_id == thread_id
+        ).first()
+        
+        if thread_state and thread_state.needs_reply:
+            # User replied - clear needs_reply
+            thread_state.needs_reply = False
+            thread_state.last_outbound_at = sent_at
+            updated_count += 1
+            thread_ids_updated.append(thread_id)
+    
+    db.commit()
+    
+    return {
+        "sent_messages_checked": len(sent_messages),
+        "threads_updated": updated_count,
+        "thread_ids": thread_ids_updated[:10],  # First 10 for debugging
+        "message": f"Cleared needs_reply on {updated_count} threads where user replied"
+    }
+
+
 @app.get("/messages", response_model=MessagesListResponse)
 def get_messages(
     skip: int = 0,
-    limit: int = 2,
+    limit: int = 3,
     needs_reply: bool = None,
     db: Session = Depends(get_db)
 ):
@@ -398,6 +495,10 @@ def get_messages(
                 "draft_reply": msg.draft_reply,
                 "processed": msg.processed,
                 "created_at": msg.created_at,
+                "status": msg.status,
+                "scheduling_intent": msg.scheduling_intent,
+                "scheduling_intent_confidence": msg.scheduling_intent_confidence,
+                "scheduling_intent_type": msg.scheduling_intent_type,
                 "tasks": tasks_by_message.get(msg.id, [])
             }
             message_dicts.append(msg_dict)
@@ -407,9 +508,62 @@ def get_messages(
 
     return MessagesListResponse(messages=messages, total=total)
 
+
+@app.get("/messages/new")
+def get_new_messages(
+    since: datetime,
+    db: Session = Depends(get_db)
+):
+    """
+    Get messages received since timestamp.
+    
+    Used for polling - frontend checks for new items periodically.
+    Only returns inbox messages (not archived/synced).
+    """
+    messages = db.query(Message).filter(
+        Message.received_at > since,
+        Message.status == "inbox"
+    ).order_by(Message.received_at.desc()).all()
+    
+    # Build response with tasks
+    message_dicts = []
+    for msg in messages:
+        tasks = db.query(Task).filter(Task.message_id == msg.id).all()
+        msg_dict = {
+            "id": msg.id,
+            "message_id": msg.message_id,
+            "thread_id": msg.thread_id,
+            "subject": msg.subject,
+            "sender": msg.sender,
+            "recipient": msg.recipient,
+            "body": msg.decrypted_body,
+            "received_at": msg.received_at,
+            "summary": msg.summary,
+            "needs_reply": msg.needs_reply,
+            "extracted_tasks": msg.extracted_tasks,
+            "extracted_dates": msg.extracted_dates,
+            "extracted_people": msg.extracted_people,
+            "extracted_decisions": msg.extracted_decisions,
+            "draft_reply": msg.draft_reply,
+            "processed": msg.processed,
+            "created_at": msg.created_at,
+            "status": msg.status,
+            "scheduling_intent": msg.scheduling_intent,
+            "scheduling_intent_confidence": msg.scheduling_intent_confidence,
+            "scheduling_intent_type": msg.scheduling_intent_type,
+            "tasks": tasks
+        }
+        message_dicts.append(msg_dict)
+    
+    from .schemas import MessageResponse
+    messages_response = [MessageResponse(**msg_dict) for msg_dict in message_dicts]
+    
+    return {"messages": messages_response, "count": len(messages_response)}
+
+
 @app.get("/messages/{message_id}", response_model=MessageResponse)
 def get_message(message_id: int, db: Session = Depends(get_db)):
-    """Get a specific message by ID with its associated tasks"""
+    """Get a specific message by ID with its associated tasks and thread context"""
     message = db.query(Message).filter(Message.id == message_id).first()
 
     if not message:
@@ -417,8 +571,13 @@ def get_message(message_id: int, db: Session = Depends(get_db)):
 
     # Fetch tasks for this message
     tasks = db.query(Task).filter(Task.message_id == message_id).all()
+    
+    # Fetch thread context for history awareness
+    thread_state = db.query(ThreadState).filter(
+        ThreadState.thread_id == message.thread_id
+    ).first()
 
-    # Build message dict with tasks
+    # Build message dict with tasks and thread context
     msg_dict = {
         "id": message.id,
         "message_id": message.message_id,
@@ -437,6 +596,13 @@ def get_message(message_id: int, db: Session = Depends(get_db)):
         "draft_reply": message.draft_reply,
         "processed": message.processed,
         "created_at": message.created_at,
+        "scheduling_intent": message.scheduling_intent,
+        "scheduling_intent_confidence": message.scheduling_intent_confidence,
+        "scheduling_intent_type": message.scheduling_intent_type,
+        # Thread context for history awareness
+        "thread_message_count": thread_state.message_count if thread_state else 1,
+        "thread_started_at": thread_state.created_at if thread_state else message.received_at,
+        "last_user_reply_at": thread_state.last_outbound_at if thread_state else None,
         "tasks": tasks
     }
 
@@ -469,7 +635,12 @@ def draft_reply(
     context = request.context if request else ""
 
     # Pass db session for Principal Memory context injection
-    draft = ai_processor.generate_draft_reply(message_data, context, db=db)
+    draft = ai_processor.generate_draft_reply(
+        message_data,
+        context,
+        db=db,
+        scheduling_intent=message.scheduling_intent or False
+    )
 
     # Save draft to database
     message.draft_reply = draft
@@ -479,7 +650,12 @@ def draft_reply(
 
 @app.post("/messages/{message_id}/reprocess")
 def reprocess_message(message_id: int, db: Session = Depends(get_db)):
-    """Reprocess a message with AI"""
+    """
+    Reprocess a message using state-based thread processing.
+
+    This updates the thread state incrementally rather than
+    re-analyzing the full thread transcript.
+    """
     message = db.query(Message).filter(Message.id == message_id).first()
 
     if not message:
@@ -491,19 +667,16 @@ def reprocess_message(message_id: int, db: Session = Depends(get_db)):
         'sender': message.sender
     }
 
-    ai_results = ai_processor.process_message(
-        message_data,
-        db=db,
-        thread_id=message.thread_id,
-        message_id=message.id
-    )
+    # Use state-based thread processing
+    thread_state_service = ThreadStateService(db)
+    ai_results = thread_state_service.process_message(message, message_data)
 
     message.summary = ai_results['summary']
     message.needs_reply = ai_results['needs_reply']
     message.extracted_tasks = ai_results['extracted_tasks']
-    message.extracted_dates = ai_results['extracted_dates']
-    message.extracted_people = ai_results['extracted_people']
-    message.extracted_decisions = ai_results['extracted_decisions']
+    message.extracted_dates = ai_results.get('extracted_dates', [])
+    message.extracted_people = ai_results.get('extracted_people', [])
+    message.extracted_decisions = ai_results.get('extracted_decisions', [])
     message.processed = True
 
     db.commit()
@@ -597,7 +770,7 @@ def delete_message(message_id: int, db: Session = Depends(get_db)):
 
 @app.get("/settings", response_model=UserSettingsResponse)
 def get_user_settings(db: Session = Depends(get_db)):
-    """Get current user settings (for MVP: single user)"""
+    """Get current user settings ()"""
     settings = db.query(UserSettings).first()
     if not settings:
         # Create default settings
@@ -632,6 +805,86 @@ def update_user_settings(
     db.commit()
     db.refresh(settings)
     return settings
+
+
+# ========================================
+# DIGEST ENDPOINTS
+# ========================================
+
+@app.put("/settings/digest")
+def update_digest_preferences(
+    preferences: DigestPreferences,
+    db: Session = Depends(get_db)
+):
+    """Update user's digest preferences and reschedule jobs."""
+    from .worker import schedule_digest_jobs_if_needed
+    
+    settings = db.query(UserSettings).first()
+    if not settings:
+        settings = UserSettings(user_email="default@user.com")
+        db.add(settings)
+    
+    settings.digest_preferences = preferences.dict()
+    db.commit()
+    
+    # Reschedule digests based on new preferences
+    schedule_digest_jobs_if_needed(db)
+    
+    return {"status": "updated", "preferences": preferences}
+
+
+@app.get("/digests", response_model=DigestsListResponse)
+def get_digests(
+    limit: int = 10,
+    digest_type: str = None,
+    db: Session = Depends(get_db)
+):
+    """Get recent digests with optional type filter."""
+    from .models import Digest
+    
+    query = db.query(Digest).order_by(Digest.created_at.desc())
+    
+    if digest_type:
+        query = query.filter(Digest.digest_type == digest_type)
+    
+    total = query.count()
+    digests = query.limit(limit).all()
+    
+    return DigestsListResponse(digests=digests, total=total)
+
+
+@app.get("/digests/{digest_id}", response_model=DigestResponse)
+def get_digest(digest_id: int, db: Session = Depends(get_db)):
+    """Get a specific digest by ID."""
+    from .models import Digest
+    
+    digest = db.query(Digest).filter(Digest.id == digest_id).first()
+    if not digest:
+        raise HTTPException(status_code=404, detail="Digest not found")
+    return digest
+
+
+@app.post("/digests/generate/{digest_type}")
+def trigger_digest_now(
+    digest_type: str,
+    db: Session = Depends(get_db)
+):
+    """Manually trigger a digest generation."""
+    from .queue import enqueue_task
+    
+    if digest_type not in ["morning_briefing", "end_of_day", "weekly_review"]:
+        raise HTTPException(status_code=400, detail="Invalid digest type")
+    
+    settings = db.query(UserSettings).first()
+    user_email = settings.user_email if settings else "default@user.com"
+    
+    enqueue_task(
+        task_type="generate_digest",
+        payload={"user_email": user_email, "digest_type": digest_type},
+        db=db
+    )
+    
+    return {"status": "queued", "digest_type": digest_type}
 
 
 # ========================================
@@ -723,6 +976,66 @@ def create_task(
     }
 
     return TaskResponse(**task_dict)
+
+
+@app.post("/tasks/manual", response_model=TaskResponse)
+def create_manual_task(
+    request: ManualTaskCreateRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Create a task manually (not from email).
+
+    This allows users to add standalone tasks that aren't linked to any email.
+    We use a placeholder message ID for database consistency.
+    """
+    from datetime import datetime, timezone
+
+    # Get or create a placeholder message for manual tasks
+    # (manual tasks need a message_id due to foreign key constraint)
+    placeholder_message = db.query(Message).filter(
+        Message.message_id == "__manual_tasks_placeholder__"
+    ).first()
+
+    if not placeholder_message:
+        placeholder_message = Message(
+            message_id="__manual_tasks_placeholder__",
+            thread_id="__manual_tasks__",
+            subject="Manual Tasks",
+            sender="user",
+            recipient="user",
+            body="",
+            received_at=datetime.now(timezone.utc),
+            processed=True,
+            status="archived"
+        )
+        db.add(placeholder_message)
+        db.commit()
+        db.refresh(placeholder_message)
+
+    # Create task
+    task = Task(
+        message_id=placeholder_message.id,
+        thread_id="__manual_tasks__",
+        title=request.title,
+        description=request.description,
+        task_type="explicit",  # Manual tasks are always explicit
+        priority=request.priority,
+        status="approved",  # Manual tasks start as approved
+        confidence_score=1.0,  # User-created = full confidence
+        approved_at=datetime.now(timezone.utc),
+        # Deadline fields
+        deadline=request.deadline,
+        deadline_source="explicit" if request.deadline else None,
+        deadline_user_confirmed=True if request.deadline else False,
+        urgency_suggested_by_ai=False
+    )
+
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+
+    return task
 
 
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
@@ -819,20 +1132,46 @@ def update_task(
     request: TaskUpdateRequest,
     db: Session = Depends(get_db)
 ):
-    """Update task details (one-click edit)"""
+    """Update task details (one-click edit)
+
+    Handles:
+    - title, description, priority, scheduled_reminder_at (standard fields)
+    - deadline: User-provided deadline (sets deadline_source='explicit', deadline_user_confirmed=True)
+    - deadline_confirmed: Confirm AI-suggested deadline (sets deadline_user_confirmed=True)
+    - mark_urgent: Confirm AI-suggested urgency (sets priority='urgent', urgency_suggested_by_ai=False)
+    """
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Update fields
+    # Update standard fields
     if request.title is not None:
         task.title = request.title
     if request.description is not None:
         task.description = request.description
     if request.priority is not None:
         task.priority = request.priority
+        # If user explicitly sets priority, it's no longer AI-suggested
+        task.urgency_suggested_by_ai = False
     if request.scheduled_reminder_at is not None:
         task.scheduled_reminder_at = request.scheduled_reminder_at
+
+    # Handle deadline updates (Smart Todo List)
+    if request.deadline is not None:
+        # User explicitly setting deadline overrides AI suggestion
+        task.deadline = request.deadline
+        task.deadline_source = "explicit"
+        task.deadline_user_confirmed = True
+        task.deadline_confidence = None  # Clear AI confidence since user set it
+
+    # Handle deadline confirmation (user approving AI suggestion)
+    if request.deadline_confirmed is True:
+        task.deadline_user_confirmed = True
+
+    # Handle urgency confirmation (user approving AI-suggested urgency)
+    if request.mark_urgent is True:
+        task.priority = "urgent"
+        task.urgency_suggested_by_ai = False  # Now confirmed by user
 
     db.commit()
     db.refresh(task)
@@ -1155,6 +1494,27 @@ def get_calendar_events(
     }
 
 
+@app.post("/calendar/sync")
+async def sync_calendar_events(
+    days_ahead: int = 7,
+    db: Session = Depends(get_db)
+):
+    """Sync upcoming events from Google Calendar to database"""
+    from .calendar_service import CalendarService
+ 
+    calendar_service = CalendarService(db)
+ 
+    try:
+        results = await calendar_service.sync_upcoming_events(days_ahead=days_ahead)
+        return {
+            "success": True,
+            "message": f"Calendar sync complete: {results['created']} created, {results['updated']} updated",
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
+ 
+ 
 @app.get("/calendar/availability")
 async def check_calendar_availability(
     start_time: str,
@@ -1280,6 +1640,36 @@ def update_calendar_settings(
     )
 
 
+@app.post("/calendar/events/{event_id}/generate-followups")
+def generate_meeting_followups(
+    event_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate follow-up items for a completed meeting.
+
+    Returns AI-generated suggestions for:
+    - Follow-up tasks
+    - Email drafts to attendees
+    - Reminders for future actions
+
+    All items are returned as pending_approval - user must approve each one.
+    """
+    from .models import CalendarEvent
+    from .briefing_service import generate_follow_ups_for_event
+
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    result = generate_follow_ups_for_event(db, event_id)
+
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to generate follow-ups")
+
+    return result
+
+
 @app.post("/scheduling/detect")
 def detect_scheduling_intent(
     message_id: int,
@@ -1317,7 +1707,6 @@ def detect_scheduling_intent(
 # PRINCIPAL MEMORY ENDPOINTS (Executive Context Engine)
 # ========================================
 
-# MVP: Single user - use fixed user_id
 DEFAULT_USER_ID = "default"
 
 

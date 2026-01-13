@@ -15,8 +15,8 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
-from app.encryption import decrypt_token
-from app.gmail_integration import SCOPES
+from app.security.encryption import decrypt_token
+from app.integrations.gmail import SCOPES
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class CalendarService:
         Returns:
             Credentials object or None if not found
         """
-        from app.models import GmailAccount
+        from app.data.models import GmailAccount
         import json
 
         # Get account from database
@@ -134,7 +134,7 @@ class CalendarService:
             try:
                 creds.refresh(Request())
                 # Save updated tokens
-                from app.encryption import encrypt_token
+                from app.security.encryption import encrypt_token
                 account.access_token = encrypt_token(creds.token)
                 if creds.refresh_token:
                     account.refresh_token = encrypt_token(creds.refresh_token)
@@ -567,8 +567,8 @@ class CalendarService:
         Returns:
             Dict with created, updated, unchanged counts
         """
-        from app.models import CalendarEvent
-        from app.queue import enqueue_task
+        from app.data.models import CalendarEvent
+        from app.jobs.queue import enqueue_task
 
         events = await self.get_upcoming_events(days_ahead=days_ahead)
         now = datetime.now(timezone.utc)

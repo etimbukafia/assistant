@@ -13,7 +13,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models import Message, Task, CalendarEvent, PrincipalMemory
+from app.data.models import Message, Task, CalendarEvent, PrincipalMemory
 
 logger = logging.getLogger(__name__)
 

@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.auth import get_user_settings, get_db_for_user
-from app.models import UserSettings
-from app.schemas import UserSettingsResponse, UserSettingsUpdateRequest
+from app.security.auth import get_user_settings, get_db_for_user
+from app.data.models import UserSettings
+from app.data.schemas import UserSettingsResponse, UserSettingsUpdateRequest
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 

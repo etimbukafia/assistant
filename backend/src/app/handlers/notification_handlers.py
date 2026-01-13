@@ -9,8 +9,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
 
 from core.events import register_handler
-from app.database import SessionLocal
-from app.models import Task, UserSettings
+from app.infra.database import SessionLocal
+from app.data.models import Task, UserSettings
 from app.agents.modules.communication import CommunicationModule
 from sqlalchemy import text
 

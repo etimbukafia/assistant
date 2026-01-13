@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 
-from app.models import Task, ThreadState, CalendarEvent, UserSettings
+from app.data.models import Task, ThreadState, CalendarEvent, UserSettings
 
 
 class DigestService:

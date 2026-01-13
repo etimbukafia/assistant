@@ -9,7 +9,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from .base import BaseModule
-from app.models import Message, UserSettings
+from app.data.models import Message, UserSettings
 
 logger = logging.getLogger(__name__)
 

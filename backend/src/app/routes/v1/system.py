@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 
-from app.auth import get_db_for_user, get_db
-from app.models import Message, TaskQueue
+from app.security.auth import get_db_for_user, get_db
+from app.data.models import Message, TaskQueue
 from core.events import get_registered_handlers
 
 router = APIRouter(prefix="", tags=["System"])

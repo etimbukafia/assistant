@@ -1,0 +1,109 @@
+"""
+LLM Orchestrator - Clean provider selection and inference.
+
+Abstracts away which LLM handles a task (local Qwen vs Gemini API).
+All output is structured JSON.
+"""
+import logging
+from typing import Any, Dict, List, Optional
+
+from .config import LLMConfig
+from .providers.base import BaseLLMProvider
+from .providers.hf_transformers import HFTransformersProvider
+from .providers.gemini import GeminiProvider
+
+logger = logging.getLogger(__name__)
+
+
+class LLMOrchestrator:
+    """
+    Simple LLM provider orchestration.
+
+    All methods return structured JSON (Dict or List[Dict]).
+    Free text is wrapped in JSON fields by prompts.
+
+    Usage:
+        orchestrator = LLMOrchestrator()
+        result = orchestrator.generate("Summarize: ... Return {summary: str}")
+        results = orchestrator.generate_batch([prompt1, prompt2])
+    """
+
+    def __init__(self, config: Optional[LLMConfig] = None):
+        self.config = config or LLMConfig.from_env()
+        self._provider: Optional[BaseLLMProvider] = None
+
+    @property
+    def provider(self) -> BaseLLMProvider:
+        """Lazy-load the configured provider"""
+        if self._provider is None:
+            self._provider = self._create_provider()
+        return self._provider
+
+    def _create_provider(self) -> BaseLLMProvider:
+        """Create provider based on config"""
+        if self.config.provider == "huggingface":
+            logger.info(f"Using local model: {self.config.hf_model_id}")
+            return HFTransformersProvider(self.config)
+        elif self.config.provider == "gemini":
+            logger.info(f"Using Gemini API: {self.config.gemini_model}")
+            return GeminiProvider(self.config)
+        else:
+            raise ValueError(f"Unknown provider: {self.config.provider}")
+
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate structured JSON response.
+
+        Args:
+            prompt: User prompt (should specify expected JSON keys)
+            system_prompt: Optional system instructions
+
+        Returns:
+            Parsed JSON dict. On failure: {"_error": True, "_raw": "..."}
+        """
+        return self.provider.generate(prompt, system_prompt)
+
+    def generate_batch(
+        self,
+        prompts: List[str],
+        system_prompt: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate structured JSON responses for multiple prompts.
+
+        Args:
+            prompts: List of user prompts
+            system_prompt: Optional system instructions (applied to all)
+
+        Returns:
+            List of parsed JSON dicts in same order as input
+        """
+        return self.provider.generate_batch(prompts, system_prompt)
+
+    def switch_provider(self, provider: str) -> None:
+        """Switch to a different provider at runtime"""
+        if provider not in ("huggingface", "gemini"):
+            raise ValueError(f"Unknown provider: {provider}")
+
+        if self._provider is not None:
+            self._provider.cleanup()
+            self._provider = None
+
+        self.config.provider = provider
+        logger.info(f"Switched to provider: {provider}")
+
+    def cleanup(self) -> None:
+        """Release resources"""
+        if self._provider is not None:
+            self._provider.cleanup()
+            self._provider = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()

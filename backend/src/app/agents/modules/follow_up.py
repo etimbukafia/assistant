@@ -9,7 +9,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 
 from .base import BaseModule
-from app.models import Task, Message, CalendarEvent
+from app.data.models import Task, Message, CalendarEvent
 
 
 class FollowUpModule(BaseModule):

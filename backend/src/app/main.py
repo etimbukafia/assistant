@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 # App infrastructure
-from .database import init_db
-from app.logging_config import setup_logging
+from .infra.database import init_db
+from app.infra.logging_config import setup_logging
 import app.handlers # Register event handlers
 
 # Router imports
@@ -57,10 +57,10 @@ def schedule_cleanup_job_if_needed():
     - Expires content for messages older than 30 days
     - Hard deletes source-deleted messages with no open tasks
     """
-    from .database import SessionLocal
-    from .models import TaskQueue
-    from .queue import enqueue_task
-    from .worker import get_next_cleanup_time
+    from .infra.database import SessionLocal
+    from .data.models import TaskQueue
+    from .jobs.queue import enqueue_task
+    from .jobs.worker import get_next_cleanup_time
 
     db = SessionLocal()
     try:
@@ -91,10 +91,10 @@ def schedule_chat_cleanup_job_if_needed():
     - Deletes reflection sessions older than 24 hours
     - Deletes command sessions older than 30 days
     """
-    from .database import SessionLocal
-    from .models import TaskQueue
-    from .queue import enqueue_task
-    from .worker import get_next_chat_cleanup_time
+    from .infra.database import SessionLocal
+    from .data.models import TaskQueue
+    from .jobs.queue import enqueue_task
+    from .jobs.worker import get_next_chat_cleanup_time
 
     db = SessionLocal()
     try:

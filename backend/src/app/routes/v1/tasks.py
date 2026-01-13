@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 
-from app.auth import get_current_user, get_db_for_user, AuthenticatedUser
-from app.models import Task, Message
-from app.schemas import (
+from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser
+from app.data.models import Task, Message
+from app.data.schemas import (
     TasksListResponse, TaskResponse, TaskCreateRequest, 
     ManualTaskCreateRequest, TaskUpdateRequest, TaskSnoozeRequest
 )
-from app.pattern_tracker import track_task_action
-from app.queue import enqueue_task
+from app.intelligence.pattern_tracker import track_task_action
+from app.jobs.queue import enqueue_task
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 

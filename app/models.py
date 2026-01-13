@@ -35,6 +35,16 @@ class Message(Base):
     source_deleted = Column(Boolean, default=False, index=True)   # True when Gmail reports message deleted
     body_encrypted = Column(Boolean, default=False)  # True when body is encrypted at rest
 
+    # Attachment processing
+    has_attachments = Column(Boolean, default=False)  # True if email has attachments
+    attachments = Column(JSON, nullable=True)  # List of {name, mime_type, size, attachment_id}
+    attachment_insights = Column(JSON, nullable=True)  # AI-extracted: {summary, tasks, key_points, deadlines}
+
+    # Scheduling intent detection (metadata only, action requires manual trigger)
+    scheduling_intent = Column(Boolean, default=False, index=True)  # True if scheduling intent detected
+    scheduling_intent_confidence = Column(Float, nullable=True)  # 0.0-1.0 confidence score
+    scheduling_intent_type = Column(String, nullable=True)  # availability_request | time_request | meeting_confirmation | reschedule_request
+
     @property
     def decrypted_body(self) -> str:
         """Get decrypted body content, handling encryption and expiration"""
@@ -101,6 +111,28 @@ class UserSettings(Base):
     default_timezone = Column(String, default="UTC")  # IANA format, e.g., "Africa/Johannesburg"
     calendar_ids = Column(JSON, default=list)  # Google Calendar IDs to check for availability
 
+    # Digest Preferences (JSON)
+    digest_preferences = Column(JSON, default=lambda: {
+        "enabled": False,
+        "morning_briefing": {
+            "enabled": True,
+            "time": "08:00",
+            "include": ["tasks", "threads", "calendar"]
+        },
+        "end_of_day": {
+            "enabled": True,
+            "time": "18:00",
+            "include": ["completed", "pending", "tomorrow"]
+        },
+        "weekly_review": {
+            "enabled": True,
+            "day": "monday",
+            "time": "09:00",
+            "include": ["waiting_for", "overdue", "stats"]
+        },
+        "delivery_channel": "email"
+    })
+
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -112,7 +144,10 @@ class Task(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # Link to source message (REQUIRED)
+    # Link to thread (PRIMARY relationship - tasks belong to threads)
+    thread_id = Column(String, nullable=True, index=True)
+
+    # Link to source message (for context/audit trail)
     message_id = Column(Integer, ForeignKey("messages.id"), nullable=False, index=True)
 
     # Task Details
@@ -126,7 +161,7 @@ class Task(Base):
 
     # Approval Workflow
     status = Column(String, default="pending_approval", index=True)
-    # Status options: pending_approval, approved, dismissed, completed, snoozed
+    # Status options: pending_approval, approved, dismissed, completed, snoozed, superseded
     approved_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     dismissed_at = Column(DateTime, nullable=True)
@@ -141,6 +176,13 @@ class Task(Base):
     # Extracted Entities
     related_people = Column(JSON, default=list)
     related_dates = Column(JSON, default=list)
+
+    # Deadline fields (Smart Todo List)
+    deadline = Column(DateTime, nullable=True, index=True)
+    deadline_source = Column(String, default="explicit")  # explicit | inferred
+    deadline_confidence = Column(Float, nullable=True)  # 0.0-1.0 for inferred deadlines
+    deadline_user_confirmed = Column(Boolean, default=False)
+    urgency_suggested_by_ai = Column(Boolean, default=False)  # True when AI sets priority=urgent
 
     # Metadata
     confidence_score = Column(Float, nullable=True)
@@ -239,8 +281,8 @@ class SchedulingSuggestion(Base):
 
 class CalendarEvent(Base):
     """
-    Calendar events created from confirmed scheduling suggestions.
-    Our database is the source of truth, not the calendar provider.
+    Calendar events - both created by us and synced from Google Calendar.
+    Used for scheduling and meeting briefings.
     """
     __tablename__ = "calendar_events"
 
@@ -248,23 +290,35 @@ class CalendarEvent(Base):
 
     # Event details
     title = Column(String, nullable=False)
-    description = Column(Text, nullable=True)  # AI-generated from email context
-    start_time = Column(DateTime, nullable=False)
+    description = Column(Text, nullable=True)
+    start_time = Column(DateTime, nullable=False, index=True)
     end_time = Column(DateTime, nullable=False)
-    participants = Column(JSON, default=list)  # List of attendee emails
+    participants = Column(JSON, default=list)  # [{email, name, response_status}]
+    organizer = Column(String, nullable=True)  # Email of organizer
     timezone = Column(String, default="UTC")  # IANA format
     location = Column(String, nullable=True)  # Meeting link or physical location
 
-    # Relations
+    # Source: created (by us) | synced (from calendar)
+    source = Column(String, default="created", index=True)
+
+    # Relations (for created events)
     source_message_id = Column(Integer, ForeignKey("messages.id"), nullable=True, index=True)
     source_suggestion_id = Column(Integer, ForeignKey("scheduling_suggestions.id"), nullable=True, index=True)
 
     # External calendar integration
     provider = Column(String, default="google")  # google (MVP only)
-    external_event_id = Column(String, nullable=True, index=True)  # ID from Google Calendar API
+    external_event_id = Column(String, nullable=True, unique=True, index=True)  # Google Calendar event ID
+    calendar_id = Column(String, default="primary")  # Which calendar this event is on
+    last_synced_at = Column(DateTime, nullable=True)
 
-    # Status: pending | created | failed
-    status = Column(String, default="pending", index=True)
+    # Meeting briefing
+    briefing = Column(JSON, nullable=True)  # Generated briefing data
+    briefing_generated_at = Column(DateTime, nullable=True)
+    related_message_ids = Column(JSON, default=list)  # Messages involving attendees
+    related_task_ids = Column(JSON, default=list)  # Tasks involving attendees
+
+    # Status: upcoming | completed | cancelled | pending | created | failed
+    status = Column(String, default="upcoming", index=True)
     error_message = Column(Text, nullable=True)  # Error details if creation failed
 
     # Metadata
@@ -340,6 +394,64 @@ class DecisionPattern(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+# =============================================================================
+# Thread State Machine - State-Based Thread Processing
+# =============================================================================
+
+class ThreadState(Base):
+    """
+    Single source of truth for a conversation thread.
+
+    Threads are state machines. Messages are state updates.
+    Raw history is not the authority - this state is.
+
+    Each new message incrementally updates this state rather than
+    re-analyzing the full thread transcript.
+    """
+    __tablename__ = "thread_states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(String, unique=True, nullable=False, index=True)
+
+    # Thread summary - what the conversation is about
+    summary = Column(Text, nullable=True)
+
+    # Open tasks/loops at thread level (deduplicated)
+    # Structure: [{"id": str, "title": str, "status": "open|completed|superseded", "created_at": str, "source_message_id": int}]
+    open_tasks = Column(JSON, default=list)
+
+    # Decisions made in this thread
+    # Structure: [{"decision": str, "made_at": str, "source_message_id": int}]
+    decisions = Column(JSON, default=list)
+
+    # Participants in the thread
+    # Structure: [{"email": str, "name": str, "role": "sender|recipient|cc"}]
+    participants = Column(JSON, default=list)
+
+    # Last meaningful action in the thread
+    last_action = Column(String, nullable=True)  # e.g., "User requested update", "Bob confirmed meeting"
+    last_action_by = Column(String, nullable=True)  # Email of who took the action
+    last_action_at = Column(DateTime, nullable=True)
+
+    # Thread-level reply status
+    needs_reply = Column(Boolean, default=False)
+    last_outbound_at = Column(DateTime, nullable=True)  # When user last replied
+
+    # Message count for quick reference
+    message_count = Column(Integer, default=0)
+
+    # First and last message tracking
+    first_message_id = Column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    last_message_id = Column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+
+    # Subject (from first message, for display)
+    subject = Column(String, nullable=True)
+
+    # Metadata
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class ContactContext(Base):
     """
     Lightweight per-contact metadata.
@@ -379,3 +491,44 @@ class ContactContext(Base):
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+# =============================================================================
+# Scheduled Digests
+# =============================================================================
+
+class Digest(Base):
+    """
+    Generated digests (morning briefing, end-of-day, weekly review).
+    
+    Digests aggregate state from ThreadState and Task tables.
+    No AI processing - just database queries.
+    """
+    __tablename__ = "digests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_email = Column(String, index=True)
+
+    # Digest info
+    digest_type = Column(String, index=True)  # morning_briefing | end_of_day | weekly_review
+    period_start = Column(DateTime, nullable=True)
+    period_end = Column(DateTime, nullable=True)
+
+    # Content
+    content = Column(JSON, nullable=False)  # Structured digest content
+    html_content = Column(Text, nullable=True)  # Rendered HTML
+    text_content = Column(Text, nullable=True)  # Plain text version
+
+    # Delivery
+    delivery_channel = Column(String)  # email | telegram | push
+    delivery_status = Column(String, default="pending")  # pending | sent | failed
+    delivered_at = Column(DateTime, nullable=True)
+    delivery_error = Column(Text, nullable=True)
+
+    # Stats
+    task_count = Column(Integer, default=0)
+    thread_count = Column(Integer, default=0)
+    event_count = Column(Integer, default=0)
+
+    # Metadata
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

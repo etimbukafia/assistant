@@ -18,8 +18,8 @@ class QueueService:
 
     Usage:
         from core.queue import QueueService
-        from app.models import TaskQueue
-        from app.database import SessionLocal
+        from app.data.models import TaskQueue
+        from app.infra.database import SessionLocal
 
         queue = QueueService(TaskQueue, SessionLocal)
         queue.enqueue("send_email", {"to": "user@example.com"})

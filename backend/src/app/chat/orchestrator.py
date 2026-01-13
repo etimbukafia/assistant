@@ -13,7 +13,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models import ChatSession, ChatMessage, ChatPendingAction
+from app.data.models import ChatSession, ChatMessage, ChatPendingAction
 from .context import ChatContextManager, ConversationState
 from .tools import ChatToolRegistry, ToolResult, ToolType
 
