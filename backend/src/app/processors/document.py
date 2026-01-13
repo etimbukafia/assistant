@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.llm import llm_provider
+from core.llm.providers.gemini import GeminiProvider
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class DocumentProcessor:
     """
 
     def __init__(self):
-        self.gemini = llm_provider.get_gemini_provider()
+        self.gemini = GeminiProvider()
         self._prompt_template: Optional[str] = None
 
     @property
