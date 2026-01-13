@@ -601,3 +601,73 @@ class Digest(Base):
 
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+# =============================================================================
+# AI Chat 
+# =============================================================================
+
+class ChatSession(Base):
+    """
+    Chat sessions for AI assistant conversations.
+    
+    Session types:
+    - 'command': Work-related queries (30 days retention)
+    - 'reflection': Supportive/emotional conversations (24 hours retention)
+    """
+    __tablename__ = "chat_sessions"
+
+    id = Column(String, primary_key=True)  # UUID
+    user_id = Column(String, nullable=False, index=True)
+    session_type = Column(String, nullable=False, default="command")  # 'command' or 'reflection'
+    title = Column(String, nullable=True)  # Optional display title
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_activity_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    state = Column(JSON, nullable=False, default=dict)  # ConversationState
+
+    # Relationships
+    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
+    pending_actions = relationship("ChatPendingAction", back_populates="session", cascade="all, delete-orphan")
+
+
+class ChatMessage(Base):
+    """
+    Individual messages within a chat session.
+    """
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String, nullable=False)  # 'user', 'assistant', 'system'
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    metadata = Column(JSON, default=dict)  # tool calls, etc.
+
+    # Relationships
+    session = relationship("ChatSession", back_populates="messages")
+    pending_actions = relationship("ChatPendingAction", back_populates="message")
+
+
+class ChatPendingAction(Base):
+    """
+    Actions proposed by AI that await user approval.
+    
+    Status:
+    - 'pending': Awaiting user decision
+    - 'approved': User approved, action executed
+    - 'rejected': User rejected
+    - 'expired': Session ended without decision
+    """
+    __tablename__ = "chat_pending_actions"
+
+    id = Column(String, primary_key=True)  # UUID
+    session_id = Column(String, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    message_id = Column(Integer, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=True, index=True)
+    action_type = Column(String, nullable=False)  # 'draft_reply', 'create_task', etc.
+    action_data = Column(JSON, nullable=False)  # Action-specific data
+    status = Column(String, nullable=False, default="pending")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    session = relationship("ChatSession", back_populates="pending_actions")
+    message = relationship("ChatMessage", back_populates="pending_actions")

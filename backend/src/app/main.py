@@ -18,7 +18,8 @@ from app.routes.v1 import (
     calendar,
     memory,
     gdpr,
-    system
+    system,
+    chat
 )
 
 app = FastAPI(
@@ -45,6 +46,7 @@ def startup_event():
     setup_logging(level="INFO", structured=False)
     init_db()
     schedule_cleanup_job_if_needed()
+    schedule_chat_cleanup_job_if_needed()
 
 
 def schedule_cleanup_job_if_needed():
@@ -80,6 +82,40 @@ def schedule_cleanup_job_if_needed():
     finally:
         db.close()
 
+
+def schedule_chat_cleanup_job_if_needed():
+    """
+    Ensure the hourly chat cleanup job is scheduled.
+
+    This job:
+    - Deletes reflection sessions older than 24 hours
+    - Deletes command sessions older than 30 days
+    """
+    from .database import SessionLocal
+    from .models import TaskQueue
+    from .queue import enqueue_task
+    from .worker import get_next_chat_cleanup_time
+
+    db = SessionLocal()
+    try:
+        # Check if chat cleanup job already scheduled
+        existing = db.query(TaskQueue).filter(
+            TaskQueue.task_type == "chat_cleanup",
+            TaskQueue.status == "pending"
+        ).first()
+
+        if not existing:
+            next_run = get_next_chat_cleanup_time()
+            enqueue_task(
+                task_type="chat_cleanup",
+                payload={},
+                scheduled_for=next_run,
+                db=db
+            )
+            print(f"Scheduled chat cleanup job for {next_run}")
+    finally:
+        db.close()
+
 # Include Routers
 app.include_router(auth.router)
 app.include_router(messages.router)
@@ -91,6 +127,7 @@ app.include_router(calendar.router)
 app.include_router(memory.router)
 app.include_router(gdpr.router)
 app.include_router(system.router)
+app.include_router(chat.router)
 
 
 @app.get("/")
