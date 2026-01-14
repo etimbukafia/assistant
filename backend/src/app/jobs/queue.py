@@ -341,3 +341,26 @@ def enqueue_task(
         max_attempts=max_attempts,
         db=db
     )
+
+
+# Global queue_service instance for this application
+# Lazy initialization to avoid circular imports
+_queue_service_instance = None
+
+def get_queue_service():
+    global _queue_service_instance
+    if _queue_service_instance is None:
+        from app.data.models import TaskQueue
+        from app.infra.database import SessionLocal
+        _queue_service_instance = QueueService(TaskQueue, SessionLocal)
+    return _queue_service_instance
+
+# For backward compatibility with imports
+queue_service = property(lambda self: get_queue_service())
+
+# Actually instantiate for direct import
+class _QueueServiceProxy:
+    def __getattr__(self, name):
+        return getattr(get_queue_service(), name)
+
+queue_service = _QueueServiceProxy()

@@ -11,7 +11,7 @@ Donna is an **AI Assistant for Executive Assistants (EAs)**. She is a high-level
 Donna operates on the principle that **the best assistant is the one that's already done it.**
 
 - **Invisible Competence**: Donna helps the EA solve problems before the Executive even notices they exist.
-- **The Cerulean Precision**: Inspired by *The Devil Wears Prada*, Donna presents the EA with only the "Cerulean" result for their final approval, never the messy process.
+- **Jewel-Toned Insights**: Donna presents the EA with curated, high-confidence results—encoded in deep Emerald and Navy tones—for final approval, filtering out the noise.
 - **Unflappable Calm**: In times of high stress for the EA (e.g., the Executive's schedule collapsing), Donna remains poised and provides a clear path forward.
 
 ---
@@ -36,12 +36,12 @@ Donna’s voice is **Sophisticated, Direct, and Slightly Playful.**
 
 The visual language of Donna is **Modern Professionalism**—sleek, dark, and high-contrast.
 
-### Color Palette
-- **Obsidian Black (`#0A0A0B`)**: The foundation. Represents depth, focus, and the "void" where the AI works.
-- **Donna Red (`#E63946`)**: The signature accent. Used for "Donna’s Opinion," urgent highlights, and definitive actions.
-- **Priestly Cerulean (`#007BA7`)**: The "Precision" accent. Used for high-confidence data insights, filtered summaries, and subtle UI borders that denote "curated information."
-- **Executive Silver (`#E1E1E1`)**: Typography and secondary elements.
-- **Glassmorphic Accents**: Subtle blurs to represent the "transparency" of the AI layers.
+### Color Palette (The Executive Palette)
+- **Obsidian Black (`#050505`)**: The foundation. Represents depth, focus, and the "void" where the AI works.
+- **Rich Auburn (`#7E2E2E`)**: The signature identity. Used for Donna's core presence and primary actions.
+- **Natural Copper (`#D97745`)**: The motion accent. Used for highlights, active state feedback, and secondary buttons.
+- **Jewel Tones (`#065F46`, `#800020`, `#1E3A8A`)**: Emerald for growth/success, Burgundy for urgency, and Navy for professional depth.
+- **Executive Cream (`#FAF9F6`)**: Primary typography and high-contrast surfaces.
 
 ### Typography
 - **Primary Font**: *Outfit* or *Inter*. Clean, geometric, and highly readable.
@@ -65,7 +65,7 @@ Donna lives in the background. Notifications are "Micro-Interventions"—short, 
 
 ## 5. Iconography and Motion
 - **Motion**: Transitions should feel like a well-tailored suit—smooth, intentional, and crisp. No "bouncing" animations; use subtle fades and slides.
-- **The "Pulse"**: A subtle red glow in the corner of the UI when Donna is "thinking" or processing live context.
+- **The "Pulse"**: A subtle Auburn (`#7E2E2E`) glow behind the logo when Donna is "thinking" or processing live context.
 
 ---
 

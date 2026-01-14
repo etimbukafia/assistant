@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 import hashlib
 import json
 
-from .models import DecisionPattern, Task, Message
+from app.data.models import DecisionPattern, Task, Message
 
 
 class PatternTracker:

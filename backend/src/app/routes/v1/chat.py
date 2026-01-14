@@ -5,12 +5,11 @@ REST endpoints for AI Chat feature.
 """
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user, User
-from ..database import get_db_for_user
-from ..chat import ChatService
+from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser as User
+from app.chat.service import ChatService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -36,8 +35,7 @@ class SessionResponse(BaseModel):
     last_activity_at: str
     message_count: Optional[int] = 0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MessageResponse(BaseModel):
@@ -48,8 +46,7 @@ class MessageResponse(BaseModel):
     created_at: str
     metadata: Optional[dict] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PendingActionResponse(BaseModel):
@@ -61,8 +58,7 @@ class PendingActionResponse(BaseModel):
     status: str
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =============================================================================

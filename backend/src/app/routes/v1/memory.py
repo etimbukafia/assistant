@@ -9,7 +9,7 @@ from app.data.models import PrincipalMemory, DecisionPattern, ContactContext
 from app.data.schemas import (
     PrincipalMemoryResponse, PrincipalMemoryCreate, PrincipalMemoryUpdate, PrincipalMemoryListResponse,
     DecisionPatternListResponse, DecisionPatternActionRequest, DecisionPatternResponse,
-    ContactContextResponse, ContactContextUpdateRequest, ContactContextListResponse, ContextPacket
+    ContactContextResponse, ContactContextUpdateRequest, ContactContextListResponse
 )
 from app.intelligence.context_builder import ContextBuilder
 

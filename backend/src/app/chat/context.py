@@ -13,7 +13,7 @@ from app.data.models import (
     ChatSession, ChatMessage, Message, Task, CalendarEvent,
     UserSettings, PrincipalMemory
 )
-from app.intelligence.context_builder import ContextBuilder
+from app.intelligence.context_builder import ContextBuilder 
 
 
 @dataclass

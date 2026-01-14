@@ -9,11 +9,12 @@ This guide bridges the gap between wireframes and technical implementation, appl
 ### Color Palette Implementation
 | Element | Color | Token | Usage |
 | :--- | :--- | :--- | :--- |
-| **Surface** | `#0A0A0B` | `bg-obsidian` | Main app background, deep & matte. |
-| **Primary Accent** | `#E63946` | `accent-red` | Donna’s Opinion, Urgent status, Call-to-action. |
-| **Precision Accent** | `#007BA7` | `accent-cerulean` | Curated insights, patterns, verified data. |
-| **Text (Primary)** | `#FFFFFF` | `text-primary` | Main titles and active content. |
-| **Text (Secondary)**| `#A1A1A1` | `text-muted` | Metadata, archived items, timestamps. |
+| **Surface** | `#050505` | `bg-obsidian` | Main app background, deep & matte. |
+| **Primary Identity** | `#7E2E2E` | `accent-auburn` | Donna’s core presence, login state. |
+| **Motion Accent** | `#D97745` | `accent-copper` | Highlights, buttons, active states. |
+| **Jewel (Success)** | `#065F46` | `jewel-emerald` | Verified insights, positive updates. |
+| **Jewel (Urgent)** | `#800020` | `jewel-burgundy`| High-priority interrupts. |
+| **Text (Primary)** | `#FAF9F6` | `text-cream` | Main titles and active content. |
 
 ### Typography Implementation
 - **Headers**: *Playfair Display* (Semi-Bold). Used for "Morning Briefing" titles and Tab headers.
@@ -26,8 +27,8 @@ This guide bridges the gap between wireframes and technical implementation, appl
 
 ### A. The Dashboard (High-Fi)
 - **Glassmorphism**: Use `backdrop-filter: blur(20px)` for the Bottom Navigation and Header.
-- **The Pulse**: A subtle `#E63946` glow behind the Donna logo when active.
-- **Card Design**: Cards have no borders; they use a slightly lighter Obsidian (`#141416`) with a 0.5px silver stroke or a Cerulean stroke for high-confidence items.
+- **The Pulse**: A subtle `#7E2E2E` (Auburn) glow behind the Donna logo when active.
+- **Card Design**: Cards have no borders; they use a deep obsidian (`#0E0E10`) with a Jewel Emerald (Insight) or Jewel Burgundy (Urgent) left accented border.
 
 ### B. The Context Switch (Motions)
 - **Shared Elements**: When tapping a card, it expands vertically to fill the screen, moving the summary text into the header of the Detail View.
@@ -52,10 +53,10 @@ This guide bridges the gap between wireframes and technical implementation, appl
 
 ### Loading States
 - **Skeleton Screens**: Use a linear gradient shimmer from `#1A1A1B` to `#252526`.
-- **The "Cerulean Orbit"**: An animation showing a Cerulean dot orbiting the central Obsidian core during data sync.
+- **The "Copper Orbit"**: An animation showing a Copper dot orbiting the central Auburn core during data sync.
 
 ### Empty States
-- **Illustration**: Minimalist line art (Cerulean lines on Obsidian) of a professional assistant's desk or a sleek leather-bound planner.
+- **Illustration**: Minimalist line art (Jewel Navy lines on Obsidian) of a professional assistant's desk or a sleek leather-bound planner.
 
 ---
 

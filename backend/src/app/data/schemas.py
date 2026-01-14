@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -31,9 +31,7 @@ class TaskInMessage(BaseModel):
     confidence_score: Optional[float] = Field(default=None, serialization_alias="confidence")
     created_at: datetime
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class MessageResponse(MessageBase):
@@ -52,8 +50,7 @@ class MessageResponse(MessageBase):
     created_at: datetime
     tasks: Optional[List[TaskInMessage]] = None  # Related tasks from Task table
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SyncResponse(BaseModel):
     synced_count: int
@@ -85,8 +82,7 @@ class UserSettingsResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserSettingsUpdateRequest(BaseModel):
@@ -129,9 +125,7 @@ class TaskResponse(BaseModel):
     updated_at: datetime
     source_message: Optional[MessageResponse] = None
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True  # Allow using both field name and alias
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class TasksListResponse(BaseModel):
@@ -148,6 +142,14 @@ class TaskCreateRequest(BaseModel):
     task_type: str = "explicit"
     priority: str = "normal"
     status: str = "approved"  # When user manually approves, it's already approved
+
+
+class ManualTaskCreateRequest(BaseModel):
+    """Request to create a standalone task (not linked to an email)"""
+    title: str
+    description: Optional[str] = None
+    priority: str = "normal"
+    deadline: Optional[datetime] = None
 
 
 class TaskUpdateRequest(BaseModel):
@@ -193,8 +195,7 @@ class SchedulingSuggestionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SchedulingSuggestionSendRequest(BaseModel):
@@ -230,8 +231,7 @@ class CalendarEventResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CalendarAvailabilityRequest(BaseModel):
@@ -307,8 +307,7 @@ class PrincipalMemoryResponse(PrincipalMemoryBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PrincipalMemoryListResponse(BaseModel):
@@ -337,8 +336,7 @@ class DecisionPatternResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DecisionPatternListResponse(BaseModel):
@@ -379,8 +377,7 @@ class ContactContextResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ContactContextUpdateRequest(BaseModel):
@@ -394,4 +391,74 @@ class ContactContextUpdateRequest(BaseModel):
 class ContactContextListResponse(BaseModel):
     """List of contact contexts"""
     contacts: List[ContactContextResponse]
+    total: int
+
+
+# ========================================
+# Digest Schemas
+# ========================================
+
+class DigestTimeConfig(BaseModel):
+    """Configuration for a specific digest type"""
+    enabled: bool = True
+    time: str = "08:00"  # HH:MM format
+    include: List[str] = []  # What to include in this digest
+
+
+class WeeklyDigestConfig(BaseModel):
+    """Configuration for weekly review digest"""
+    enabled: bool = True
+    day: str = "monday"  # Day of week
+    time: str = "09:00"
+    include: List[str] = []
+
+
+class DigestPreferences(BaseModel):
+    """User preferences for digest generation and delivery"""
+    enabled: bool = False
+    morning_briefing: Optional[DigestTimeConfig] = None
+    end_of_day: Optional[DigestTimeConfig] = None
+    weekly_review: Optional[WeeklyDigestConfig] = None
+    delivery_channel: str = "email"  # email | telegram | push
+
+
+class DigestStatsResponse(BaseModel):
+    """Stats included in a digest"""
+    urgent_count: Optional[int] = None
+    due_today_count: Optional[int] = None
+    threads_needing_reply_count: Optional[int] = None
+    events_count: Optional[int] = None
+    pending_approval_count: Optional[int] = None
+    completed_count: Optional[int] = None
+    pending_count: Optional[int] = None
+    overdue_count: Optional[int] = None
+    tomorrow_events_count: Optional[int] = None
+
+
+class DigestResponse(BaseModel):
+    """Response for a generated digest"""
+    id: int
+    user_id: str
+    user_email: str
+    digest_type: str  # morning_briefing | end_of_day | weekly_review
+    period_start: Optional[datetime] = None
+    period_end: Optional[datetime] = None
+    content: Dict[str, Any]  # Structured digest content
+    html_content: Optional[str] = None
+    text_content: Optional[str] = None
+    delivery_channel: str
+    delivery_status: str  # pending | sent | failed
+    delivered_at: Optional[datetime] = None
+    delivery_error: Optional[str] = None
+    task_count: int = 0
+    thread_count: int = 0
+    event_count: int = 0
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DigestsListResponse(BaseModel):
+    """List of digests"""
+    digests: List[DigestResponse]
     total: int

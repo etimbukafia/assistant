@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .base import BaseModule
 from app.services.calendar import CalendarService, TimeSlot
-from ...models import UserSettings, SchedulingSuggestion, CalendarEvent, Message
+from app.data.models import UserSettings, SchedulingSuggestion, CalendarEvent, Message
 
 logger = logging.getLogger(__name__)
 

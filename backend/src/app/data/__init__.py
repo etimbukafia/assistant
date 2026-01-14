@@ -1,8 +1,8 @@
 from .models import (
     Message, GmailAccount, UserSettings, Task, TaskReminder,
     AgentActivityLog, SchedulingSuggestion, CalendarEvent,
-    PrincipalMemory, PatternMemory, ThreadState, TaskQueue,
-    ChatSession, ChatMessage, PendingAction, Digest
+    PrincipalMemory, DecisionPattern, ThreadState, TaskQueue,
+    ChatSession, ChatMessage, ChatPendingAction, Digest
 )
 from .schemas import (
     MessageResponse, TaskResponse, UserSettingsResponse,
@@ -13,8 +13,8 @@ __all__ = [
     # Models
     "Message", "GmailAccount", "UserSettings", "Task", "TaskReminder",
     "AgentActivityLog", "SchedulingSuggestion", "CalendarEvent",
-    "PrincipalMemory", "PatternMemory", "ThreadState", "TaskQueue",
-    "ChatSession", "ChatMessage", "PendingAction", "Digest",
+    "PrincipalMemory", "DecisionPattern", "ThreadState", "TaskQueue",
+    "ChatSession", "ChatMessage", "ChatPendingAction", "Digest",
     # Schemas
     "MessageResponse", "TaskResponse", "UserSettingsResponse",
     "UserSettingsUpdateRequest", "TaskUpdateRequest",

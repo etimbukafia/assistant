@@ -479,7 +479,29 @@ async def handle_data_cleanup(task_id: int, task_type: str, payload: Dict[str, A
             db.commit()
             logger.info(f"Hard deleted {deleted_count} source-deleted messages with no open tasks")
 
-        # Step 3: Reschedule for next night
+        # Step 3: Cleanup Ghost Instances older than 24 hours
+        ghost_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        ghost_settings = db.query(UserSettings).filter(
+            UserSettings.user_id.like("ghost_%"),
+            UserSettings.created_at < ghost_cutoff
+        ).all()
+
+        if ghost_settings:
+            ghost_ids = [s.user_id for s in ghost_settings]
+            # Bulk delete associated data
+            # Note: ForeignKey cascades should handle most, but we'll be explicit for safety
+            db.query(Message).filter(Message.user_id.in_(ghost_ids)).delete(synchronize_session=False)
+            db.query(GmailAccount).filter(GmailAccount.user_id.in_(ghost_ids)).delete(synchronize_session=False)
+            db.query(Task).filter(Task.user_id.in_(ghost_ids)).delete(synchronize_session=False)
+            db.query(PrincipalMemory).filter(PrincipalMemory.user_id.in_(ghost_ids)).delete(synchronize_session=False)
+            
+            # Finally delete settings/user
+            db.query(UserSettings).filter(UserSettings.user_id.in_(ghost_ids)).delete(synchronize_session=False)
+            
+            db.commit()
+            logger.info(f"Cleaned up {len(ghost_ids)} expired ghost instances")
+
+        # Step 4: Reschedule for next night
         next_run = get_next_cleanup_time()
         enqueue_task(
             task_type="data_cleanup",

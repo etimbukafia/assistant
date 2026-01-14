@@ -64,6 +64,22 @@ def gmail_auth_status(gmail_client: GmailClient = Depends(get_gmail_client)):
     }
 
 
+@router.post("/ghost")
+def create_ghost_session(db: Session = Depends(get_db_for_user)):
+    """
+    Create an ephemeral 'Ghost' session for demo mode.
+    Seeds the database with gold-standard demo data.
+    """
+    from app.services.ghost_factory import create_ghost_instance
+    user_id = create_ghost_instance(db)
+    
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "message": "Ghost session initialized with demo data"
+    }
+
+
 @router.post("/gmail/revoke")
 def revoke_gmail_auth(db: Session = Depends(get_db_for_user)):
     """

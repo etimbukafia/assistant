@@ -11,10 +11,10 @@ from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from fastapi import Depends # Added for dependency injection
 
-from .config import get_settings
-from .encryption import encrypt_token, decrypt_token
+from app.infra.config import get_settings
+from app.security.encryption import encrypt_token, decrypt_token
 # Added auth imports for dependency factory
-from .auth import AuthenticatedUser, get_current_user, get_db_for_user
+from app.security.auth import AuthenticatedUser, get_current_user, get_db_for_user
 
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',

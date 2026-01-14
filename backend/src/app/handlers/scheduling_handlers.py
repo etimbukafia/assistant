@@ -7,7 +7,7 @@ generate a SchedulingSuggestion with time slots and draft reply.
 import logging
 from typing import Dict, Any
 
-from core.events import register_handler
+from src.core.events import register_handler
 from app.infra.database import SessionLocal
 from app.data.models import Message, SchedulingSuggestion
 from app.agents.modules.scheduling import SchedulingModule

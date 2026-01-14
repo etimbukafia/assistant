@@ -641,7 +641,7 @@ class ChatMessage(Base):
     role = Column(String, nullable=False)  # 'user', 'assistant', 'system'
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    metadata = Column(JSON, default=dict)  # tool calls, etc.
+    message_metadata = Column(JSON, default=dict)  # tool calls, etc.
 
     # Relationships
     session = relationship("ChatSession", back_populates="messages")

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.llm.providers.gemini import GeminiProvider
+from core.llm.config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ class DocumentProcessor:
     """
 
     def __init__(self):
-        self.gemini = GeminiProvider()
+        config = LLMConfig.from_env()
+        self.gemini = GeminiProvider(config)
         self._prompt_template: Optional[str] = None
 
     @property

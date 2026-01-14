@@ -6,16 +6,19 @@ A comprehensive directory of reusable design tokens, components, and structural 
 
 ## 🎨 1. Design Tokens
 
-### Color Palette (Obsidian Foundation)
+### Color Palette (The Executive Palette)
 | Token | Hex | Usage |
 | :--- | :--- | :--- |
-| `color-bg-base` | `#0A0A0B` | Primary background (Obsidian) |
-| `color-bg-elevated` | `#141416`| Card and surface backgrounds |
-| `color-accent-primary`| `#E63946` | Action, Urgency (Donna Red) |
-| `color-accent-precision`| `#007BA7` | Insights, Patterns (Cerulean) |
-| `color-text-primary` | `#FFFFFF` | Headings, Primary Body |
-| `color-text-muted` | `#A1A1A1` | Metadata, Secondary labels |
-| `color-border` | `#2D2D2E` | Subtle dividers and outlines |
+| `color-bg-base` | `#050505` | Primary background (Deep Obsidian) |
+| `color-bg-elevated` | `#0E0E10`| Card and surface backgrounds |
+| `color-accent-primary`| `#7E2E2E` | Action, Identity (Rich Auburn) |
+| `color-accent-secondary`| `#D97745` | Highlighs, Motion (Ginger/Copper) |
+| `color-accent-precision`| `#1E3A8A` | Professional, Deep context (Jewel Navy) |
+| `color-text-primary` | `#FAF9F6` | Headings, Primary Body (Cream) |
+| `color-text-muted` | `#8E8E93` | Metadata, Secondary labels |
+| `color-success` | `#065F46` | Positive growth (Jewel Emerald) |
+| `color-error` (Urgent) | `#800020` | Critical importance (Jewel Burgundy) |
+| `color-border` | `#1F1F21` | Subtle dividers and outlines |
 
 ### Spacing Scale (Base 4pt)
 - **xs**: 4pt
@@ -56,8 +59,8 @@ A comprehensive directory of reusable design tokens, components, and structural 
 - **Layout**: 16pt Padding, 16pt Corner Radius.
 - **States**: 
   - Standard: Obsidian background.
-  - Urgent: 2pt `color-accent-primary` left border.
-  - Insight: 2pt `color-accent-precision` left border.
+  - Urgent: 2pt `color-error` (Burgundy) left border.
+  - Insight: 2pt `color-success` (Emerald) left border.
 
 ### Inputs
 - **Text Area**: Flat borderless design, 12pt `color-bg-elevated`, white text.
@@ -74,8 +77,8 @@ A comprehensive directory of reusable design tokens, components, and structural 
 - **Settings**: `settings`
 - **Drafting**: `pen-tool`
 - **Sync**: `refresh-cw`
-- **Urgent**: `alert-circle` (Donna Red)
-- **Insight**: `zap` (Cerulean)
+- **Urgent**: `alert-circle` (Jewel Burgundy)
+- **Insight**: `zap` (Jewel Emerald)
 
 ---
 

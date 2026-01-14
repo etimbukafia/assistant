@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 
-from .models import PrincipalMemory, DecisionPattern, ContactContext
+from app.data.models import PrincipalMemory, DecisionPattern, ContactContext
 
 
 @dataclass

@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
 from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser
-from app.integrations.gmail import GmailClient, get_gmail_client, encrypt_body
+from app.security.encryption import encrypt_body
+from app.integrations.gmail import GmailClient, get_gmail_client
 from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion
 from app.data.schemas import (
     SyncResponse, MessagesListResponse, MessageResponse, 

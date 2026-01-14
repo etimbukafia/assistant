@@ -1,0 +1,58 @@
+{
+    "messages": [
+        {
+            "id": "m1",
+            "type": "urgent",
+            "title": "Board Meeting Conflict",
+            "sender": "Sarah Miller",
+            "snippet": "The Q4 strategy session overlaps with your deep work block. Should we adjust?",
+            "time": "3h ago",
+            "insight": "The Executive's contact is usually slow on Fridays; I've suggested we push the deadline to Monday.",
+            "suggestedAction": "Suggest Times"
+        },
+        {
+            "id": "m2",
+            "type": "insight",
+            "title": "Partner Project Update",
+            "sender": "David Chen",
+            "snippet": "We've finalized the vendor list for the upcoming product launch.",
+            "time": "5h ago",
+            "insight": "I've cross-referenced this with the Q3 budget—we are 5% under projections.",
+            "suggestedAction": "Draft Reply"
+        },
+        {
+            "id": "m3",
+            "type": "fyi",
+            "title": "Weekly Newsletter",
+            "sender": "Tech Insider",
+            "snippet": "Here's what happened in the industry this week...",
+            "time": "1d ago",
+            "insight": "Summarized: 3 competitors announced AI integrations. No action needed.",
+            "suggestedAction": "Archive"
+        }
+    ],
+    "tasks": [
+        {
+            "id": "t1",
+            "title": "Prep Q4 Budget",
+            "priority": "high",
+            "status": "pending"
+        },
+        {
+            "id": "t2",
+            "title": "Review Sarah's Report",
+            "priority": "medium",
+            "status": "pending"
+        },
+        {
+            "id": "t3",
+            "title": "Book Dinner Venue",
+            "priority": "low",
+            "status": "done"
+        }
+    ],
+    "schedule": {
+        "date": "Jan 12th",
+        "conflicts": 1
+    }
+}

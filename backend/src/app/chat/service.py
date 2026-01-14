@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory
 from .orchestrator import ChatOrchestrator
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
 
 
 class ChatService:

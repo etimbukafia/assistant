@@ -14,10 +14,12 @@ Fernet provides:
 """
 from cryptography.fernet import Fernet
 
-from .config import settings
+from app.infra.config import get_settings
 import logging
 
 logger = logging.getLogger(__name__)
+
+settings = get_settings()
 
 
 def get_encryption_key() -> bytes:
