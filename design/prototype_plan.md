@@ -30,7 +30,7 @@ This document outlines the flows for a high-fidelity "Demo Mode" designed to sim
     5.  Watch the "Handled" bloom effect as the card resolves.
 
 ### Flow C: The "Focus Hub" Handover (Closure)
-*   **Path**: Dashboard -> Task Hub -> Mark Done.
+*   **Path**: Inbox -> Focus Tab -> Mark Done.
 *   **Interactive Steps**:
     1.  Navigate to `[Focus]` tab.
     2.  Identify the `[Prep Q4 Budget]` task.

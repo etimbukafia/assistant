@@ -25,6 +25,9 @@ class ConversationState:
     session_id: str = ""
     user_id: str = ""
     
+    # User personalization
+    user_first_name: Optional[str] = None
+    
     # Entity references (what are we talking about?)
     current_email_id: Optional[int] = None
     current_task_id: Optional[int] = None
@@ -50,6 +53,7 @@ class ConversationState:
         return cls(
             session_id=data.get("session_id", ""),
             user_id=data.get("user_id", ""),
+            user_first_name=data.get("user_first_name"),
             current_email_id=data.get("current_email_id"),
             current_task_id=data.get("current_task_id"),
             current_contact_id=data.get("current_contact_id"),
@@ -60,6 +64,7 @@ class ConversationState:
             pending_options=data.get("pending_options", []),
             pending_confirmation=data.get("pending_confirmation")
         )
+
 
 
 class ChatContextManager:
@@ -233,6 +238,10 @@ class ChatContextManager:
         Integrates memory systems via ContextBuilder.
         """
         parts = []
+        
+        # 0. User personalization (from session state, no DB call)
+        if state.user_first_name:
+            parts.append(f"The user's first name is {state.user_first_name}. Address them by name when appropriate.")
         
         # 1. Memory context (preferences, patterns)
         memory_context = self.context_builder.build_context(

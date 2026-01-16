@@ -36,15 +36,25 @@ class ChatService:
     # Session Operations
     # =========================================================================
     
-    def create_session(self, session_type: str = "command") -> ChatSession:
+    def create_session(
+        self, 
+        session_type: str = "command",
+        user_first_name: Optional[str] = None
+    ) -> ChatSession:
         """
         Create a new chat session.
         
         Args:
             session_type: 'command' (30 days) or 'reflection' (24 hours)
+            user_first_name: User's first name (from JWT) for personalization
         """
         if session_type not in ("command", "reflection"):
             session_type = "command"
+        
+        # Initialize state with user info for personalization
+        initial_state = {}
+        if user_first_name:
+            initial_state["user_first_name"] = user_first_name
         
         session = ChatSession(
             id=str(uuid.uuid4()),
@@ -53,7 +63,7 @@ class ChatService:
             title=None,  # Can be set later based on first message
             created_at=datetime.now(timezone.utc),
             last_activity_at=datetime.now(timezone.utc),
-            state={}
+            state=initial_state
         )
         
         self.db.add(session)

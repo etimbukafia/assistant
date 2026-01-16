@@ -11,18 +11,14 @@ export default function LoginScreen() {
     const router = useRouter();
 
     const handleLogin = () => {
-        // Placeholder for real auth flow
-        console.log('Login pressed');
-        router.push('/syncing');
+        router.push('/auth/welcome' as any);
     };
 
-    const handleGuestView = async () => {
-        router.push('/syncing');
-    };
+
 
     return (
         <SafeAreaView style={styles.container}>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
 
             <View style={styles.content}>
                 {/* Brand Section */}
@@ -37,10 +33,6 @@ export default function LoginScreen() {
                     </DonnaText>
 
                     <View style={styles.divider} />
-
-                    <DonnaText style={styles.description}>
-                        Donna helps you stay ahead, handle the important, and never miss what matters.
-                    </DonnaText>
                 </View>
 
                 {/* Actions Section */}
@@ -51,14 +43,6 @@ export default function LoginScreen() {
                         onPress={handleLogin}
                     >
                         <DonnaText style={styles.primaryButtonText}>Log in</DonnaText>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={styles.ghostButton}
-                        activeOpacity={0.7}
-                        onPress={handleGuestView}
-                    >
-                        <DonnaText style={styles.ghostButtonText}>Visit as Guest</DonnaText>
                     </TouchableOpacity>
                 </View>
             </View>
@@ -89,6 +73,8 @@ const styles = StyleSheet.create({
     logoText: {
         ...Typography.logo,
         color: Colors.textPrimary,
+        lineHeight: 60, // Ensure enough vertical space
+        paddingHorizontal: 4, // Prevent side clipping
     },
     slogan: {
         ...Typography.bodyBase,
@@ -106,14 +92,7 @@ const styles = StyleSheet.create({
         opacity: 0.5,
         marginBottom: Spacing.lg,
     },
-    description: {
-        ...Typography.h2, // Using the smaller serif header for description
-        fontSize: 22,
-        lineHeight: 30,
-        textAlign: 'center',
-        color: Colors.textPrimary,
-        maxWidth: width * 0.85,
-    },
+
     actionsContainer: {
         width: '100%',
         alignItems: 'center',
@@ -140,20 +119,5 @@ const styles = StyleSheet.create({
         color: '#FFFFFF',
         textTransform: 'uppercase',
     },
-    ghostButton: {
-        width: '100%',
-        height: 56,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderRadius: Radius.full,
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-    },
-    ghostButtonText: {
-        fontFamily: 'Inter_400Regular',
-        fontSize: 14,
-        letterSpacing: 0.5,
-        color: Colors.textMuted,
-        textTransform: 'uppercase',
-    },
+
 });

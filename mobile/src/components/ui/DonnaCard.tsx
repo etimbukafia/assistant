@@ -97,7 +97,7 @@ const styles = StyleSheet.create({
         marginBottom: Spacing.xs,
     },
     badge: {
-        backgroundColor: 'rgba(230, 57, 70, 0.1)',
+        backgroundColor: 'rgba(128, 0, 32, 0.1)', // Subtle Burgundy
         paddingHorizontal: Spacing.xs,
         paddingVertical: 2,
         borderRadius: Radius.xs || 4,
@@ -109,7 +109,7 @@ const styles = StyleSheet.create({
         marginBottom: Spacing.md,
     },
     insightBox: {
-        backgroundColor: 'rgba(0, 123, 167, 0.05)',
+        backgroundColor: 'rgba(30, 58, 138, 0.05)', // Subtle Navy
         padding: Spacing.sm,
         borderRadius: Radius.component,
         marginBottom: Spacing.md,

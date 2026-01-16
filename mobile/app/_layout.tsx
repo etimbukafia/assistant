@@ -1,5 +1,5 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, ThemeProvider } from '@react-navigation/native';
+import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -15,6 +15,7 @@ import {
 import {
   Inter_400Regular,
 } from '@expo-google-fonts/inter';
+import { AuthProvider } from '../src/context/AuthContext';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -30,9 +31,9 @@ export const unstable_settings = {
 SplashScreen.preventAutoHideAsync();
 
 const DonnaTheme = {
-  ...DarkTheme,
+  ...DefaultTheme,
   colors: {
-    ...DarkTheme.colors,
+    ...DefaultTheme.colors,
     primary: Colors.accentPrimary,
     background: Colors.bgBase,
     card: Colors.bgElevated,
@@ -57,7 +58,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (loaded) {
-      SplashScreen.hideAsync();
+      SplashScreen.hideAsync().catch(() => {
+        // Ignore error if splash screen is already hidden
+      });
     }
   }, [loaded]);
 
@@ -66,13 +69,20 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider value={DonnaTheme}>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="login" />
-        <Stack.Screen name="syncing" />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      </Stack>
-    </ThemeProvider>
+    <AuthProvider>
+      <ThemeProvider value={DonnaTheme}>
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="index" />
+          <Stack.Screen name="login" />
+          <Stack.Screen name="auth/welcome" />
+          <Stack.Screen name="auth/google/choose-account" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="auth/google/consent" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="auth/activation-explanation" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="settings/profile" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        </Stack>
+      </ThemeProvider>
+    </AuthProvider>
   );
 }

@@ -8,11 +8,16 @@ This document defines the structural hierarchy and navigation model for the Donn
 
 Donna uses a **Tab-Based** primary navigation with **Modal Stacks** for deep-work focus.
 
-### Primary Navigation (Tabs)
-1. **Feed (The Dashboard)**: The "Morning Briefing" and live cards.
-2. **Calendar**: Daily/Weekly schedule with meeting briefings.
-3. **Task Hub**: Centralized view of all approved or pending tasks.
-4. **Settings**: Profile, **Executive Preferences** management, and Gmail connection.
+### Primary Navigation (Tabs - Bottom Bar)
+1. **Inbox**: The centralized feed for all incoming communications and synthesized cards.
+2. **Focus**: The task hub for high-priority action items.
+3. **Schedule**: Calendar view and meeting briefings.
+4. **Chat**: Direct AI interaction and reflection space.
+
+### Secondary Navigation (Global Header)
+- **Profile (Avatar)**: Access to **Settings**, User Identity, and Connections (Modal Sheet).
+- **Search**: Global search overlay.
+- **Notifications**: Activity center.
 
 ---
 
@@ -25,10 +30,15 @@ graph TD
     Auth -- Yes --> Main[Main Tab Navigator]
 
     subgraph Tabs
-        Main --> Feed[Feed View]
-        Main --> Cal[Calendar View]
-        Main --> Tasks[Task Hub]
-        Main --> Settings[Settings View]
+        Main --> Inbox[Inbox View]
+        Main --> Focus[Focus Hub]
+        Main --> Schedule[Calendar View]
+        Main --> ChatTab[Chat View]
+    end
+    
+    subgraph Header Actions
+        Main --> ProfileMod((Profile & Settings Modal))
+        Main --> Search((Search Modal))
     end
 
     subgraph Deep Navigation
@@ -59,10 +69,12 @@ graph TD
 - `/auth` -> **AuthPage**: Gmail OAuth connection.
 
 ### (Tabs) Main
-- `/dashboard` -> **Dashboard**: The live feed of cards (Urgent/FYI).
+### (Tabs) Main
+- `/index` (Inbox) -> **Inbox**: The primary dashboard feed.
+- `/focus` -> **TaskHub**: Kanban or List view of obligations.
 - `/calendar` -> **CalendarEventsView**: Chronological meeting list.
-- `/tasks` -> **TaskHub**: Kanban or List view of obligations.
-- `/settings` -> **SettingsView**: High-level preferences.
+- `/chat` -> **ChatView**: Dedicated AI interaction space.
+- `/settings` -> **REMOVED** (Now a modal).
 
 ### (Stack) Message & Interaction
 - `/messages/:id` -> **MessageDetail**: Full thread context, summary, and action bar.
@@ -70,7 +82,9 @@ graph TD
 - `/calendar/:id` -> **MeetingBriefingCard**: Preparation context and attendee insights.
 
 ### (Modals / Overlays)
-- **Donna Pulse (Chat)**: Floats over all tabs. The "Reflection" space for commands or venting.
+### (Modals / Overlays)
+- **Profile & Settings**: Slides up from the bottom when tapping the User Avatar.
+- **Donna Pulse (Chat)**: Now integrated as a primary tab, but can also be invoked contextually.
 - **Precision Panel**: Used for deep editing of **Executive Preferences** or **Decision Patterns**.
 
 ---

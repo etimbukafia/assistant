@@ -50,6 +50,7 @@ export const DonnaButton: React.FC<DonnaButtonProps> = ({
     };
 
     const getTextColor = () => {
+        if (variant === 'primary') return '#FFFFFF';
         if (variant === 'ghost') return Colors.textMuted;
         return Colors.textPrimary;
     };

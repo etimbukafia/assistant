@@ -8,10 +8,11 @@ This guide ensures that every word in Donna reflects her persona: Sophisticated,
 
 | Item | Context | Donna's Choice |
 | :--- | :--- | :--- |
-| **Tab 1** | Primary dashboard | **Feed** |
-| **Tab 2** | Calendar | **Schedule** |
-| **Tab 3** | Task list | **Focus** |
-| **Tab 4** | User settings | **Profile** |
+| **Tab 1** | Primary dashboard | **Inbox** |
+| **Tab 2** | Task list | **Focus** |
+| **Tab 3** | Calendar | **Schedule** |
+| **Tab 4** | AI Chat | **Chat** |
+| **Header** | User settings | **Profile (Avatar)** |
 
 ---
 

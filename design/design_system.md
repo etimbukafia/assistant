@@ -9,16 +9,16 @@ A comprehensive directory of reusable design tokens, components, and structural 
 ### Color Palette (The Executive Palette)
 | Token | Hex | Usage |
 | :--- | :--- | :--- |
-| `color-bg-base` | `#050505` | Primary background (Deep Obsidian) |
-| `color-bg-elevated` | `#0E0E10`| Card and surface backgrounds |
-| `color-accent-primary`| `#7E2E2E` | Action, Identity (Rich Auburn) |
-| `color-accent-secondary`| `#D97745` | Highlighs, Motion (Ginger/Copper) |
-| `color-accent-precision`| `#1E3A8A` | Professional, Deep context (Jewel Navy) |
-| `color-text-primary` | `#FAF9F6` | Headings, Primary Body (Cream) |
-| `color-text-muted` | `#8E8E93` | Metadata, Secondary labels |
-| `color-success` | `#065F46` | Positive growth (Jewel Emerald) |
-| `color-error` (Urgent) | `#800020` | Critical importance (Jewel Burgundy) |
-| `color-border` | `#1F1F21` | Subtle dividers and outlines |
+| `color-bg-base` | `#F9F6F2` | Primary background (Linen Paper) |
+| `color-bg-elevated` | `#FFFFFF` | Card and surface backgrounds (Pure White) |
+| `color-accent-primary`| `#7E2E2E` | Headlines, Primary CTA (Rich Auburn) |
+| `color-accent-secondary`| `#D97745` | Icons, Interactive states (Natural Copper) |
+| `color-accent-precision`| `#1E3A8A` | Professional grounding (Navy) |
+| `color-text-primary` | `#050505` | Primary Body, High legibility (Obsidian Black) |
+| `color-text-muted` | `#6B7280` | Metadata, Secondary labels |
+| `color-success` | `#8A9A5B` | Positive insights (Sage Green) |
+| `color-error` (Urgent) | `#800020` | Critical importance (Burgundy) |
+| `color-border` | `#E5E7EB` | Subtle dividers and outlines |
 
 ### Spacing Scale (Base 4pt)
 - **xs**: 4pt
@@ -58,13 +58,13 @@ A comprehensive directory of reusable design tokens, components, and structural 
 ### Cards (The "Donna Card")
 - **Layout**: 16pt Padding, 16pt Corner Radius.
 - **States**: 
-  - Standard: Obsidian background.
+  - Standard: Pure White background.
   - Urgent: 2pt `color-error` (Burgundy) left border.
-  - Insight: 2pt `color-success` (Emerald) left border.
+  - Insight: 2pt `color-accent-precision` (Navy) left border.
 
 ### Inputs
-- **Text Area**: Flat borderless design, 12pt `color-bg-elevated`, white text.
-- **Search**: `color-bg-base` with subtle glassmorphic blur in header.
+- **Text Area**: Subtle border, 12pt `color-bg-elevated`, Obsidian text.
+- **Search**: `color-bg-base` with high contrast and sharp focus borders.
 
 ---
 

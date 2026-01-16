@@ -29,6 +29,11 @@ Motion in Donna is **Sleek, Intentional, and High-Performance**. It should feel 
 - **Visual**: Simple cross-fade (0ms duration on icons, 200ms on screen content).
 - **Behavior**: Content fades out from `opacity: 1` to `0.8` while sliding slightly (8px) to the left to emphasize progress.
 
+### B. Profile Sheet (Modal)
+- **Trigger**: Tapping the User Avatar (Header).
+- **Visual**: Sheet slides up from the bottom (Spring: `damping: 20`, `stiffness: 90`) to cover 95% of the screen.
+- **Exit**: Drag-down or Tap-outside (Backdrop Blur fade-out).
+
 ### B. Detail Expansion (Common Flow)
 - **Visual**: The card background expands to fill the screen while the `Summary` text remains fixed or slides into its new header position.
 - **Depth**: Elements behind the card blur (`20px`) during the first 150ms of the transition.
@@ -42,6 +47,10 @@ Motion in Donna is **Sleek, Intentional, and High-Performance**. It should feel 
 - **Haptics**: 
   - **Success**: Soft double-tap.
   - **Urgent/Error**: Sharp single-tap with longer vibration.
+
+### Avatar Interaction
+- **Press**: Avatar scales up 5% then springs back.
+- **Visual**: A subtle Copper ring expands (`borderWidth: 1px` -> `3px`) and fades out.
 
 ### Choice Selection (Cerulean Selector)
 - When selecting a scheduling slot, the card border color sweeps from `color-border` to `accent-cerulean` in a clockwise circular motion.

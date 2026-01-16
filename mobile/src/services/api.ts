@@ -1,22 +1,28 @@
-const BASE_URL = 'http://localhost:8000'; // Adjust for your local environment
+import axios from 'axios';
+import { Storage } from '../utils/Storage';
+import { Platform } from 'react-native';
 
-export const api = {
-    async createGhostSession() {
-        try {
-            const response = await fetch(`${BASE_URL}/auth/ghost`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-            });
-            if (!response.ok) {
-                throw new Error('Failed to create ghost session');
-            }
-            return await response.json();
-        } catch (error) {
-            console.error('API Error:', error);
-            // Fallback for demo if backend is not running
-            return { user_id: 'demo_user_fallback', status: 'fallback' };
+// Use localhost for iOS simulator, 10.0.2.2 for Android emulator
+const DEV_API_URL = Platform.OS === 'android'
+    ? 'http://10.0.2.2:8000/v1'
+    : 'http://localhost:8000/v1';
+
+export const api = axios.create({
+    baseURL: process.env.EXPO_PUBLIC_API_URL || DEV_API_URL,
+    headers: {
+        'Content-Type': 'application/json',
+    },
+});
+
+// Add auth interceptor
+api.interceptors.request.use(async (config) => {
+    try {
+        const token = await Storage.getItem('auth_token');
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`;
         }
+    } catch (error) {
+        console.error('Error attaching auth token', error);
     }
-};
+    return config;
+});

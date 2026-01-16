@@ -42,7 +42,7 @@ export default function SplashScreen() {
 
     return (
         <SafeAreaView style={styles.container}>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
             <View style={styles.content}>
                 <Animated.View style={[styles.logoContainer, logoAnimatedStyle]}>
                     <View style={styles.logoCircle}>

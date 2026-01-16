@@ -19,7 +19,7 @@ export default function FocusScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <FlatList
         data={tasks}
         keyExtractor={(item) => item.id}
@@ -51,7 +51,7 @@ export default function FocusScreen() {
               styles.checkbox,
               item.status === 'done' && styles.checkboxChecked
             ]}>
-              {item.status === 'done' && <FontAwesome name="check" size={12} color={Colors.textPrimary} />}
+              {item.status === 'done' && <FontAwesome name="check" size={12} color="#FFFFFF" />}
             </View>
           </Pressable>
         )}

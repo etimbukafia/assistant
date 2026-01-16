@@ -1,14 +1,15 @@
 export const Colors = {
-    bgBase: '#0B1320', // Midnight Navy
-    bgElevated: '#1A2332', // Slightly lighter navy for cards/modals
-    accentPrimary: '#800020', // Oxblood / Deep Burgundy
-    accentSecondary: '#D97745', // Copper (kept for highlights)
-    accentPrecision: '#1E3A8A', // Jewel Navy
-    textPrimary: '#FAF9F6', // Cream/Off-white
-    textMuted: '#8E95A1', // Cool grey
-    border: '#2A3441', // Navy-grey border
-    success: '#065F46', // Jewel Emerald
-    error: '#EF4444', // Red
+    bgBase: '#F9F6F2', // Linen - Higher-quality bond paper feel
+    bgElevated: '#FFFFFF', // Pure white for cards to pop against linen
+    accentPrimary: '#7E2E2E', // Rich Auburn - Headlines & Primary CTAs
+    accentSecondary: '#D97745', // Natural Copper - Icons & Interactive accents
+    accentPrecision: '#1E3A8A', // Navy - Structure & Grounding
+    textPrimary: '#050505', // Obsidian Black - Maximum legibility
+    textMuted: '#6B7280', // Grey for secondary text
+    border: '#E5E7EB', // Subtle light border
+    borderStrong: '#1E3A8A', // Navy for grounding dividers
+    success: '#8A9A5B', // Sage Green - Positive insights
+    error: '#800020', // Burgundy - High-priority alerts
 };
 
 export const Spacing = {

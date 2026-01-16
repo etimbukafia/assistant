@@ -7,14 +7,14 @@ Donna is designed to be accessible to all executive assistants, regardless of ho
 ## 🎨 1. Contrast & Color
 
 ### Contrast Ratios
-- **Primary Text**: Maintain a minimum 7:1 ratio against the Obsidian background (`#0A0A0B`).
+- **Primary Text**: Maintain a minimum 7:1 ratio against the Linen background (`#F9F6F2`).
 - **Secondary/Muted Text**: Maintain a minimum 4.5:1 ratio.
 - **Interactive Elements**: All essential icons and borders must maintain a 3:1 ratio.
 
 ### Color Dependence
-- **Red/Cerulean Meaning**: Donna never uses color alone to convey meaning.
-  - Urgent items include an `alert-circle` icon and text label.
-  - Insights include a `zap` icon and "Precision" tag.
+- **Semantic Meaning**: Donna never uses color alone to convey meaning.
+  - Urgent items include an `alert-circle` icon and "Urgent" label (Burgundy).
+  - Insights include a `sparkle` icon and "Boutique Insight" tag (Navy).
 
 ---
 
@@ -57,7 +57,7 @@ Donna is designed to be accessible to all executive assistants, regardless of ho
 ## 🌑 5. Visual Comfort
 
 - **Reduced Motion**: If "Reduced Motion" is enabled on the device, all slide and expand transitions revert to immediate cross-fades (100ms).
-- **Dark Mode Optimization**: Since Donna is Obsidian-first, we ensure that OLED smearing is minimized by using `#0A0A0B` (slightly above pure black) for the base background.
+- **Eye Strain Reduction**: Since Donna is Linen-first, we ensure that the off-white background (`#F9F6F2`) minimizes the "halation" effect common with pure white screens, providing a comfortable reading experience for long sessions.
 
 ---
 

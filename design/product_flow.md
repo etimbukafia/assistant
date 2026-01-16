@@ -8,10 +8,10 @@ This document outlines the end-to-end experience for an **Executive Assistant (E
 
 The goal is to transition the EA from "managing mail" to "having a high-performance partner."
 
-1. **The Entry**: EA lands on a minimalist, obsidian-dark page.
+1. **The Entry**: EA lands on a minimalist, premium Linen Stationery page.
 2. **The Handover**: EA connects the Executive's Gmail. Donna explains what she looks for: *Context, Commitments, and Chaos.*
 3. **The Initial Ingestion**: While syncing, Donna calculates the Executive's current landscape.
-4. **The First Brief**: The EA sees their first **Executive Summary**. "I've analyzed 45 unread emails for [Executive Name]. 3 are urgent, 8 are FYI, and I've prepared responses for you to review."
+4. **The First Brief**: The EA enters the **Inbox** tab and sees their first **Executive Summary**. "I've analyzed 45 unread emails for [Executive Name]. 3 are urgent, 8 are FYI, and I've prepared responses for you to review."
 
 ---
 
@@ -20,7 +20,7 @@ The goal is to transition the EA from "managing mail" to "having a high-performa
 ### 08:00 AM — The Morning Briefing
 *   **Trigger**: EA opens the app for the first time.
 *   **Donna’s Action**: Presents a unified feed of **Cards** representing the Executive's needs.
-*   **User Experience**: High-priority items stay on top. Each card has a "Cerulean Insight" tag: *"The Executive's contact is usually slow on Fridays; I've suggested we push the deadline to Monday."*
+*   **User Experience**: High-priority items stay on top. Each card has a "Boutique Insight" tag: *"The Executive's contact is usually slow on Fridays; I've suggested we push the deadline to Monday."*
 
 ### 11:30 AM — The Micro-Intervention
 *   **Trigger**: An urgent email arrives from a Board Member.
@@ -31,7 +31,7 @@ The goal is to transition the EA from "managing mail" to "having a high-performa
 ### 02:00 PM — The Context Shift
 *   **Trigger**: The Executive enters a meeting.
 *   **Donna’s Action**: Pulls relevant historical context for the EA to pass along or use in briefings.
-*   **User Experience**: EA taps the meeting card. Sees the "Cerulean Summary":
+*   **User Experience**: EA taps the meeting card. Sees the "Boutique Summary":
     *   *Context: Budget was approved at $50k last month.*
     *   *Warning: Attendee Sarah hasn't submitted her report to the Executive yet.*
 
@@ -71,7 +71,7 @@ graph TD
 
 ### Flow A: Task Management (Approval to Action)
 *   **Action**: High-confidence task extracted from an email.
-*   **Entry State**: A card in the feed with a `[Cerulean Border]` and an `[Approve]` button.
+*   **Entry State**: A card in the feed with a `[Navy Border]` and an `[Approve]` button.
 *   **Steps**:
     1.  User reviews the `Source Snippet` on the card.
     2.  User taps `[Approve]`.
@@ -96,7 +96,7 @@ graph TD
 *   **Entry State**: Card showing conflicting events and a `[Suggest Times]` button.
 *   **Steps**:
     1.  User taps `[Suggest Times]`.
-    2.  Donna opens a **Scheduling Panel** with three "Priestly Cerulean" slots that fit the user's `Preferred Meeting Times`.
+    2.  Donna opens a **Scheduling Panel** with three "Executive Navy" slots that fit the user's `Preferred Meeting Times`.
     3.  User selects one or all slots.
     4.  User taps `[Send Options]`.
 *   **Exit State**: Card status changes to `Waiting for Confirmation`.
@@ -109,7 +109,7 @@ graph TD
 Every Donna card must lead to a resolution in 1 tap.
 *   **Pattern**: [AI Drafted Action] + [Confirm/Edit]
 
-### II. The Cerulean Filter
+### II. The Boutique Filter
 Donna never shows "Pending" work. She shows "**Ready**" work that needs a nod.
 *   **Concept**: If Donna extracts a task, she shouldn't just list it; she should prepare the draft or calendar invite for a single-tap approval.
 

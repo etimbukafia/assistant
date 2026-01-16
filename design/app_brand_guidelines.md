@@ -34,14 +34,14 @@ Donna’s voice is **Sophisticated, Direct, and Slightly Playful.**
 
 ## 3. Visual Identity
 
-The visual language of Donna is **Modern Professionalism**—sleek, dark, and high-contrast.
+The visual language of Donna is **Boutique Stationery**—premium, tactile, and high-contrast, inspired by high-end bond paper and executive journals.
 
 ### Color Palette (The Executive Palette)
-- **Obsidian Black (`#050505`)**: The foundation. Represents depth, focus, and the "void" where the AI works.
-- **Rich Auburn (`#7E2E2E`)**: The signature identity. Used for Donna's core presence and primary actions.
-- **Natural Copper (`#D97745`)**: The motion accent. Used for highlights, active state feedback, and secondary buttons.
-- **Jewel Tones (`#065F46`, `#800020`, `#1E3A8A`)**: Emerald for growth/success, Burgundy for urgency, and Navy for professional depth.
-- **Executive Cream (`#FAF9F6`)**: Primary typography and high-contrast surfaces.
+- **Linen (`#F9F6F2`)**: The foundation. Mimics high-quality bond paper, reducing eye strain and feeling more "boutique."
+- **Rich Auburn (`#7E2E2E`)**: The signature identity. Used for headlines and primary CTAs, providing a leather-like authority.
+- **Natural Copper (`#D97745`)**: The interactive accent. Used for icons and active states, providing a warm, refined "pop."
+- **Boutique Accents**: Sage Green (`#8A9A5B`) for success, Burgundy (`#800020`) for urgency, and Navy (`#1E3A8A`) for professional depth and grounding.
+- **Obsidian Black (`#050505`)**: Primary typography. Essential for maximum legibility against the linen background.
 
 ### Typography
 - **Primary Font**: *Outfit* or *Inter*. Clean, geometric, and highly readable.

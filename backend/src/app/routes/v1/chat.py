@@ -73,7 +73,14 @@ async def create_session(
 ):
     """Create a new chat session."""
     service = ChatService(db, user.user_id)
-    session = service.create_session(request.session_type)
+    
+    # Extract first name from display_name for personalization
+    first_name = None
+    if user.display_name:
+        first_name = user.display_name.split()[0]
+    
+    session = service.create_session(request.session_type, user_first_name=first_name)
+
     
     return SessionResponse(
         id=session.id,

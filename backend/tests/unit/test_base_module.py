@@ -37,7 +37,7 @@ class ConcreteModule(BaseModule):
 @pytest.fixture
 def module(mocker):
     """Create a ConcreteModule with mocked LLMOrchestrator."""
-    mocker.patch("app.agents.modules.base.LLMOrchestrator")
+    mocker.patch("core.llm.LLMOrchestrator")
     return ConcreteModule(prompts_dir="test_prompts")
 
 
