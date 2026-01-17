@@ -18,6 +18,7 @@ import BillingView from './views/BillingView';
 import CheckoutSuccess from './views/CheckoutSuccess';
 import CheckoutCancel from './views/CheckoutCancel';
 import ChatView from './views/ChatView';
+import GmailConnectView from './views/GmailConnectView';
 import DeleteConfirmDialog from './components/DeleteConfirmDialog';
 
 const AppContent = () => {
@@ -48,6 +49,29 @@ const AppContent = () => {
     const [pendingMessages, setPendingMessages] = useState([]);
     const [focusMode, setFocusMode] = useState(false);
 
+    // Gmail Connection State
+    const [gmailConnected, setGmailConnected] = useState(null); // null = unknown, true/false = checked
+    const [gmailEmail, setGmailEmail] = useState(null);
+
+    // Check Gmail connection status when authenticated
+    useEffect(() => {
+        if (!isAuthenticated || demoMode || gmailConnected !== null) return;
+
+        const checkGmailStatus = async () => {
+            try {
+                const res = await api.get('/auth/status');
+                const data = await res.json();
+                setGmailConnected(data.is_authenticated);
+                setGmailEmail(data.email);
+            } catch (err) {
+                console.error('Failed to check Gmail status', err);
+                setGmailConnected(false);
+            }
+        };
+
+        checkGmailStatus();
+    }, [isAuthenticated, demoMode, gmailConnected]);
+
     // Handle auth state changes and URL-based routing
     useEffect(() => {
         if (authLoading) return;
@@ -63,8 +87,15 @@ const AppContent = () => {
             } else if (path === '/billing') {
                 setCurrentView('billing');
             } else if (currentView === 'landing' || currentView === 'auth' || path === '/dashboard') {
-                setCurrentView('dashboard');
-                window.history.replaceState({}, '', '/dashboard');
+                // Check if Gmail is connected before going to dashboard
+                if (gmailConnected === false && !demoMode) {
+                    setCurrentView('gmail-connect');
+                    window.history.replaceState({}, '', '/connect-gmail');
+                } else if (gmailConnected === true || demoMode) {
+                    setCurrentView('dashboard');
+                    window.history.replaceState({}, '', '/dashboard');
+                }
+                // If gmailConnected is null (still checking), don't navigate yet
             }
         } else if (!demoMode) {
             // Not authenticated and not in demo mode - go to landing
@@ -73,7 +104,7 @@ const AppContent = () => {
                 window.history.replaceState({}, '', '/');
             }
         }
-    }, [isAuthenticated, authLoading, demoMode]);
+    }, [isAuthenticated, authLoading, demoMode, gmailConnected]);
 
     // Load initial data - only on first load or when demoMode changes, NOT on view change
     useEffect(() => {
@@ -98,12 +129,12 @@ const AppContent = () => {
         }
 
         try {
-            const msgRes = await fetch(`${API_BASE_URL}/messages`);
+            const msgRes = await api.get('/messages');
             const msgData = await msgRes.json();
             setMessages(msgData.messages);
             setLastFetchTime(new Date().toISOString());
 
-            const statsRes = await fetch(`${API_BASE_URL}/stats`);
+            const statsRes = await api.get('/stats');
             const statsData = await statsRes.json();
             setStats(statsData);
         } catch (err) {
@@ -118,7 +149,7 @@ const AppContent = () => {
 
         const fetchNewItems = async () => {
             try {
-                const res = await fetch(`${API_BASE_URL}/messages/new?since=${encodeURIComponent(lastFetchTime)}`);
+                const res = await api.get(`/messages/new?since=${encodeURIComponent(lastFetchTime)}`);
                 const data = await res.json();
 
                 if (data.messages && data.messages.length > 0) {
@@ -177,7 +208,7 @@ const AppContent = () => {
             setStats(prev => ({ ...prev, total_messages: prev.total_messages + 1, needs_reply_count: prev.needs_reply_count + 1 }));
         } else {
             try {
-                await fetch(`${API_BASE_URL}/sync`, { method: 'POST' });
+                await api.post('/messages/sync', { max_results: 10 });
                 await new Promise(r => setTimeout(r, 3000));
                 await fetchData();
             } catch (err) {
@@ -192,7 +223,7 @@ const AppContent = () => {
             setCurrentView('dashboard');
         } else {
             try {
-                const res = await fetch(`${API_BASE_URL}/auth/gmail`);
+                const res = await api.get('/auth/gmail');
                 const { auth_url } = await res.json();
                 window.location.href = auth_url;
             } catch (err) {
@@ -233,11 +264,9 @@ const AppContent = () => {
         // Call backend in live mode
         if (!demoMode) {
             try {
-                const endpoint = newStatus === 'completed'
-                    ? `${API_BASE_URL}/tasks/${taskId}/complete`
-                    : `${API_BASE_URL}/tasks/${taskId}/approve`;
-
-                const res = await fetch(endpoint, { method: 'POST' });
+                const res = newStatus === 'completed'
+                    ? await api.post(`/tasks/${taskId}/complete`)
+                    : await api.post(`/tasks/${taskId}/approve`);
 
                 if (!res.ok) {
                     throw new Error('Failed to update task');
@@ -279,9 +308,7 @@ const AppContent = () => {
         // Call backend in live mode
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/tasks/${taskId}/approve`, {
-                    method: 'POST'
-                });
+                const res = await api.post(`/tasks/${taskId}/approve`);
 
                 if (!res.ok) {
                     throw new Error('Failed to approve task');
@@ -331,9 +358,7 @@ const AppContent = () => {
         // Call backend in live mode
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/tasks/${taskId}/dismiss`, {
-                    method: 'POST'
-                });
+                const res = await api.post(`/tasks/${taskId}/dismiss`);
 
                 if (!res.ok) {
                     throw new Error('Failed to dismiss task');
@@ -383,11 +408,7 @@ const AppContent = () => {
         // Call backend in live mode
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(updates)
-                });
+                const res = await api.put(`/tasks/${taskId}`, updates);
 
                 if (!res.ok) {
                     throw new Error('Failed to update task');
@@ -429,11 +450,7 @@ const AppContent = () => {
         // Call backend in live mode
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ deadline_confirmed: true })
-                });
+                const res = await api.put(`/tasks/${taskId}`, { deadline_confirmed: true });
 
                 if (!res.ok) {
                     throw new Error('Failed to confirm deadline');
@@ -473,11 +490,7 @@ const AppContent = () => {
         // Call backend in live mode
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mark_urgent: true })
-                });
+                const res = await api.put(`/tasks/${taskId}`, { mark_urgent: true });
 
                 if (!res.ok) {
                     throw new Error('Failed to confirm urgency');
@@ -522,11 +535,7 @@ const AppContent = () => {
         // Call backend in live mode
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/tasks/manual`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(taskData)
-                });
+                const res = await api.post('/tasks/manual', taskData);
 
                 if (!res.ok) {
                     throw new Error('Failed to create task');
@@ -589,17 +598,13 @@ const AppContent = () => {
         // Call backend in live mode
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/tasks`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message_id: messageId,
-                        title: taskText,
-                        source_snippet: taskText,
-                        task_type: 'explicit',
-                        priority: 'normal',
-                        status: 'approved'
-                    })
+                const res = await api.post('/tasks', {
+                    message_id: messageId,
+                    title: taskText,
+                    source_snippet: taskText,
+                    task_type: 'explicit',
+                    priority: 'normal',
+                    status: 'approved'
                 });
 
                 if (!res.ok) {
@@ -647,12 +652,9 @@ const AppContent = () => {
 
         if (!demoMode) {
             try {
-                const endpoint = restore
-                    ? `${API_BASE_URL}/messages/${messageId}/restore`
-                    : `${API_BASE_URL}/messages/${messageId}/done`;
-                const res = await fetch(endpoint, {
-                    method: 'POST'
-                });
+                const res = restore
+                    ? await api.post(`/messages/${messageId}/status`, { status: 'inbox' })
+                    : await api.post(`/messages/${messageId}/done`);
                 if (!res.ok) throw new Error(restore ? 'Failed to restore' : 'Failed to mark as done');
             } catch (err) {
                 console.error(restore ? "Restore failed" : "Mark done failed", err);
@@ -675,9 +677,7 @@ const AppContent = () => {
 
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/messages/${messageId}/archive`, {
-                    method: 'POST'
-                });
+                const res = await api.post(`/messages/${messageId}/archive`);
                 if (!res.ok) throw new Error('Failed to archive');
             } catch (err) {
                 console.error("Archive failed", err);
@@ -714,9 +714,7 @@ const AppContent = () => {
 
         if (!demoMode) {
             try {
-                const res = await fetch(`${API_BASE_URL}/messages/${messageId}`, {
-                    method: 'DELETE'
-                });
+                const res = await api.delete(`/messages/${messageId}`);
                 if (!res.ok) throw new Error('Failed to delete');
             } catch (err) {
                 console.error("Delete failed", err);
@@ -746,7 +744,7 @@ const AppContent = () => {
         if (demoMode) return null;
 
         try {
-            const res = await fetch(`${API_BASE_URL}/scheduling/suggestions?message_id=${messageId}`);
+            const res = await api.get(`/scheduling/suggestions?message_id=${messageId}`);
             const data = await res.json();
             if (data.suggestions && data.suggestions.length > 0) {
                 // Get the latest pending suggestion
@@ -784,11 +782,7 @@ const AppContent = () => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/scheduling/suggestions/${suggestionId}/send`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ edited_reply: editedReply })
-            });
+            const res = await api.post(`/scheduling/suggestions/${suggestionId}/send`, { edited_reply: editedReply });
 
             if (!res.ok) throw new Error('Failed to send');
 
@@ -825,9 +819,7 @@ const AppContent = () => {
         }
 
         try {
-            await fetch(`${API_BASE_URL}/scheduling/suggestions/${suggestionId}/dismiss`, {
-                method: 'POST'
-            });
+            await api.post(`/scheduling/suggestions/${suggestionId}/dismiss`);
 
             setSchedulingSuggestions(prev => {
                 const updated = { ...prev };
@@ -856,15 +848,13 @@ const AppContent = () => {
 
         setIsRefreshingScheduling(true);
         try {
-            const res = await fetch(`${API_BASE_URL}/scheduling/detect?message_id=${messageId}`, {
-                method: 'POST'
-            });
+            const res = await api.post(`/scheduling/detect?message_id=${messageId}`);
 
             if (res.ok) {
                 const result = await res.json();
                 if (result.success && result.suggestion_id) {
                     // Fetch the updated suggestion
-                    const suggestionRes = await fetch(`${API_BASE_URL}/scheduling/suggestions/${result.suggestion_id}`);
+                    const suggestionRes = await api.get(`/scheduling/suggestions/${result.suggestion_id}`);
                     if (suggestionRes.ok) {
                         const suggestion = await suggestionRes.json();
                         setSchedulingSuggestions(prev => ({
@@ -891,13 +881,9 @@ const AppContent = () => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/calendar/events`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    suggestion_id: suggestionId,
-                    selected_slot_index: slotIndex
-                })
+            const res = await api.post('/calendar/events', {
+                suggestion_id: suggestionId,
+                selected_slot_index: slotIndex
             });
 
             if (!res.ok) throw new Error('Failed to create event');
@@ -954,6 +940,17 @@ const AppContent = () => {
 
         case 'auth':
             return <AuthPage onNavigate={navigate} />;
+
+        case 'gmail-connect':
+            return (
+                <GmailConnectView
+                    onNavigate={navigate}
+                    onConnected={() => {
+                        setGmailConnected(true);
+                        navigate('dashboard');
+                    }}
+                />
+            );
 
         case 'dashboard':
             // Filter to only show inbox messages (not done or archived)

@@ -9,7 +9,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 export default function FocusScreen() {
   const [tasks, setTasks] = useState(demoData.tasks);
 
-  const toggleTask = (id: string) => {
+  const toggleTask = (id: number) => {
     setTasks(prev => prev.map(task =>
       task.id === id
         ? { ...task, status: task.status === 'done' ? 'pending' : 'done' }
@@ -22,7 +22,7 @@ export default function FocusScreen() {
       <StatusBar style="dark" />
       <FlatList
         data={tasks}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.id.toString()}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => (
           <Pressable

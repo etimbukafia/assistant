@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Archive, Trash2, X } from 'lucide-react';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 
 const PREF_KEY = 'skip_delete_confirmation';
 
@@ -27,7 +27,7 @@ const DeleteConfirmDialog = ({
             }
 
             try {
-                const res = await fetch(`${API_BASE_URL}/memory/preferences?context_type=task_review`);
+                const res = await api.get('/memory/preferences?context_type=task_review');
                 if (res.ok) {
                     const data = await res.json();
                     const skipPref = (data.preferences || []).find(p => p.key === PREF_KEY);
@@ -61,15 +61,11 @@ const DeleteConfirmDialog = ({
         if (dontShowAgain && !demoMode) {
             // Save preference to backend
             try {
-                await fetch(`${API_BASE_URL}/memory/preferences`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        key: PREF_KEY,
-                        value: 'true',
-                        context_type: 'task_review',
-                        source: 'manual'
-                    })
+                await api.post('/memory/preferences', {
+                    key: PREF_KEY,
+                    value: 'true',
+                    context_type: 'task_review',
+                    source: 'manual'
                 });
             } catch (err) {
                 console.error('Failed to save preference:', err);

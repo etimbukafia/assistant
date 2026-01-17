@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 
 const SubscriptionContext = createContext({});
 
@@ -19,11 +19,7 @@ export const SubscriptionProvider = ({ children }) => {
         }
 
         try {
-            const response = await fetch(`${API_BASE_URL}/billing/subscription`, {
-                headers: {
-                    'Authorization': `Bearer ${session.access_token}`,
-                },
-            });
+            const response = await api.get('/billing/subscription');
 
             if (!response.ok) {
                 throw new Error('Failed to fetch subscription');
@@ -55,21 +51,35 @@ export const SubscriptionProvider = ({ children }) => {
         return () => window.removeEventListener('trial-expired', handleTrialExpired);
     }, [fetchSubscription]);
 
+    // Listen for subscription-required events (402 responses)
+    useEffect(() => {
+        const handleSubscriptionRequired = (event) => {
+            console.warn('Subscription required:', event.detail);
+            fetchSubscription(); // Refresh to get latest status
+        };
+
+        window.addEventListener('subscription-required', handleSubscriptionRequired);
+        return () => window.removeEventListener('subscription-required', handleSubscriptionRequired);
+    }, [fetchSubscription]);
+
+    // Listen for pro-required events (403 responses for pro features)
+    useEffect(() => {
+        const handleProRequired = (event) => {
+            console.warn('Pro subscription required:', event.detail);
+        };
+
+        window.addEventListener('pro-required', handleProRequired);
+        return () => window.removeEventListener('pro-required', handleProRequired);
+    }, []);
+
     const createCheckout = async (successUrl, cancelUrl) => {
         if (!session?.access_token) {
             throw new Error('Not authenticated');
         }
 
-        const response = await fetch(`${API_BASE_URL}/billing/checkout`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${session.access_token}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                success_url: successUrl,
-                cancel_url: cancelUrl,
-            }),
+        const response = await api.post('/billing/checkout', {
+            success_url: successUrl,
+            cancel_url: cancelUrl,
         });
 
         if (!response.ok) {
@@ -86,12 +96,7 @@ export const SubscriptionProvider = ({ children }) => {
             throw new Error('Not authenticated');
         }
 
-        const response = await fetch(`${API_BASE_URL}/billing/cancel`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${session.access_token}`,
-            },
-        });
+        const response = await api.post('/billing/cancel');
 
         if (!response.ok) {
             const data = await response.json();
@@ -108,11 +113,7 @@ export const SubscriptionProvider = ({ children }) => {
             throw new Error('Not authenticated');
         }
 
-        const response = await fetch(`${API_BASE_URL}/billing/portal-url`, {
-            headers: {
-                'Authorization': `Bearer ${session.access_token}`,
-            },
-        });
+        const response = await api.get('/billing/portal-url');
 
         if (!response.ok) {
             const data = await response.json();

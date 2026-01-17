@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Clock, Globe, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 
 /**
  * CalendarPreferencesPanel
@@ -40,7 +40,7 @@ const CalendarPreferencesPanel = () => {
 
     const fetchSettings = async () => {
         try {
-            const res = await fetch(`${API_BASE_URL}/calendar/settings`);
+            const res = await api.get('/calendar/settings');
             if (!res.ok) throw new Error('Failed to fetch settings');
             const data = await res.json();
             setSettings(data);
@@ -53,7 +53,7 @@ const CalendarPreferencesPanel = () => {
 
     const fetchCalendars = async () => {
         try {
-            const res = await fetch(`${API_BASE_URL}/calendar/calendars`);
+            const res = await api.get('/calendar/calendars');
             if (!res.ok) throw new Error('Failed to fetch calendars');
             const data = await res.json();
             setCalendars(data.calendars || []);
@@ -68,11 +68,7 @@ const CalendarPreferencesPanel = () => {
         setSuccess(false);
 
         try {
-            const res = await fetch(`${API_BASE_URL}/calendar/settings`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(settings)
-            });
+            const res = await api.put('/calendar/settings', settings);
 
             if (!res.ok) throw new Error('Failed to save settings');
 

@@ -43,6 +43,43 @@ export async function apiFetch(endpoint, options = {}) {
         // If refresh failed, the auth state listener will handle sign out
     }
 
+    // Handle 402 - Subscription required
+    if (response.status === 402) {
+        try {
+            const data = await response.clone().json();
+            window.dispatchEvent(new CustomEvent('subscription-required', {
+                detail: {
+                    error: data.detail?.error || 'subscription_required',
+                    message: data.detail?.message || 'This feature requires an active subscription.',
+                    tier: data.detail?.tier,
+                    status: data.detail?.status
+                }
+            }));
+        } catch (e) {
+            window.dispatchEvent(new CustomEvent('subscription-required', {
+                detail: { error: 'subscription_required', message: 'Subscription required' }
+            }));
+        }
+    }
+
+    // Handle 403 - Feature gated (Pro tier required)
+    if (response.status === 403) {
+        try {
+            const data = await response.clone().json();
+            if (data.detail?.error === 'pro_required') {
+                window.dispatchEvent(new CustomEvent('pro-required', {
+                    detail: {
+                        error: data.detail?.error || 'pro_required',
+                        message: data.detail?.message || 'This feature requires a Pro subscription.',
+                        currentTier: data.detail?.current_tier
+                    }
+                }));
+            }
+        } catch (e) {
+            // Response might not be JSON
+        }
+    }
+
     return response;
 }
 

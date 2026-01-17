@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Sparkles, Check, X, Ban } from 'lucide-react';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 
 /**
  * Pattern Suggestion Banner
@@ -86,7 +86,7 @@ const PatternSuggestionBanner = ({ demoMode = false, onDismissAll }) => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/patterns/suggestions`);
+            const res = await api.get('/memory/patterns/suggestions');
             if (!res.ok) throw new Error('Failed to fetch patterns');
             const data = await res.json();
             setPatterns(data.patterns || []);
@@ -110,11 +110,7 @@ const PatternSuggestionBanner = ({ demoMode = false, onDismissAll }) => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/patterns/${patternId}/action`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action })
-            });
+            const res = await api.post(`/memory/patterns/${patternId}/action`, { action });
 
             if (!res.ok) throw new Error('Failed to process action');
 

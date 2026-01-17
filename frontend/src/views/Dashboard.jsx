@@ -6,7 +6,7 @@ import PatternSuggestionBanner from '../components/PatternSuggestionBanner';
 import NewItemsIndicator from '../components/NewItemsIndicator';
 import { MessageChips } from '../components/MessageChip';
 import { timeAgo } from '../utils/helpers';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 import { hasUrgentTasks, isUrgentTask } from '../utils/urgency';
 import { classifyMessage } from '../utils/classifyMessage';
 
@@ -225,7 +225,9 @@ const Dashboard = ({
 
     const testAPI = async (endpoint, method = 'GET') => {
         try {
-            const res = await fetch(`${API_BASE_URL}${endpoint}`, { method });
+            const res = method === 'GET'
+                ? await api.get(endpoint)
+                : await api.post(endpoint);
             const data = await res.json();
             setDebugLog(`✅ ${method} ${endpoint}\n${JSON.stringify(data, null, 2)}`);
         } catch (err) {

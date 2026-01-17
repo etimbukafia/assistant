@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Sparkles, RefreshCw, CheckCircle2, Copy, Plus, X } from 'lucide-react';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 
 const FollowUpGenerator = ({ eventId, eventTitle, relatedMessageIds = [], onFollowUpsCreated }) => {
     const [loading, setLoading] = useState(false);
@@ -22,9 +22,7 @@ const FollowUpGenerator = ({ eventId, eventTitle, relatedMessageIds = [], onFoll
         setLoading(true);
         setFollowUps([]);
         try {
-            const res = await fetch(`${API_BASE_URL}/calendar/events/${eventId}/generate-followups`, {
-                method: 'POST'
-            });
+            const res = await api.post(`/calendar/events/${eventId}/generate-followups`);
             const data = await res.json();
             setFollowUps(data.follow_ups || []);
         } catch (err) {
@@ -54,17 +52,13 @@ const FollowUpGenerator = ({ eventId, eventTitle, relatedMessageIds = [], onFoll
                     return;
                 }
 
-                const res = await fetch(`${API_BASE_URL}/tasks`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message_id: messageId,
-                        title: item.title,
-                        description: item.description || `Follow-up from meeting: ${eventTitle}`,
-                        task_type: item.type === 'reminder' ? 'implied_followup' : 'explicit',
-                        priority: item.priority || 'normal',
-                        status: 'approved'
-                    })
+                const res = await api.post('/tasks', {
+                    message_id: messageId,
+                    title: item.title,
+                    description: item.description || `Follow-up from meeting: ${eventTitle}`,
+                    task_type: item.type === 'reminder' ? 'implied_followup' : 'explicit',
+                    priority: item.priority || 'normal',
+                    status: 'approved'
                 });
 
                 if (res.ok) {

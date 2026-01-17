@@ -3,7 +3,7 @@ import { Text, TextProps, StyleSheet } from 'react-native';
 import { Colors, Typography } from '../../theme/Theme';
 
 interface DonnaTextProps extends TextProps {
-    variant?: keyof typeof Typography;
+    variant?: keyof typeof Typography | 'overline';
     color?: string;
 }
 

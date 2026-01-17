@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Clock, MapPin, ChevronRight, RefreshCw, X, Sparkles } from 'lucide-react';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 import MeetingBriefingCard from '../components/MeetingBriefingCard';
 import FollowUpGenerator from '../components/FollowUpGenerator';
 
@@ -51,7 +51,7 @@ const CalendarEventsView = ({ onNavigateToDetail, demoMode }) => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/calendar/events`);
+            const res = await api.get('/calendar/events');
             const data = await res.json();
             setEvents(data.events || []);
         } catch (err) {
@@ -67,7 +67,7 @@ const CalendarEventsView = ({ onNavigateToDetail, demoMode }) => {
             await new Promise(r => setTimeout(r, 2000));
         } else {
             try {
-                await fetch(`${API_BASE_URL}/calendar/sync`, { method: 'POST' });
+                await api.post('/calendar/sync');
                 await fetchEvents();
             } catch (err) {
                 console.error("Sync failed", err);

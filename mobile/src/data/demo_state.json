@@ -1,58 +1,129 @@
 {
     "messages": [
         {
-            "id": "m1",
-            "type": "urgent",
-            "title": "Board Meeting Conflict",
-            "sender": "Sarah Miller",
+            "id": 1,
+            "message_id": "msg_001",
+            "thread_id": "thread_001",
+            "sender": "Sarah Miller <sarah.miller@board.org>",
+            "recipient": "me@example.com",
+            "subject": "Board Meeting Conflict",
             "snippet": "The Q4 strategy session overlaps with your deep work block. Should we adjust?",
-            "time": "3h ago",
-            "insight": "The Executive's contact is usually slow on Fridays; I've suggested we push the deadline to Monday.",
-            "suggestedAction": "Suggest Times"
+            "body": "Hi,\n\nI noticed the Q4 strategy session overlaps with your deep work block on Friday. Should we adjust the time or move the deep work block?\n\nBest,\nSarah",
+            "received_at": "2024-01-16T09:30:00Z",
+            "summary": "Sarah flagged a conflict between the Q4 strategy session and your deep work block this Friday.",
+            "needs_reply": true,
+            "processed": true,
+            "scheduling_intent": true,
+            "tasks": [
+                {
+                    "id": 101,
+                    "message_id": 1,
+                    "title": "Reschedule Q4 Strategy Session",
+                    "status": "pending_approval",
+                    "priority": "urgent",
+                    "urgency_suggested_by_ai": true
+                }
+            ]
         },
         {
-            "id": "m2",
-            "type": "insight",
-            "title": "Partner Project Update",
-            "sender": "David Chen",
+            "id": 2,
+            "message_id": "msg_002",
+            "thread_id": "thread_002",
+            "sender": "David Chen <d.chen@partners.com>",
+            "recipient": "me@example.com",
+            "subject": "Partner Project Update",
             "snippet": "We've finalized the vendor list for the upcoming product launch.",
-            "time": "5h ago",
-            "insight": "I've cross-referenced this with the Q3 budget—we are 5% under projections.",
-            "suggestedAction": "Draft Reply"
+            "body": "Just wanted to let you know we've finalized the vendor list for the upcoming product launch. Everything is on track for the Q3 release.",
+            "received_at": "2024-01-16T08:15:00Z",
+            "summary": "Vendor list finalized for product launch. Project is on track.",
+            "needs_reply": false,
+            "processed": true,
+            "tasks": [],
+            "extracted_tasks": [
+                "Review vendor list"
+            ]
         },
         {
-            "id": "m3",
-            "type": "fyi",
-            "title": "Weekly Newsletter",
-            "sender": "Tech Insider",
+            "id": 3,
+            "message_id": "msg_003",
+            "thread_id": "thread_003",
+            "sender": "Tech Insider <newsletter@techinsider.io>",
+            "recipient": "me@example.com",
+            "subject": "Weekly Newsletter: AI Trends",
             "snippet": "Here's what happened in the industry this week...",
-            "time": "1d ago",
-            "insight": "Summarized: 3 competitors announced AI integrations. No action needed.",
-            "suggestedAction": "Archive"
+            "body": "Top stories this week: 3 competitors announced AI integrations...",
+            "received_at": "2024-01-15T10:00:00Z",
+            "summary": "Weekly newsletter summarizing AI trends. No action needed.",
+            "needs_reply": false,
+            "processed": true,
+            "tasks": []
         }
     ],
     "tasks": [
         {
-            "id": "t1",
+            "id": 201,
+            "message_id": 0,
             "title": "Prep Q4 Budget",
             "priority": "high",
-            "status": "pending"
+            "status": "pending_approval",
+            "source_snippet": "Please have the budget ready by Friday."
         },
         {
-            "id": "t2",
+            "id": 202,
+            "message_id": 0,
             "title": "Review Sarah's Report",
-            "priority": "medium",
-            "status": "pending"
+            "priority": "normal",
+            "status": "approved",
+            "deadline": "2024-01-17T17:00:00Z"
         },
         {
-            "id": "t3",
+            "id": 203,
+            "message_id": 0,
             "title": "Book Dinner Venue",
             "priority": "low",
-            "status": "done"
+            "status": "completed"
         }
     ],
-    "schedule": {
-        "date": "Jan 12th",
-        "conflicts": 1
-    }
+    "calendar": [
+        {
+            "id": 301,
+            "title": "Architecture Review",
+            "start_time": "2024-01-16T14:00:00Z",
+            "end_time": "2024-01-16T15:00:00Z",
+            "location": "Zoom",
+            "status": "upcoming",
+            "briefing": {
+                "agenda": "Review the new agentic architecture for the assistant.",
+                "prep_complete": false,
+                "prep_warnings": [
+                    {
+                        "message": "No agenda document shared yet",
+                        "severity": "medium",
+                        "suggestion": "Share the architecture doc"
+                    }
+                ],
+                "attendees": [
+                    {
+                        "name": "Sarah Miller",
+                        "email": "sarah.miller@board.org"
+                    },
+                    {
+                        "name": "David Chen",
+                        "email": "d.chen@partners.com"
+                    }
+                ],
+                "related_emails": [],
+                "open_tasks": []
+            }
+        },
+        {
+            "id": 302,
+            "title": "Product Sync",
+            "start_time": "2024-01-16T10:00:00Z",
+            "end_time": "2024-01-16T10:30:00Z",
+            "location": "Microsoft Teams",
+            "status": "completed",
+            "briefing": null
+        }
+    ]
 }

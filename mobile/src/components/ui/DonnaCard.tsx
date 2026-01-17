@@ -55,7 +55,7 @@ export const DonnaCard: React.FC<DonnaCardProps> = ({
                 {insight && (
                     <View style={styles.insightBox}>
                         <DonnaText variant="caption" color={Colors.accentPrecision} style={styles.insightLabel}>
-                            CERULEAN INSIGHT
+                            DONNA'S SUMMARY
                         </DonnaText>
                         <DonnaText variant="bodyBase" style={styles.insightText}>
                             {insight}

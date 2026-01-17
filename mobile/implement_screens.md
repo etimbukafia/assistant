@@ -49,21 +49,21 @@ A step-by-step task list for implementing all mobile screens.
 ## Phase 2: Navigation & Profile Foundation
 
 ### 2.1 Tab Layout (`app/(tabs)/_layout.tsx`)
-- [ ] Bottom tab bar with 4 tabs (spacious, premium feel):
+- [x] Bottom tab bar with 4 tabs (spacious, premium feel):
   - Inbox (mail icon)
   - Focus (checkmark icon)
   - Calendar (calendar icon)
   - Chat (message icon)
-- [ ] Apply `Colors.bgBase` to tab bar
-- [ ] Active tab: `Colors.accentSecondary` (Copper/Gold)
+- [x] Apply `Colors.bgBase` to tab bar
+- [x] Active tab: `Colors.accentSecondary` (Copper/Gold)
 
 ### 2.2 Global Header (`app/(tabs)/_layout.tsx`)
-- [ ] Implement `headerLeft` with **User Avatar/Monogram**:
+- [x] Implement `headerLeft` with **User Avatar/Monogram**:
   - Tapping opens `app/settings/profile.tsx` as a bottom sheet/modal.
-- [ ] Implement `headerRight` placeholders:
+- [x] Implement `headerRight` placeholders:
   - Notifications (bell)
   - Search (glass)
-- [ ] Center Title: "Donna" or Page Title in Serif font.
+- [x] Center Title: "Donna" or Page Title in Serif font.
 
 ---
 

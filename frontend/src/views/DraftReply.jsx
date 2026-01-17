@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, Copy } from 'lucide-react';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 
 const DraftReply = ({ message, onBack, demoMode }) => {
     const [draft, setDraft] = useState('');
@@ -20,9 +20,7 @@ const DraftReply = ({ message, onBack, demoMode }) => {
                 await new Promise(r => setTimeout(r, 1500));
                 setDraft(`Hi ${message.sender.split('@')[0]},\n\nI'll send over the ${message.subject} details you requested shortly.\n\nBest,\n[Your Name]`);
             } else {
-                const res = await fetch(`${API_BASE_URL}/messages/${message.id}/draft-reply`, {
-                    method: 'POST'
-                });
+                const res = await api.post(`/messages/${message.id}/draft-reply`);
                 const data = await res.json();
                 setDraft(data.draft);
             }

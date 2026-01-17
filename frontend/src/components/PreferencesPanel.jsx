@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Save, X, Sparkles } from 'lucide-react';
-import { API_BASE_URL } from '../utils/constants';
+import { api } from '../utils/api';
 
 const CONTEXT_TYPES = [
     { value: 'drafting', label: 'Email Drafting', description: 'Tone, length, sign-off preferences' },
@@ -180,7 +180,7 @@ const PreferencesPanel = ({ demoMode = false }) => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/preferences`);
+            const res = await api.get('/memory/preferences');
             if (!res.ok) throw new Error('Failed to fetch preferences');
             const data = await res.json();
             setPreferences(data.preferences || []);
@@ -206,11 +206,7 @@ const PreferencesPanel = ({ demoMode = false }) => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/preferences`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key, value, context_type: contextType, source: 'manual' })
-            });
+            const res = await api.post('/memory/preferences', { key, value, context_type: contextType, source: 'manual' });
             if (!res.ok) throw new Error('Failed to add preference');
             const newPref = await res.json();
             setPreferences(prev => [...prev, newPref]);
@@ -227,11 +223,7 @@ const PreferencesPanel = ({ demoMode = false }) => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/preferences/${id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ value })
-            });
+            const res = await api.put(`/memory/preferences/${id}`, { value });
             if (!res.ok) throw new Error('Failed to update preference');
             const updated = await res.json();
             setPreferences(prev => prev.map(p => p.id === id ? updated : p));
@@ -247,9 +239,7 @@ const PreferencesPanel = ({ demoMode = false }) => {
         }
 
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/preferences/${id}`, {
-                method: 'DELETE'
-            });
+            const res = await api.delete(`/memory/preferences/${id}`);
             if (!res.ok) throw new Error('Failed to delete preference');
             setPreferences(prev => prev.filter(p => p.id !== id));
         } catch (err) {
@@ -294,11 +284,10 @@ const PreferencesPanel = ({ demoMode = false }) => {
                     <button
                         key={ct.value}
                         onClick={() => setExpandedContext(ct.value)}
-                        className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                            expandedContext === ct.value
+                        className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${expandedContext === ct.value
                                 ? 'bg-blue-100 text-blue-700'
                                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+                            }`}
                     >
                         {ct.label}
                     </button>

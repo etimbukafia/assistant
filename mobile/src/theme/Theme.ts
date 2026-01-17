@@ -1,15 +1,27 @@
 export const Colors = {
-    bgBase: '#F9F6F2', // Linen - Higher-quality bond paper feel
-    bgElevated: '#FFFFFF', // Pure white for cards to pop against linen
+    // Base - Linen/Paper
+    bgBase: '#F9F6F2',
+    bgSurface: '#FFFFFF', // Added for cards/chips
+    bgElevated: '#FFFFFF',
+
+    // Accents - Boutique Stationery
     accentPrimary: '#7E2E2E', // Rich Auburn - Headlines & Primary CTAs
     accentSecondary: '#D97745', // Natural Copper - Icons & Interactive accents
     accentPrecision: '#1E3A8A', // Navy - Structure & Grounding
+
+    // Text
     textPrimary: '#050505', // Obsidian Black - Maximum legibility
-    textMuted: '#6B7280', // Grey for secondary text
-    border: '#E5E7EB', // Subtle light border
+    textSecondary: '#6B7280', // Grey for secondary text
+    textMuted: '#6B7280',   // Old value for consistency
+
+    // Borders
+    border: '#E5E7EB',
+    borderLight: '#E5E7EB', // Mapping to existing border for now to avoid regression
     borderStrong: '#1E3A8A', // Navy for grounding dividers
-    success: '#8A9A5B', // Sage Green - Positive insights
-    error: '#800020', // Burgundy - High-priority alerts
+
+    // Status
+    success: '#8A9A5B', // Sage Green
+    error: '#800020', // Burgundy
 };
 
 export const Spacing = {
@@ -61,6 +73,13 @@ export const Typography = {
         fontFamily: 'Inter_400Regular',
         fontSize: 12,
         lineHeight: 18,
+    },
+    overline: {
+        fontFamily: 'Inter_700Bold', // Using Inter Bold for section headers
+        fontSize: 11,
+        letterSpacing: 1.5,
+        textTransform: 'uppercase' as const,
+        color: Colors.textMuted,
     },
     logo: {
         fontFamily: 'PlayfairDisplay_600SemiBold',
