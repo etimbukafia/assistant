@@ -123,6 +123,8 @@ app.include_router(memory.router)
 app.include_router(gdpr.router)
 app.include_router(system.router)
 app.include_router(chat.router)
+app.include_router(subscription.router)
+app.include_router(sync.router)
 
 
 @app.get("/")

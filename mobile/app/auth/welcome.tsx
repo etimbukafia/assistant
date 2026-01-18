@@ -1,17 +1,35 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, SafeAreaView, TouchableOpacity, Dimensions } from 'react-native';
+import { View, StyleSheet, SafeAreaView, TouchableOpacity, Dimensions, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
+import { useAuth } from '../../src/context/AuthContext';
 
 const { width } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
     const router = useRouter();
-    const handleGoogleAuth = () => {
-        router.push('/auth/google/choose-account' as any);
+    const { signInWithGoogle } = useAuth();
+    const [isLoading, setIsLoading] = useState(false);
+
+    const handleGoogleAuth = async () => {
+        try {
+            setIsLoading(true);
+            await signInWithGoogle();
+            // On success, the auth state change will trigger navigation
+            router.replace('/(tabs)' as any);
+        } catch (error: any) {
+            console.error('Google auth error:', error);
+            Alert.alert(
+                'Sign In Failed',
+                error?.message || 'Unable to sign in with Google. Please try again.',
+                [{ text: 'OK' }]
+            );
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     return (
@@ -29,7 +47,7 @@ export default function WelcomeScreen() {
                 {/* Title Section */}
                 <View style={styles.titleContainer}>
                     <DonnaText style={styles.title}>
-                        Hi
+                        Welcome!
                     </DonnaText>
                 </View>
 
@@ -37,15 +55,22 @@ export default function WelcomeScreen() {
                 <View style={styles.actionsContainer}>
                     {/* Google Button */}
                     <TouchableOpacity
-                        style={styles.googleButton}
+                        style={[styles.googleButton, isLoading && styles.googleButtonDisabled]}
                         activeOpacity={0.9}
                         onPress={handleGoogleAuth}
+                        disabled={isLoading}
                     >
-                        {/* Visual G icon placeholder or text */}
-                        <View style={styles.googleIconPlaceholder}>
-                            <DonnaText style={styles.googleIconText}>G</DonnaText>
-                        </View>
-                        <DonnaText style={styles.googleButtonText}>Continue with Google</DonnaText>
+                        {isLoading ? (
+                            <ActivityIndicator size="small" color="#4285F4" />
+                        ) : (
+                            <>
+                                {/* Visual G icon placeholder or text */}
+                                <View style={styles.googleIconPlaceholder}>
+                                    <DonnaText style={styles.googleIconText}>G</DonnaText>
+                                </View>
+                                <DonnaText style={styles.googleButtonText}>Continue with Google</DonnaText>
+                            </>
+                        )}
                     </TouchableOpacity>
                 </View>
             </View>
@@ -100,6 +125,9 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
         elevation: 3,
         marginBottom: Spacing.sm,
+    },
+    googleButtonDisabled: {
+        opacity: 0.6,
     },
     googleIconPlaceholder: {
         marginRight: 12,

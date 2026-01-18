@@ -79,6 +79,9 @@ class UserSettingsResponse(BaseModel):
     task_detection_instructions: Optional[str] = None
     reminder_preferences: Dict[str, Any]
     enable_quick_reply_from_task: bool
+    trial_ends_at: Optional[datetime] = None
+    subscription_status: Optional[str] = None
+    initial_sync_completed: bool = False
     created_at: datetime
     updated_at: datetime
 

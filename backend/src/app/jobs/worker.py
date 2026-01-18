@@ -626,6 +626,71 @@ async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[s
         db.close()
 
 
+async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'email_backfill' tasks.
+    
+    Fetches emails from the specified time window (default 24h) and queues them for processing.
+    Marks initial_sync_completed = True on success.
+    """
+    from app.data.models import GmailAccount
+    from app.infra.database import SessionLocal
+    from app.integrations.gmail import GmailClient
+    from app.jobs.queue import enqueue_task
+
+    user_id = payload.get("user_id")
+    hours_back = payload.get("hours_back", 24)
+    
+    if not user_id:
+        raise ValueError(f"Task {task_id}: user_id is required")
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
+    try:
+        logger.info(f"Starting email backfill for user {user_id} (last {hours_back}h)")
+        
+        client = GmailClient(db=db, user_id=user_id)
+        if not client.load_credentials():
+            logger.error(f"Failed to load credentials for user {user_id}")
+            return
+
+        # Fetch messages
+        # Note: Gmail API "newer_than" supports d, h, m
+        query = f"newer_than:{hours_back}h"
+        # We fetch up to 500 messages for initial sync
+        messages = client.get_messages(max_results=500, query=query)
+        
+        logger.info(f"Fetched {len(messages)} messages for backfill")
+
+        # Queue processing tasks
+        for msg in messages:
+            enqueue_task(
+                task_type="process_email",
+                payload={"message_id": msg["message_id"], "user_id": user_id},
+                correlation_id=correlation_id,
+                db=db
+            )
+            
+        # Mark sync as completed
+        gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
+        if gmail_account:
+            gmail_account.initial_sync_completed = True
+            # Update last_sync to avoid immediate re-sync overlap
+            gmail_account.last_sync = datetime.now(timezone.utc)
+            db.commit()
+            
+        logger.info(f"Email backfill complete for user {user_id}")
+        
+    except Exception as e:
+        logger.error(f"Email backfill failed: {e}", exc_info=True)
+        # Don't re-raise to avoid infinite retries on fatal errors? 
+        # For now, let it fail and maybe retry later manually or via logic
+        raise
+    finally:
+        db.close()
+
+
 # =============================================================================
 # Digest Handlers
 # =============================================================================
@@ -947,6 +1012,7 @@ TASK_HANDLERS = {
     "generate_briefing": handle_generate_briefing,
     "generate_digest": handle_generate_digest,
     "deliver_digest": handle_deliver_digest,
+    "email_backfill": handle_email_backfill,
 }
 
 

@@ -10,8 +10,9 @@ export default function ConsentScreen() {
     const router = useRouter();
 
     const handleAllow = () => {
-        // Navigate to tabs (inbox)
-        router.push('/(tabs)' as any);
+        // Dismiss modal and navigate to tabs (inbox)
+        router.dismissAll();
+        router.replace('/(tabs)' as any);
     };
 
     const handleCancel = () => {

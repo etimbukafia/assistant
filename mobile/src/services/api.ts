@@ -1,6 +1,12 @@
+/**
+ * API service configured to use Supabase authentication
+ * 
+ * Automatically attaches JWT tokens from Supabase auth to all requests.
+ */
+
 import axios from 'axios';
-import { Storage } from '../utils/Storage';
 import { Platform } from 'react-native';
+import { supabase } from '../utils/supabase';
 
 // Use localhost for iOS simulator, 10.0.2.2 for Android emulator
 const DEV_API_URL = Platform.OS === 'android'
@@ -14,15 +20,42 @@ export const api = axios.create({
     },
 });
 
-// Add auth interceptor
+// Add auth interceptor using Supabase session
 api.interceptors.request.use(async (config) => {
     try {
-        const token = await Storage.getItem('auth_token');
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (session?.access_token) {
+            config.headers.Authorization = `Bearer ${session.access_token}`;
         }
     } catch (error) {
-        console.error('Error attaching auth token', error);
+        console.error('Error attaching auth token:', error);
     }
     return config;
 });
+
+// Handle 401 responses - try to refresh session
+api.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+        const originalRequest = error.config;
+
+        if (error.response?.status === 401 && !originalRequest._retry) {
+            originalRequest._retry = true;
+
+            try {
+                const { data: { session }, error: refreshError } =
+                    await supabase.auth.refreshSession();
+
+                if (session && !refreshError) {
+                    originalRequest.headers.Authorization = `Bearer ${session.access_token}`;
+                    return api(originalRequest);
+                }
+            } catch (refreshError) {
+                console.error('Session refresh failed:', refreshError);
+            }
+        }
+
+        return Promise.reject(error);
+    }
+);

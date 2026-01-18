@@ -9,9 +9,18 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 
 @router.get("/", response_model=UserSettingsResponse)
 def get_settings(
-    settings: UserSettings = Depends(get_user_settings)
+    settings: UserSettings = Depends(get_user_settings),
+    db: Session = Depends(get_db_for_user)
 ):
     """Get current user settings. Auto-creates on first access."""
+    # Enriched response with Gmail account status
+    from app.data.models import GmailAccount
+    gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == settings.user_id).first()
+    
+    # We attach it to the settings object (schema will pick it up via from_attributes)
+    # Note: simple assignment works because Pydantic getter will look for attributes
+    settings.initial_sync_completed = gmail_account.initial_sync_completed if gmail_account else False
+    
     return settings
 
 

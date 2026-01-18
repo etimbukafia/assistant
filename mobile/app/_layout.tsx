@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 import { Colors } from '../src/theme/Theme';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 // Google Fonts
 import {
@@ -16,6 +17,10 @@ import {
   Inter_400Regular,
 } from '@expo-google-fonts/inter';
 import { AuthProvider } from '../src/context/AuthContext';
+import { ChatProvider, useChat } from '../src/context/ChatContext';
+import { OmniChatOverlay } from '../src/components/chat/OmniChatOverlay';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '../src/utils/queryClient';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -43,6 +48,12 @@ const DonnaTheme = {
   },
 };
 
+// Wrapper component to consume chat context
+function GlobalChatOverlay() {
+  const { isChatOpen, closeChat } = useChat();
+  return <OmniChatOverlay isVisible={isChatOpen} onClose={closeChat} />;
+}
+
 export default function RootLayout() {
   const [loaded, error] = useFonts({
     PlayfairDisplay_600SemiBold,
@@ -57,11 +68,18 @@ export default function RootLayout() {
   }, [error]);
 
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync().catch(() => {
-        // Ignore error if splash screen is already hidden
-      });
-    }
+    const hideSplash = async () => {
+      if (loaded) {
+        // Small delay to ensure native splash screen is registered
+        await new Promise(resolve => setTimeout(resolve, 100));
+        try {
+          await SplashScreen.hideAsync();
+        } catch (e) {
+          // Ignore - splash screen may already be hidden or not registered
+        }
+      }
+    };
+    hideSplash();
   }, [loaded]);
 
   if (!loaded) {
@@ -69,20 +87,34 @@ export default function RootLayout() {
   }
 
   return (
-    <AuthProvider>
-      <ThemeProvider value={DonnaTheme}>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="login" />
-          <Stack.Screen name="auth/welcome" />
-          <Stack.Screen name="auth/google/choose-account" options={{ presentation: 'modal' }} />
-          <Stack.Screen name="auth/google/consent" options={{ presentation: 'modal' }} />
-          <Stack.Screen name="auth/activation-explanation" options={{ presentation: 'modal' }} />
-          <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
-          <Stack.Screen name="settings/profile" options={{ presentation: 'modal' }} />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        </Stack>
-      </ThemeProvider>
-    </AuthProvider>
+    <QueryClientProvider client={queryClient}>
+      <ChatProvider>
+        <AuthProvider>
+          <ThemeProvider value={DonnaTheme}>
+            <GestureHandlerRootView style={{ flex: 1 }}>
+              <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="index" />
+                <Stack.Screen name="login" />
+                <Stack.Screen name="auth/welcome" />
+                <Stack.Screen name="auth/google/choose-account" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="auth/google/consent" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="auth/activation-explanation" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="settings/profile" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="settings/activate_trial" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="(tabs)" options={{
+                  headerShown: false,
+                  presentation: 'card',
+                  gestureEnabled: false,
+                  animation: 'fade',
+                }} />
+              </Stack>
+              {/* Global OmniChat Overlay - appears on ALL screens */}
+              <GlobalChatOverlay />
+            </GestureHandlerRootView>
+          </ThemeProvider>
+        </AuthProvider>
+      </ChatProvider>
+    </QueryClientProvider>
   );
 }

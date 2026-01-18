@@ -46,9 +46,9 @@ export default function SplashScreen() {
             <View style={styles.content}>
                 <Animated.View style={[styles.logoContainer, logoAnimatedStyle]}>
                     <View style={styles.logoCircle}>
-                        <DonnaText variant="h1" color={Colors.accentPrimary}>D</DonnaText>
+                        <DonnaText variant="h1" color={Colors.accentPrimary}>C</DonnaText>
                     </View>
-                    <DonnaText variant="h1" style={styles.logoText}>Donna</DonnaText>
+                    <DonnaText variant="h1" style={styles.logoText}>Corta</DonnaText>
                 </Animated.View>
             </View>
         </SafeAreaView>

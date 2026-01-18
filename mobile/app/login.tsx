@@ -24,7 +24,7 @@ export default function LoginScreen() {
                 {/* Brand Section */}
                 <View style={styles.brandContainer}>
                     <View style={styles.logoRow}>
-                        <DonnaText style={styles.logoText}>DONN</DonnaText>
+                        <DonnaText style={styles.logoText}>CORT</DonnaText>
                         <DonnaText style={[styles.logoText, { color: Colors.accentPrimary }]}>A</DonnaText>
                     </View>
 
@@ -73,8 +73,7 @@ const styles = StyleSheet.create({
     logoText: {
         ...Typography.logo,
         color: Colors.textPrimary,
-        lineHeight: 60, // Ensure enough vertical space
-        paddingHorizontal: 4, // Prevent side clipping
+        lineHeight: 60,
     },
     slogan: {
         ...Typography.bodyBase,

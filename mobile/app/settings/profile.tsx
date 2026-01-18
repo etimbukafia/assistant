@@ -1,92 +1,279 @@
-import React from 'react';
-import { StyleSheet, View, SafeAreaView, TouchableOpacity, ScrollView, Dimensions } from 'react-native';
-import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
-import { DonnaText } from '../../src/components/ui/DonnaText';
-import { StatusBar } from 'expo-status-bar';
-import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../../src/context/AuthContext';
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, View, ScrollView, SafeAreaView, TouchableOpacity, Switch, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { Colors, Spacing, Radius } from '@/src/theme/Theme';
+import { DonnaText } from '@/src/components/ui/DonnaText';
+import { StatusBar } from 'expo-status-bar';
+import { useAuth } from '@/src/context/AuthContext';
+import { api } from '@/src/services/api';
 
-const { width } = Dimensions.get('window');
+interface SettingRowProps {
+    icon: string;
+    iconColor?: string;
+    title: string;
+    subtitle?: string;
+    onPress?: () => void;
+    showArrow?: boolean;
+    rightElement?: React.ReactNode;
+    destructive?: boolean;
+}
+
+const SettingRow: React.FC<SettingRowProps> = ({
+    icon,
+    iconColor = Colors.textSecondary,
+    title,
+    subtitle,
+    onPress,
+    showArrow = true,
+    rightElement,
+    destructive,
+}) => (
+    <TouchableOpacity style={styles.settingRow} onPress={onPress} disabled={!onPress}>
+        <View style={[styles.iconContainer, { backgroundColor: iconColor + '15' }]}>
+            <Ionicons name={icon as any} size={20} color={iconColor} />
+        </View>
+        <View style={styles.settingTextContainer}>
+            <DonnaText style={[styles.settingTitle, destructive && { color: Colors.error }]}>
+                {title}
+            </DonnaText>
+            {subtitle && <DonnaText style={styles.settingSubtitle}>{subtitle}</DonnaText>}
+        </View>
+        {rightElement}
+        {showArrow && !rightElement && (
+            <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+        )}
+    </TouchableOpacity>
+);
+
+interface SubscriptionInfo {
+    tier: string;
+    status: string;
+    is_active: boolean;
+    days_remaining: number;
+}
 
 export default function ProfileScreen() {
-    const { logout, user } = useAuth();
     const router = useRouter();
+    const { user, signOut } = useAuth();
+    const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
 
-    const initial = user?.name?.[0] || '?';
-    const userName = user?.name || 'Guest User';
-    const userEmail = user?.email || 'Set up your account';
+    // Get display name from Supabase user_metadata (populated by Google OAuth)
+    const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name;
+    const displayEmail = user?.email;
+    const initial = displayName?.[0]?.toUpperCase() || 'J';
 
-    const SettingItem = ({ icon, title, value, onPress, color = Colors.accentSecondary }: any) => (
-        <TouchableOpacity style={styles.item} onPress={onPress}>
-            <View style={styles.itemLeft}>
-                <Ionicons name={icon} size={20} color={color} style={styles.itemIcon} />
-                <DonnaText style={[styles.itemTitle, { color }]}>{title}</DonnaText>
-            </View>
-            <View style={styles.itemRight}>
-                {value && <DonnaText style={styles.itemValue}>{value}</DonnaText>}
-                <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-            </View>
-        </TouchableOpacity>
-    );
+    // Fetch subscription status
+    useEffect(() => {
+        const fetchSubscription = async () => {
+            try {
+                const response = await api.get('/billing/subscription');
+                setSubscription(response.data);
+            } catch (err) {
+                console.error('Failed to fetch subscription:', err);
+            }
+        };
+        fetchSubscription();
+    }, []);
+
+    // Generate subscription subtitle from real data
+    const getSubscriptionSubtitle = () => {
+        if (!subscription) return 'Loading...';
+        if (subscription.tier === 'pro' && subscription.status === 'active') {
+            return 'Active subscription';
+        }
+        if (subscription.days_remaining > 0) {
+            return `${subscription.days_remaining} days left in trial`;
+        }
+        return 'Trial expired';
+    };
+
+    const handleLogout = async () => {
+        Alert.alert(
+            'Sign Out',
+            'Are you sure you want to sign out?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Sign Out', style: 'destructive', onPress: async () => {
+                        await signOut();
+                        router.replace('/login');
+                    }
+                },
+            ]
+        );
+    };
 
     return (
         <SafeAreaView style={styles.container}>
             <StatusBar style="dark" />
 
-            {/* Header with Close */}
-            <View style={styles.modalHeader}>
+            {/* Header */}
+            <View style={styles.header}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
-                    <Ionicons name="close" size={24} color={Colors.textPrimary} />
+                    <Ionicons name="close" size={28} color={Colors.textPrimary} />
                 </TouchableOpacity>
-                <DonnaText style={styles.modalTitle}>Your Assistant</DonnaText>
-                <View style={{ width: 40 }} />
+                <DonnaText style={styles.headerTitle}>Settings</DonnaText>
+                <View style={styles.placeholder} />
             </View>
 
-            <ScrollView contentContainerStyle={styles.scrollContent}>
+            <ScrollView style={styles.scrollView} contentContainerStyle={styles.content}>
                 {/* Profile Card */}
                 <View style={styles.profileCard}>
-                    <View style={styles.avatarLarge}>
-                        <DonnaText style={styles.avatarText}>{initial}</DonnaText>
+                    <View style={styles.avatar}>
+                        <DonnaText style={styles.avatarText}>
+                            {initial}
+                        </DonnaText>
                     </View>
-                    <DonnaText style={styles.userName}>{userName}</DonnaText>
-                    <DonnaText style={styles.userEmail}>{userEmail}</DonnaText>
-
-                    <View style={styles.badgeRow}>
-                        <View style={styles.badge}>
-                            <DonnaText style={styles.badgeText}>Pro Member</DonnaText>
-                        </View>
+                    <View style={styles.profileInfo}>
+                        <DonnaText variant="h2" style={styles.profileName}>
+                            {displayName}
+                        </DonnaText>
+                        <DonnaText style={styles.profileEmail}>
+                            {displayEmail}
+                        </DonnaText>
                     </View>
+                    <TouchableOpacity style={styles.editButton}>
+                        <Ionicons name="pencil" size={16} color={Colors.accentSecondary} />
+                    </TouchableOpacity>
                 </View>
 
-                {/* Settings Sections */}
+                {/* Subscription Banner */}
+                <TouchableOpacity
+                    style={styles.subscriptionBanner}
+                    onPress={() => router.push('/settings/subscription' as any)}
+                >
+                    <View style={styles.subscriptionIcon}>
+                        <Ionicons name="diamond" size={20} color={Colors.accentSecondary} />
+                    </View>
+                    <View style={styles.subscriptionInfo}>
+                        <DonnaText style={styles.subscriptionTitle}>Corta Pro</DonnaText>
+                        <DonnaText style={styles.subscriptionSubtitle}>{getSubscriptionSubtitle()}</DonnaText>
+                    </View>
+                    <DonnaText style={styles.upgradeText}>
+                        {subscription?.tier === 'pro' && subscription?.status === 'active' ? 'Manage →' : 'Upgrade →'}
+                    </DonnaText>
+                </TouchableOpacity>
+
+                {/* General Section */}
                 <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>Intelligence & Memory</DonnaText>
-                    <View style={styles.card}>
-                        <SettingItem icon="brain" title="Memory Palace" value="84 facts" />
-                        <SettingItem icon="chatbubble-ellipses-outline" title="Communication Tone" value="Executive" />
-                        <SettingItem icon="filter-outline" title="Priority Rules" value="Active" />
+                    <DonnaText style={styles.sectionLabel}>GENERAL</DonnaText>
+                    <View style={styles.sectionCard}>
+                        <SettingRow
+                            icon="notifications-outline"
+                            iconColor={Colors.accentSecondary}
+                            title="Notifications"
+                            subtitle="Push & email preferences"
+                            onPress={() => Alert.alert('Coming Soon', 'Notification settings')}
+                        />
+                        <SettingRow
+                            icon="moon-outline"
+                            iconColor={Colors.accentPrecision}
+                            title="Appearance"
+                            subtitle="Theme & display options"
+                            onPress={() => Alert.alert('Coming Soon', 'Appearance settings')}
+                        />
                     </View>
                 </View>
 
+                {/* AI & Automation Section */}
                 <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>Connections</DonnaText>
-                    <View style={styles.card}>
-                        <SettingItem icon="mail-outline" title="Gmail Sync" value="Live" />
-                        <SettingItem icon="calendar-outline" title="Google Calendar" value="Connected" />
+                    <DonnaText style={styles.sectionLabel}>AI & AUTOMATION</DonnaText>
+                    <View style={styles.sectionCard}>
+                        <SettingRow
+                            icon="sparkles-outline"
+                            iconColor={Colors.accentSecondary}
+                            title="Task Detection"
+                            subtitle="How Donna extracts tasks"
+                            onPress={() => Alert.alert('Coming Soon', 'Task detection settings')}
+                        />
+                        <SettingRow
+                            icon="checkmark-done-outline"
+                            iconColor={Colors.success}
+                            title="Auto-Approve Tasks"
+                            showArrow={false}
+                            rightElement={
+                                <Switch
+                                    value={false}
+                                    trackColor={{ true: Colors.success }}
+                                    thumbColor="#FFF"
+                                />
+                            }
+                        />
+                        <SettingRow
+                            icon="brain-outline"
+                            iconColor="#9B59B6"
+                            title="Memory & Preferences"
+                            subtitle="What Donna remembers"
+                            onPress={() => Alert.alert('Coming Soon', 'Memory settings')}
+                        />
                     </View>
                 </View>
 
+                {/* Calendar Section */}
                 <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>Preferences</DonnaText>
-                    <View style={styles.card}>
-                        <SettingItem icon="notifications-outline" title="Notifications" />
-                        <SettingItem icon="moon-outline" title="Quiet Hours" />
-                        <SettingItem icon="log-out-outline" title="Logout" color={Colors.accentPrimary} onPress={logout} />
+                    <DonnaText style={styles.sectionLabel}>CALENDAR</DonnaText>
+                    <View style={styles.sectionCard}>
+                        <SettingRow
+                            icon="calendar-outline"
+                            iconColor={Colors.accentPrecision}
+                            title="Calendar Settings"
+                            subtitle="Working hours, buffers, timezone"
+                            onPress={() => Alert.alert('Coming Soon', 'Calendar settings')}
+                        />
+                        <SettingRow
+                            icon="mail-outline"
+                            iconColor={Colors.accentSecondary}
+                            title="Digests"
+                            subtitle="Morning briefing & summaries"
+                            onPress={() => Alert.alert('Coming Soon', 'Digest settings')}
+                        />
                     </View>
                 </View>
 
-                <DonnaText style={styles.version}>Donna Mobile v0.1.0 Beta</DonnaText>
+                {/* Data & Privacy Section */}
+                <View style={styles.section}>
+                    <DonnaText style={styles.sectionLabel}>DATA & PRIVACY</DonnaText>
+                    <View style={styles.sectionCard}>
+                        <SettingRow
+                            icon="download-outline"
+                            iconColor={Colors.textSecondary}
+                            title="Export My Data"
+                            onPress={() => Alert.alert('Export', 'Your data export will be ready shortly.')}
+                        />
+                        <SettingRow
+                            icon="log-out-outline"
+                            iconColor={Colors.error}
+                            title="Revoke Gmail Access"
+                            destructive
+                            onPress={() => Alert.alert(
+                                'Revoke Access',
+                                'This will disconnect your Gmail. You can reconnect anytime.',
+                                [{ text: 'Cancel' }, { text: 'Revoke', style: 'destructive' }]
+                            )}
+                        />
+                        <SettingRow
+                            icon="trash-outline"
+                            iconColor={Colors.error}
+                            title="Delete All Data"
+                            destructive
+                            onPress={() => Alert.alert(
+                                'Delete Data',
+                                'This action cannot be undone. All your data will be permanently deleted.',
+                                [{ text: 'Cancel' }, { text: 'Delete', style: 'destructive' }]
+                            )}
+                        />
+                    </View>
+                </View>
+
+                {/* Sign Out Button */}
+                <TouchableOpacity style={styles.signOutButton} onPress={handleLogout}>
+                    <Ionicons name="log-out-outline" size={20} color={Colors.error} />
+                    <DonnaText style={styles.signOutText}>Sign Out</DonnaText>
+                </TouchableOpacity>
+
+                {/* App Version */}
+                <DonnaText style={styles.versionText}>Corta v1.0.0 (Build 42)</DonnaText>
             </ScrollView>
         </SafeAreaView>
     );
@@ -97,137 +284,177 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: Colors.bgBase,
     },
-    modalHeader: {
+    header: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: Spacing.lg,
-        paddingVertical: Spacing.lg,
+        paddingHorizontal: Spacing.md,
+        paddingVertical: Spacing.sm,
         borderBottomWidth: 1,
         borderBottomColor: Colors.border,
     },
     closeButton: {
         padding: Spacing.xs,
-        width: 40,
     },
-    modalTitle: {
-        fontFamily: 'PlayfairDisplay_600SemiBold',
-        fontSize: 18,
+    headerTitle: {
+        fontSize: 17,
+        fontWeight: '600',
         color: Colors.textPrimary,
     },
-    scrollContent: {
-        paddingHorizontal: Spacing.md,
-        paddingBottom: Spacing.xxl,
+    placeholder: {
+        width: 44,
+    },
+    scrollView: {
+        flex: 1,
+    },
+    content: {
+        padding: Spacing.md,
+        paddingBottom: 60,
     },
     profileCard: {
+        flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: Spacing.xl,
+        gap: Spacing.md,
+        padding: Spacing.md,
         backgroundColor: Colors.bgElevated,
-        marginTop: Spacing.md,
-        borderRadius: Radius.surface,
+        borderRadius: Radius.lg,
+        marginBottom: Spacing.md,
         borderWidth: 1,
         borderColor: Colors.border,
     },
-    avatarLarge: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        backgroundColor: Colors.accentSecondary,
+    avatar: {
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: Colors.accentPrecision,
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: Spacing.md,
-        shadowColor: Colors.accentSecondary,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        borderWidth: 1,
-        borderColor: Colors.accentSecondary,
     },
     avatarText: {
-        fontSize: 32,
-        color: '#FFFFFF',
-        fontWeight: '200',
-    },
-    userName: {
-        fontFamily: 'PlayfairDisplay_600SemiBold',
+        color: '#FFF',
         fontSize: 22,
-        color: Colors.textPrimary,
+        fontWeight: '600',
     },
-    userEmail: {
-        ...Typography.bodyBase,
+    profileInfo: {
+        flex: 1,
+    },
+    profileName: {
+        marginBottom: 2,
+    },
+    profileEmail: {
+        fontSize: 14,
         color: Colors.textMuted,
-        marginTop: 4,
     },
-    badgeRow: {
-        marginTop: Spacing.md,
-    },
-    badge: {
+    editButton: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
         backgroundColor: 'rgba(217, 119, 69, 0.1)',
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: Radius.full,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    subscriptionBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: Spacing.md,
+        padding: Spacing.md,
+        backgroundColor: 'rgba(217, 119, 69, 0.08)',
+        borderRadius: Radius.lg,
         borderWidth: 1,
         borderColor: Colors.accentSecondary,
+        marginBottom: Spacing.xl,
     },
-    badgeText: {
-        fontSize: 12,
-        color: Colors.accentSecondary,
+    subscriptionIcon: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'rgba(217, 119, 69, 0.15)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    subscriptionInfo: {
+        flex: 1,
+    },
+    subscriptionTitle: {
+        fontSize: 15,
         fontWeight: '600',
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
+        color: Colors.textPrimary,
+    },
+    subscriptionSubtitle: {
+        fontSize: 13,
+        color: Colors.accentSecondary,
+    },
+    upgradeText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: Colors.accentSecondary,
     },
     section: {
-        marginTop: Spacing.xl,
+        marginBottom: Spacing.xl,
     },
     sectionLabel: {
-        ...Typography.labelSmall,
+        fontSize: 11,
+        fontWeight: '600',
         color: Colors.textMuted,
+        letterSpacing: 1,
         marginBottom: Spacing.sm,
         marginLeft: Spacing.xs,
-        textTransform: 'uppercase',
-        letterSpacing: 1,
     },
-    card: {
+    sectionCard: {
         backgroundColor: Colors.bgElevated,
-        borderRadius: Radius.surface,
+        borderRadius: Radius.lg,
         overflow: 'hidden',
         borderWidth: 1,
         borderColor: Colors.border,
     },
-    item: {
+    settingRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        gap: Spacing.md,
         padding: Spacing.md,
         borderBottomWidth: 1,
         borderBottomColor: Colors.border,
     },
-    itemLeft: {
-        flexDirection: 'row',
+    iconContainer: {
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        justifyContent: 'center',
         alignItems: 'center',
     },
-    itemIcon: {
-        marginRight: Spacing.md,
-        width: 24,
+    settingTextContainer: {
+        flex: 1,
     },
-    itemTitle: {
-        ...Typography.bodyBase,
+    settingTitle: {
+        fontSize: 15,
+        fontWeight: '500',
+        color: Colors.textPrimary,
     },
-    itemRight: {
+    settingSubtitle: {
+        fontSize: 13,
+        color: Colors.textMuted,
+        marginTop: 1,
+    },
+    signOutButton: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'center',
+        gap: Spacing.sm,
+        paddingVertical: Spacing.md,
+        marginTop: Spacing.md,
+        borderRadius: Radius.component,
+        borderWidth: 1,
+        borderColor: Colors.error,
     },
-    itemValue: {
-        ...Typography.bodyBase,
-        color: Colors.textMuted,
-        marginRight: Spacing.xs,
-        fontSize: 14,
+    signOutText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: Colors.error,
     },
-    version: {
-        ...Typography.caption,
-        color: Colors.textMuted,
+    versionText: {
         textAlign: 'center',
-        marginTop: Spacing.xxl,
-        opacity: 0.5,
+        fontSize: 12,
+        color: Colors.textMuted,
+        marginTop: Spacing.xl,
     },
 });

@@ -1,25 +1,48 @@
-import React, { useState, useMemo } from 'react';
-import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView } from 'react-native';
+import React, { useState, useMemo, useEffect } from 'react';
+import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { DonnaCard } from '../../src/components/ui/DonnaCard';
+import { SyncDataCTA } from '../../src/components/ui/SyncDataCTA';
 import { StatusBar } from 'expo-status-bar';
 import demoData from '../../src/data/demo_state.json';
 import { Message } from '../../src/types/api';
 import { parseISO, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../../src/context/AuthContext';
+import { api } from '../../src/services/api';
 
 type FilterType = 'all' | 'needs_reply' | 'today';
 
+import { useQuery } from '@tanstack/react-query';
+
 export default function DashboardScreen() {
   const router = useRouter();
+  const { isSandbox, user, initialSyncCompleted } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
-  const [refreshing, setRefreshing] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
 
-  // Cast mock data to typed interface
-  const messages = demoData.messages as unknown as Message[];
+  // TanStack Query for fetching messages
+  const { data: messages = [], isLoading, isRefetching, refetch } = useQuery<Message[]>({
+    queryKey: ['messages', isSandbox],
+    queryFn: async () => {
+      if (isSandbox) {
+        // Simulate network delay for better UX
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return demoData.messages as unknown as Message[];
+      } else {
+        const response = await api.get('/messages');
+        return response.data.messages || [];
+      }
+    },
+    // Remount/Fetch when sandbox state changes
+    enabled: true,
+  });
+
+  const onRefresh = React.useCallback(() => {
+    refetch();
+  }, [refetch]);
 
   const filteredMessages = useMemo(() => {
     let filtered = messages;
@@ -56,11 +79,6 @@ export default function DashboardScreen() {
     return result;
   }, [filteredMessages]);
 
-  const onRefresh = React.useCallback(() => {
-    setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1000);
-  }, []);
-
   const renderHeader = () => (
     <View style={styles.header}>
       {/* Title Row with Actions */}
@@ -80,6 +98,20 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Sync CTA Banner (only in Sandbox) */}
+      {isSandbox && <SyncDataCTA />}
+
+      {/* Initial Sync Progress Banner (When NOT in Sandbox and Syncing) */}
+      {!isSandbox && !initialSyncCompleted && (
+        <View style={styles.syncBanner}>
+          <ActivityIndicator size="small" color={Colors.accentPrimary} />
+          <View style={styles.syncContent}>
+            <DonnaText style={styles.syncTitle}>Syncing your world...</DonnaText>
+            <DonnaText style={styles.syncDesc}>Processing emails from the last 24 hours.</DonnaText>
+          </View>
+        </View>
+      )}
 
       {/* Focus Mode Banner */}
       {focusMode && (
@@ -119,6 +151,14 @@ export default function DashboardScreen() {
     </View>
   );
 
+  if (isLoading) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <ActivityIndicator size="large" color={Colors.accentPrimary} />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
@@ -128,7 +168,7 @@ export default function DashboardScreen() {
         ListHeaderComponent={renderHeader}
         contentContainerStyle={styles.listContent}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accentPrimary} />
+          <RefreshControl refreshing={isRefetching} onRefresh={onRefresh} tintColor={Colors.accentPrimary} />
         }
         renderSectionHeader={({ section: { title } }) => (
           <View style={styles.sectionHeader}>
@@ -164,6 +204,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.bgBase,
+  },
+  center: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   header: {
     paddingTop: Spacing.xl,
@@ -215,6 +259,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.accentSecondary,
     fontWeight: '500',
+  },
+  syncBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.bgSurface,
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.sm,
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: Spacing.md,
+  },
+  syncContent: {
+    flex: 1,
+  },
+  syncTitle: {
+    fontWeight: '600',
+    fontSize: 14,
+    color: Colors.textPrimary,
+  },
+  syncDesc: {
+    fontSize: 12,
+    color: Colors.textSecondary,
   },
   filterScroll: {
     paddingHorizontal: Spacing.md,

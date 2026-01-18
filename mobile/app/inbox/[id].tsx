@@ -9,10 +9,12 @@ import demoData from '@/src/data/demo_state.json';
 import { Message } from '@/src/types/api';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { InlineTaskItem } from '@/src/components/ui/InlineTaskItem';
+import { useChat } from '@/src/context/ChatContext';
 
 export default function MessageDetailScreen() {
     const { id } = useLocalSearchParams();
     const router = useRouter();
+    const { openChat } = useChat(); // Global chat trigger
 
     // Mock Data Fetch
     const message = useMemo(() => {
@@ -40,6 +42,13 @@ export default function MessageDetailScreen() {
                     <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
                 </TouchableOpacity>
                 <View style={styles.headerActions}>
+                    {/* Chat Trigger - Summons Donna */}
+                    <TouchableOpacity
+                        style={styles.actionButton}
+                        onPress={openChat}
+                    >
+                        <Ionicons name="sparkles" size={22} color={Colors.accentSecondary} />
+                    </TouchableOpacity>
                     <TouchableOpacity style={styles.actionButton}>
                         <Ionicons name="archive-outline" size={24} color={Colors.textPrimary} />
                     </TouchableOpacity>

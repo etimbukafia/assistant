@@ -35,8 +35,13 @@ export const Spacing = {
 
 export const Radius = {
     xs: 4,
-    component: 8,
-    surface: 16,
+    sm: 6,
+    component: 8, // md
+    md: 8,
+    lg: 12,
+    surface: 16, // xl
+    xl: 16,
+    xxl: 24,
     full: 999,
 };
 

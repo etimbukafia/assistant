@@ -96,6 +96,9 @@ class GmailAccount(Base):
     # Gmail History API tracking for deletion sync
     last_history_id = Column(String, nullable=True)
 
+    # Initial sync tracking
+    initial_sync_completed = Column(Boolean, default=False, index=True)
+
 
 class UserSettings(Base):
     """User preferences for task management, reminders, calendar, and billing"""
@@ -165,9 +168,9 @@ class UserSettings(Base):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Set trial end date on creation if not provided
-        if self.trial_ends_at is None:
-            self.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=get_settings().TRIAL_DURATION_DAYS)
+        # Trial is NOT auto-started — user must explicitly activate
+        # self.trial_ends_at is set by the /subscription/activate-trial endpoint
+        pass
 
     @property
     def is_active(self) -> bool:

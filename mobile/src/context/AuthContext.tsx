@@ -1,102 +1,183 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Storage } from '../utils/Storage';
-import { api } from '../services/api';
+/**
+ * Authentication Context using Supabase Auth with Google OAuth
+ * 
+ * Security:
+ * - Uses expo-secure-store for encrypted token storage
+ * - Implements PKCE flow via expo-auth-session
+ * - Auto-refreshes tokens
+ */
 
-interface UserProfile {
-    name: string;
-    email: string;
-}
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { makeRedirectUri } from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
+import { supabase } from '../utils/supabase';
+import type { Session, User } from '@supabase/supabase-js';
+
+// Required for OAuth redirect handling
+WebBrowser.maybeCompleteAuthSession();
 
 interface AuthContextType {
     isAuthenticated: boolean;
     isLoading: boolean;
-    token: string | null;
-    user: UserProfile | null;
-    syncStatus: 'demo' | 'processing' | 'real';
-    login: (token: string) => Promise<void>;
-    logout: () => Promise<void>;
-    startSync: () => void;
+    session: Session | null;
+    user: User | null;
+    isSandbox: boolean;
+    initialSyncCompleted: boolean;
+    signInWithGoogle: () => Promise<void>;
+    signOut: () => Promise<void>;
+    refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-    const [token, setToken] = useState<string | null>(null);
-    const [user, setUser] = useState<UserProfile | null>({
-        name: 'Jane Doe',
-        email: 'jane@example.com'
-    }); // Mock user for now
-    const [syncStatus, setSyncStatus] = useState<'demo' | 'processing' | 'real'>('demo');
+    const [session, setSession] = useState<Session | null>(null);
+    const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [isSandbox, setIsSandbox] = useState(false);
+    const [initialSyncCompleted, setInitialSyncCompleted] = useState(false);
 
-    useEffect(() => {
-        checkAuth();
-    }, []);
+    const checkSubscription = async () => {
+        if (!session?.user) return;
 
-    const checkAuth = async () => {
         try {
-            const storedToken = await Storage.getItem('auth_token');
-            const storedSync = await Storage.getItem('sync_status');
+            // Dynamically import api to avoid circular dependencies if any
+            const { api } = require('../services/api');
+            const response = await api.get('/settings');
+            const settings = response.data;
 
-            if (storedToken) {
-                setToken(storedToken);
-            }
-            if (storedSync) {
-                setSyncStatus(storedSync as any);
-            }
+            // Sandbox = No trial end date set (Deferred Trial)
+            // If trial_ends_at is set, they are in Trial or Active
+            setIsSandbox(!settings.trial_ends_at);
+
+            // Sync status
+            setInitialSyncCompleted(!!settings.initial_sync_completed);
         } catch (error) {
-            console.error('Auth check failed:', error);
-        } finally {
-            setIsLoading(false);
+            console.error('Failed to fetch settings:', error);
+            // Default to sandbox if check fails to be safe? 
+            // Or default to FALSE to avoid showing mock data to real users on error?
+            // "Secure by default" => if error, maybe assume REAL data (false) to avoid leaking mock data?
+            // But for this specific feature "Deferred Trial", default path is Sandbox.
+            // Let's stick to current state if error.
         }
     };
 
-    const login = async (newToken: string) => {
+    useEffect(() => {
+        // Get initial session
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            setSession(session);
+            setUser(session?.user ?? null);
+            setIsLoading(false);
+        });
+
+        // Listen for auth state changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(
+            async (_event, session) => {
+                setSession(session);
+                setUser(session?.user ?? null);
+                setIsLoading(false);
+            }
+        );
+
+        return () => subscription.unsubscribe();
+    }, []);
+
+    // Check subscription whenever session changes
+    useEffect(() => {
+        if (session) {
+            checkSubscription();
+        } else {
+            setIsSandbox(false); // Reset
+        }
+    }, [session]);
+
+    /**
+     * Sign in with Google using Supabase OAuth
+     * 
+     * This uses the PKCE flow via expo-auth-session for security.
+     * The redirect URI must be configured in Supabase dashboard.
+     */
+    const signInWithGoogle = async () => {
         try {
-            await Storage.setItem('auth_token', newToken);
-            setToken(newToken);
-            // In a real app, we'd fetch profile here
-            setUser({ name: 'Jane Doe', email: 'jane@example.com' });
+            // Create redirect URI for OAuth callback
+            const redirectUri = makeRedirectUri({
+                scheme: 'corta',
+                path: 'auth/callback',
+            });
+
+            // Initiate OAuth flow
+            const { data, error } = await supabase.auth.signInWithOAuth({
+                provider: 'google',
+                options: {
+                    redirectTo: redirectUri,
+                    skipBrowserRedirect: true, // We'll handle the redirect manually
+                    queryParams: {
+                        access_type: 'offline', // Request refresh token
+                        prompt: 'consent', // Always show consent screen
+                    },
+                },
+            });
+
+            if (error) throw error;
+
+            if (data?.url) {
+                // Open browser for OAuth
+                const result = await WebBrowser.openAuthSessionAsync(
+                    data.url,
+                    redirectUri
+                );
+
+                if (result.type === 'success' && result.url) {
+                    // Extract tokens from URL and set session
+                    const url = new URL(result.url);
+                    const params = new URLSearchParams(url.hash.substring(1));
+
+                    const accessToken = params.get('access_token');
+                    const refreshToken = params.get('refresh_token');
+
+                    if (accessToken) {
+                        const { error: sessionError } = await supabase.auth.setSession({
+                            access_token: accessToken,
+                            refresh_token: refreshToken || '',
+                        });
+
+                        if (sessionError) throw sessionError;
+                    }
+                }
+            }
         } catch (error) {
-            console.error('Login failed:', error);
+            console.error('Google sign-in error:', error);
             throw error;
         }
     };
 
-    const logout = async () => {
+    /**
+     * Sign out and clear all auth state
+     */
+    const signOut = async () => {
         try {
-            await Storage.deleteItem('auth_token');
-            await Storage.deleteItem('sync_status');
-            setToken(null);
-            setUser(null);
-            setSyncStatus('demo');
+            const { error } = await supabase.auth.signOut();
+            if (error) throw error;
+
+            // State will be cleared by onAuthStateChange listener
         } catch (error) {
-            console.error('Logout failed:', error);
+            console.error('Sign out error:', error);
+            throw error;
         }
-    };
-
-    const startSync = async () => {
-        setSyncStatus('processing');
-        await Storage.setItem('sync_status', 'processing');
-
-        // Mock transition to real after 5 seconds
-        setTimeout(async () => {
-            setSyncStatus('real');
-            await Storage.setItem('sync_status', 'real');
-        }, 5000);
     };
 
     return (
         <AuthContext.Provider
             value={{
-                isAuthenticated: !!token,
+                isAuthenticated: !!session,
                 isLoading,
-                token,
+                session,
                 user,
-                syncStatus,
-                login,
-                logout,
-                startSync
+                isSandbox,
+                initialSyncCompleted,
+                signInWithGoogle,
+                signOut,
+                refreshProfile: checkSubscription
             }}
         >
             {children}
