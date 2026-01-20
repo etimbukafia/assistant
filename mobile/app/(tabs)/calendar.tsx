@@ -1,234 +1,276 @@
-import React, { useState } from 'react';
-import { StyleSheet, View, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { StyleSheet, View, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { FlashList } from '@shopify/flash-list';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
-import demoData from '../../src/data/demo_state.json';
 import { Ionicons } from '@expo/vector-icons';
 import { format, parseISO, isToday } from 'date-fns';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { fetchCalendarEvents, syncCalendar, generateFollowUps, CalendarEvent, CalendarBriefing } from '../../src/services/calendar';
 
-interface CalendarEvent {
-    id: number;
-    title: string;
-    start_time: string;
-    end_time: string;
-    location?: string;
-    status: 'upcoming' | 'completed';
-    briefing?: {
-        agenda?: string;
-        prep_complete?: boolean;
-        prep_warnings?: { message: string; severity: string; suggestion: string }[];
-        attendees?: { name: string; email: string }[];
-        related_emails?: { id: number; subject: string; sender: string }[];
-        open_tasks?: { id: number; title: string; priority: string }[];
-    } | null;
-}
+// Extracted EventCard component for better FlashList performance
+const EventCard = React.memo(({
+    event,
+    isSelected,
+    onSelect,
+    formatTime,
+    formatDateBadge
+}: {
+    event: CalendarEvent;
+    isSelected: boolean;
+    onSelect: () => void;
+    formatTime: (iso: string) => string;
+    formatDateBadge: (iso: string) => string;
+}) => (
+    <View style={styles.eventSection}>
+        <TouchableOpacity
+            style={[styles.eventCard, isSelected && styles.eventCardSelected]}
+            onPress={onSelect}
+        >
+            <View style={styles.eventHeader}>
+                <View style={styles.eventBadges}>
+                    <View style={[
+                        styles.statusBadge,
+                        event.status === 'completed' ? styles.statusBadgePast : styles.statusBadgeUpcoming
+                    ]}>
+                        <DonnaText style={[
+                            styles.statusBadgeText,
+                            event.status === 'completed' ? styles.statusBadgeTextPast : styles.statusBadgeTextUpcoming
+                        ]}>
+                            {event.status === 'completed' ? 'Past' : formatDateBadge(event.start_time)}
+                        </DonnaText>
+                    </View>
+                    {event.briefing && !event.briefing.prep_complete && (
+                        <View style={styles.prepBadge}>
+                            <Ionicons name="sparkles" size={10} color="#D97706" />
+                            <DonnaText style={styles.prepBadgeText}>Prep Needed</DonnaText>
+                        </View>
+                    )}
+                </View>
+                <Ionicons
+                    name={isSelected ? "chevron-up" : "chevron-forward"}
+                    size={18}
+                    color={isSelected ? Colors.accentPrecision : Colors.textMuted}
+                />
+            </View>
+            <DonnaText variant="bodyLarge" style={styles.eventTitle}>{event.title}</DonnaText>
+            <View style={styles.eventMeta}>
+                <View style={styles.eventMetaItem}>
+                    <Ionicons name="time-outline" size={14} color={Colors.textMuted} />
+                    <DonnaText variant="caption">{formatTime(event.start_time)} – {formatTime(event.end_time)}</DonnaText>
+                </View>
+                {event.location && (
+                    <View style={styles.eventMetaItem}>
+                        <Ionicons name="location-outline" size={14} color={Colors.textMuted} />
+                        <DonnaText variant="caption">{event.location}</DonnaText>
+                    </View>
+                )}
+            </View>
+        </TouchableOpacity>
+
+        {/* Expanded Briefing */}
+        {isSelected && event.briefing && (
+            <View style={styles.briefingCard}>
+                {/* Prep Status Header */}
+                <View style={[
+                    styles.prepHeader,
+                    event.briefing.prep_complete ? styles.prepHeaderComplete : styles.prepHeaderNeeded
+                ]}>
+                    <View style={styles.prepHeaderContent}>
+                        <Ionicons
+                            name={event.briefing.prep_complete ? "checkmark-circle" : "alert-circle"}
+                            size={18}
+                            color={event.briefing.prep_complete ? "#16A34A" : "#D97706"}
+                        />
+                        <DonnaText style={[
+                            styles.prepHeaderText,
+                            event.briefing.prep_complete ? styles.prepHeaderTextComplete : styles.prepHeaderTextNeeded
+                        ]}>
+                            {event.briefing.prep_complete ? 'Prep Complete' : 'Needs Preparation'}
+                        </DonnaText>
+                    </View>
+                    {!event.briefing.prep_complete && event.briefing.prep_warnings && (
+                        <View style={styles.warningCountBadge}>
+                            <DonnaText style={styles.warningCountText}>
+                                {event.briefing.prep_warnings.length} Warning{event.briefing.prep_warnings.length !== 1 ? 's' : ''}
+                            </DonnaText>
+                        </View>
+                    )}
+                </View>
+
+                {/* Agenda */}
+                {event.briefing.agenda && (
+                    <View style={styles.briefingSection}>
+                        <View style={styles.briefingSectionHeader}>
+                            <Ionicons name="information-circle-outline" size={12} color={Colors.textMuted} />
+                            <DonnaText style={styles.briefingSectionTitle}>AGENDA</DonnaText>
+                        </View>
+                        <DonnaText variant="bodyBase" style={styles.agendaText}>{event.briefing.agenda}</DonnaText>
+                    </View>
+                )}
+
+                {/* Prep Warnings */}
+                {event.briefing.prep_warnings && event.briefing.prep_warnings.length > 0 && (
+                    <View style={styles.briefingSection}>
+                        <View style={styles.briefingSectionHeader}>
+                            <Ionicons name="alert-circle-outline" size={12} color={Colors.textMuted} />
+                            <DonnaText style={styles.briefingSectionTitle}>PREP WARNINGS</DonnaText>
+                        </View>
+                        {event.briefing.prep_warnings.map((warning, idx) => (
+                            <View key={idx} style={styles.warningItem}>
+                                <View style={[
+                                    styles.warningIcon,
+                                    warning.severity === 'high' ? styles.warningIconHigh : styles.warningIconMedium
+                                ]}>
+                                    <Ionicons name="alert-circle" size={14} color={warning.severity === 'high' ? '#DC2626' : '#D97706'} />
+                                </View>
+                                <View style={styles.warningContent}>
+                                    <DonnaText variant="bodyBase" style={styles.warningMessage}>{warning.message}</DonnaText>
+                                    <DonnaText variant="caption" style={styles.warningSuggestion}>{warning.suggestion}</DonnaText>
+                                </View>
+                            </View>
+                        ))}
+                    </View>
+                )}
+
+                {/* Attendees */}
+                {event.briefing.attendees && event.briefing.attendees.length > 0 && (
+                    <View style={styles.briefingSection}>
+                        <View style={styles.briefingSectionHeader}>
+                            <Ionicons name="people-outline" size={12} color={Colors.textMuted} />
+                            <DonnaText style={styles.briefingSectionTitle}>KEY PARTICIPANTS</DonnaText>
+                        </View>
+                        <View style={styles.attendeesList}>
+                            {event.briefing.attendees.map((person, idx) => (
+                                <View key={idx} style={styles.attendeeChip}>
+                                    <View style={styles.attendeeAvatar}>
+                                        <DonnaText style={styles.attendeeInitial}>
+                                            {(person.name || person.email || '?')[0].toUpperCase()}
+                                        </DonnaText>
+                                    </View>
+                                    <DonnaText style={styles.attendeeName}>{person.name || person.email}</DonnaText>
+                                </View>
+                            ))}
+                        </View>
+                    </View>
+                )}
+            </View>
+        )}
+    </View>
+));
 
 export default function CalendarScreen() {
-    const [refreshing, setRefreshing] = useState(false);
     const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
-    const [isSyncing, setIsSyncing] = useState(false);
+    const queryClient = useQueryClient();
 
-    const events = demoData.calendar as CalendarEvent[];
+    // Fetch events from backend
+    const { data, isLoading, isRefetching, refetch } = useQuery({
+        queryKey: ['calendar-events'],
+        queryFn: () => fetchCalendarEvents(),
+        staleTime: 1000 * 60 * 5, // 5 minutes
+    });
 
-    const onRefresh = React.useCallback(() => {
-        setRefreshing(true);
-        setTimeout(() => setRefreshing(false), 1000);
-    }, []);
+    const events = data?.events || [];
+
+    // Sync mutation
+    const syncMutation = useMutation({
+        mutationFn: () => syncCalendar(7),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['calendar-events'] });
+        },
+    });
+
+    // Follow-up generation mutation
+    const followUpMutation = useMutation({
+        mutationFn: (eventId: number) => generateFollowUps(eventId),
+    });
+
+    const onRefresh = useCallback(() => {
+        refetch();
+    }, [refetch]);
 
     const handleSync = () => {
-        setIsSyncing(true);
-        setTimeout(() => setIsSyncing(false), 2000);
+        syncMutation.mutate();
     };
 
-    const formatTime = (isoString: string) => {
+    const formatTime = useCallback((isoString: string) => {
         return format(parseISO(isoString), 'h:mm a');
-    };
+    }, []);
 
-    const formatDateBadge = (isoString: string) => {
+    const formatDateBadge = useCallback((isoString: string) => {
         const date = parseISO(isoString);
         if (isToday(date)) return 'Today';
         return format(date, 'MMM d');
-    };
+    }, []);
+
+    const renderEvent = useCallback(({ item }: { item: CalendarEvent }) => (
+        <EventCard
+            event={item}
+            isSelected={selectedEventId === item.id}
+            onSelect={() => setSelectedEventId(selectedEventId === item.id ? null : item.id)}
+            formatTime={formatTime}
+            formatDateBadge={formatDateBadge}
+        />
+    ), [selectedEventId, formatTime, formatDateBadge]);
+
+    const ListHeader = useCallback(() => (
+        <View style={styles.header}>
+            <View>
+                <DonnaText variant="h1" style={styles.title}>Meetings</DonnaText>
+                <DonnaText variant="caption" style={styles.subtitle}>Upcoming briefings and follow-ups</DonnaText>
+            </View>
+            <TouchableOpacity
+                onPress={handleSync}
+                style={[styles.syncButton, syncMutation.isPending && styles.syncButtonDisabled]}
+                disabled={syncMutation.isPending}
+            >
+                <Ionicons name="refresh" size={20} color={syncMutation.isPending ? Colors.textMuted : Colors.accentPrecision} />
+            </TouchableOpacity>
+        </View>
+    ), [syncMutation.isPending]);
+
+    const ListEmpty = useCallback(() => (
+        <View style={styles.emptyContainer}>
+            <Ionicons name="calendar-outline" size={48} color={Colors.textMuted} />
+            <DonnaText variant="h2" style={styles.emptyTitle}>No meetings found</DonnaText>
+            <DonnaText variant="caption" style={styles.emptyText}>Your calendar looks clear for the next few days.</DonnaText>
+            <TouchableOpacity style={styles.syncButtonLarge} onPress={handleSync} disabled={syncMutation.isPending}>
+                <DonnaText style={styles.syncButtonText}>
+                    {syncMutation.isPending ? 'Syncing...' : 'Sync Calendar'}
+                </DonnaText>
+            </TouchableOpacity>
+        </View>
+    ), [syncMutation.isPending]);
+
+    if (isLoading) {
+        return (
+            <SafeAreaView style={styles.container}>
+                <StatusBar style="dark" />
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color={Colors.accentPrimary} />
+                    <DonnaText variant="caption" style={styles.loadingText}>Loading your schedule...</DonnaText>
+                </View>
+            </SafeAreaView>
+        );
+    }
 
     return (
-        <View style={styles.container}>
+        <SafeAreaView style={styles.container}>
             <StatusBar style="dark" />
-            <ScrollView
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accentPrimary} />
-                }
+            <FlashList
+                data={events}
+                renderItem={renderEvent}
+                keyExtractor={(item) => item.id.toString()}
+                ListHeaderComponent={ListHeader}
+                ListEmptyComponent={ListEmpty}
                 contentContainerStyle={styles.listContent}
-            >
-                {/* Header */}
-                <View style={styles.header}>
-                    <View>
-                        <DonnaText variant="h1" style={styles.title}>Meetings</DonnaText>
-                        <DonnaText variant="caption" style={styles.subtitle}>Upcoming briefings and follow-ups</DonnaText>
-                    </View>
-                    <TouchableOpacity
-                        onPress={handleSync}
-                        style={[styles.syncButton, isSyncing && styles.syncButtonDisabled]}
-                        disabled={isSyncing}
-                    >
-                        <Ionicons name="refresh" size={20} color={isSyncing ? Colors.textMuted : Colors.accentPrecision} />
-                    </TouchableOpacity>
-                </View>
-
-                {/* Events List */}
-                {events.length === 0 ? (
-                    <View style={styles.emptyContainer}>
-                        <Ionicons name="calendar-outline" size={48} color={Colors.textMuted} />
-                        <DonnaText variant="h2" style={styles.emptyTitle}>No meetings found</DonnaText>
-                        <DonnaText variant="caption" style={styles.emptyText}>Your calendar looks clear for the next few days.</DonnaText>
-                        <TouchableOpacity style={styles.syncButtonLarge} onPress={handleSync}>
-                            <DonnaText style={styles.syncButtonText}>Sync Calendar</DonnaText>
-                        </TouchableOpacity>
-                    </View>
-                ) : (
-                    events.map(event => (
-                        <View key={event.id} style={styles.eventSection}>
-                            <TouchableOpacity
-                                style={[
-                                    styles.eventCard,
-                                    selectedEventId === event.id && styles.eventCardSelected
-                                ]}
-                                onPress={() => setSelectedEventId(selectedEventId === event.id ? null : event.id)}
-                            >
-                                <View style={styles.eventHeader}>
-                                    <View style={styles.eventBadges}>
-                                        <View style={[
-                                            styles.statusBadge,
-                                            event.status === 'completed' ? styles.statusBadgePast : styles.statusBadgeUpcoming
-                                        ]}>
-                                            <DonnaText style={[
-                                                styles.statusBadgeText,
-                                                event.status === 'completed' ? styles.statusBadgeTextPast : styles.statusBadgeTextUpcoming
-                                            ]}>
-                                                {event.status === 'completed' ? 'Past' : formatDateBadge(event.start_time)}
-                                            </DonnaText>
-                                        </View>
-                                        {event.briefing && !event.briefing.prep_complete && (
-                                            <View style={styles.prepBadge}>
-                                                <Ionicons name="sparkles" size={10} color="#D97706" />
-                                                <DonnaText style={styles.prepBadgeText}>Prep Needed</DonnaText>
-                                            </View>
-                                        )}
-                                    </View>
-                                    <Ionicons
-                                        name={selectedEventId === event.id ? "chevron-up" : "chevron-forward"}
-                                        size={18}
-                                        color={selectedEventId === event.id ? Colors.accentPrecision : Colors.textMuted}
-                                    />
-                                </View>
-                                <DonnaText variant="bodyLarge" style={styles.eventTitle}>{event.title}</DonnaText>
-                                <View style={styles.eventMeta}>
-                                    <View style={styles.eventMetaItem}>
-                                        <Ionicons name="time-outline" size={14} color={Colors.textMuted} />
-                                        <DonnaText variant="caption">{formatTime(event.start_time)} – {formatTime(event.end_time)}</DonnaText>
-                                    </View>
-                                    {event.location && (
-                                        <View style={styles.eventMetaItem}>
-                                            <Ionicons name="location-outline" size={14} color={Colors.textMuted} />
-                                            <DonnaText variant="caption">{event.location}</DonnaText>
-                                        </View>
-                                    )}
-                                </View>
-                            </TouchableOpacity>
-
-                            {/* Expanded Briefing */}
-                            {selectedEventId === event.id && event.briefing && (
-                                <View style={styles.briefingCard}>
-                                    {/* Prep Status Header */}
-                                    <View style={[
-                                        styles.prepHeader,
-                                        event.briefing.prep_complete ? styles.prepHeaderComplete : styles.prepHeaderNeeded
-                                    ]}>
-                                        <View style={styles.prepHeaderContent}>
-                                            <Ionicons
-                                                name={event.briefing.prep_complete ? "checkmark-circle" : "alert-circle"}
-                                                size={18}
-                                                color={event.briefing.prep_complete ? "#16A34A" : "#D97706"}
-                                            />
-                                            <DonnaText style={[
-                                                styles.prepHeaderText,
-                                                event.briefing.prep_complete ? styles.prepHeaderTextComplete : styles.prepHeaderTextNeeded
-                                            ]}>
-                                                {event.briefing.prep_complete ? 'Prep Complete' : 'Needs Preparation'}
-                                            </DonnaText>
-                                        </View>
-                                        {!event.briefing.prep_complete && event.briefing.prep_warnings && (
-                                            <View style={styles.warningCountBadge}>
-                                                <DonnaText style={styles.warningCountText}>
-                                                    {event.briefing.prep_warnings.length} Warning{event.briefing.prep_warnings.length !== 1 ? 's' : ''}
-                                                </DonnaText>
-                                            </View>
-                                        )}
-                                    </View>
-
-                                    {/* Agenda */}
-                                    {event.briefing.agenda && (
-                                        <View style={styles.briefingSection}>
-                                            <View style={styles.briefingSectionHeader}>
-                                                <Ionicons name="information-circle-outline" size={12} color={Colors.textMuted} />
-                                                <DonnaText style={styles.briefingSectionTitle}>AGENDA</DonnaText>
-                                            </View>
-                                            <DonnaText variant="bodyBase" style={styles.agendaText}>{event.briefing.agenda}</DonnaText>
-                                        </View>
-                                    )}
-
-                                    {/* Prep Warnings */}
-                                    {event.briefing.prep_warnings && event.briefing.prep_warnings.length > 0 && (
-                                        <View style={styles.briefingSection}>
-                                            <View style={styles.briefingSectionHeader}>
-                                                <Ionicons name="alert-circle-outline" size={12} color={Colors.textMuted} />
-                                                <DonnaText style={styles.briefingSectionTitle}>PREP WARNINGS</DonnaText>
-                                            </View>
-                                            {event.briefing.prep_warnings.map((warning, idx) => (
-                                                <View key={idx} style={styles.warningItem}>
-                                                    <View style={[
-                                                        styles.warningIcon,
-                                                        warning.severity === 'high' ? styles.warningIconHigh : styles.warningIconMedium
-                                                    ]}>
-                                                        <Ionicons name="alert-circle" size={14} color={warning.severity === 'high' ? '#DC2626' : '#D97706'} />
-                                                    </View>
-                                                    <View style={styles.warningContent}>
-                                                        <DonnaText variant="bodyBase" style={styles.warningMessage}>{warning.message}</DonnaText>
-                                                        <DonnaText variant="caption" style={styles.warningSuggestion}>{warning.suggestion}</DonnaText>
-                                                    </View>
-                                                </View>
-                                            ))}
-                                        </View>
-                                    )}
-
-                                    {/* Attendees */}
-                                    {event.briefing.attendees && event.briefing.attendees.length > 0 && (
-                                        <View style={styles.briefingSection}>
-                                            <View style={styles.briefingSectionHeader}>
-                                                <Ionicons name="people-outline" size={12} color={Colors.textMuted} />
-                                                <DonnaText style={styles.briefingSectionTitle}>KEY PARTICIPANTS</DonnaText>
-                                            </View>
-                                            <View style={styles.attendeesList}>
-                                                {event.briefing.attendees.map((person, idx) => (
-                                                    <View key={idx} style={styles.attendeeChip}>
-                                                        <View style={styles.attendeeAvatar}>
-                                                            <DonnaText style={styles.attendeeInitial}>
-                                                                {(person.name || person.email || '?')[0].toUpperCase()}
-                                                            </DonnaText>
-                                                        </View>
-                                                        <DonnaText style={styles.attendeeName}>{person.name || person.email}</DonnaText>
-                                                    </View>
-                                                ))}
-                                            </View>
-                                        </View>
-                                    )}
-                                </View>
-                            )}
-                        </View>
-                    ))
-                )}
-            </ScrollView>
-        </View>
+                refreshControl={
+                    <RefreshControl refreshing={isRefetching} onRefresh={onRefresh} tintColor={Colors.accentPrimary} />
+                }
+            />
+        </SafeAreaView>
     );
 }
 
@@ -236,6 +278,15 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: Colors.bgBase,
+    },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    loadingText: {
+        marginTop: Spacing.md,
+        color: Colors.textMuted,
     },
     listContent: {
         paddingBottom: Spacing.xl,

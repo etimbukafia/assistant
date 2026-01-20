@@ -16,9 +16,9 @@ A step-by-step task list for implementing all mobile screens.
 ## Phase 1: Authentication Flow
 
 ### 1.1 Splash Screen (`app/index.tsx`)
-- [x] Animated logo entrance
+- [] Animated logo entrance
 - [ ] Check auth status via `GET /v1/auth/status`
-- [ ] Route to Login, Auth Options, or Dashboard
+- [x] Route to Login, Auth Options, or Dashboard
 
 ### 1.2 Landing Screen (`app/login.tsx`)
 - [x] DONNA wordmark with Oxblood accent
@@ -34,9 +34,9 @@ A step-by-step task list for implementing all mobile screens.
   - "Allow" button -> navigates to `app/(tabs)/inbox.tsx` (Demo Mode)
 
 ### 1.5 Activation Explanation (`app/auth/activation-explanation.tsx`)
-- [x] [NEW] Explanation of 24-hr lookback & automated processing.
-- [x] [NEW] Privacy guarantee (confirmation required).
-- [x] [NEW] CTA: "Use Donna with my inbox" (starts sync).
+- [] [NEW] Explanation of 24-hr lookback & automated processing.
+- [] [NEW] Privacy guarantee (confirmation required).
+- [] [NEW] CTA: "Use Donna with my inbox" (starts sync).
 
 ### 1.6 Demo Inbox Experience (`app/(tabs)/inbox.tsx`)
 - [x] [NEW] Demo banner: "See how Donna thinks" / "These are sample messages..."
@@ -248,9 +248,9 @@ A step-by-step task list for implementing all mobile screens.
 ### 7.8 Data & Privacy (`app/settings/privacy.tsx`)
 **Data:** `GET /v1/user/export`, `DELETE /v1/user/delete`
 
-- [ ] "Export My Data" button → download JSON
-- [ ] "Revoke Gmail Access" → confirm modal → `POST /v1/auth/gmail/revoke`
-- [ ] "Delete All Data" → confirm modal → `DELETE /v1/user/delete?confirm=true`
+- [x] "Export My Data" button → download JSON
+- [x] "Revoke Gmail Access" → confirm modal → `POST /v1/auth/gmail/revoke`
+- [x] "Delete All Data" → confirm modal → `DELETE /v1/user/delete?confirm=true`
 
 ---
 

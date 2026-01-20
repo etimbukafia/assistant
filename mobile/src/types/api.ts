@@ -10,6 +10,8 @@ export interface Task {
     deadline_user_confirmed?: boolean;
     urgency_suggested_by_ai?: boolean;
     source_snippet?: string;
+    created_at: string;
+    updated_at: string;
 }
 
 export interface Message {

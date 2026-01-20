@@ -221,6 +221,27 @@ def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
     logger.info(f"Subscription revoked for user {user.user_email}")
 
 
+def handle_subscription_uncanceled(event_data: Dict[str, Any], db) -> None:
+    """
+    Handle subscription.uncanceled event.
+    
+    User reactivated their subscription before the billing period ended.
+    """
+    subscription = event_data.get("data", {})
+    customer_id = subscription.get("customer_id")
+    
+    if not customer_id:
+        return
+    
+    user = get_user_by_polar_customer_id(db, customer_id)
+    if not user:
+        return
+    
+    user.subscription_status = "active"
+    
+    logger.info(f"Subscription uncanceled for user {user.user_email}")
+
+
 # Event handler mapping
 EVENT_HANDLERS = {
     "subscription.created": handle_subscription_created,
@@ -228,6 +249,7 @@ EVENT_HANDLERS = {
     "subscription.updated": handle_subscription_updated,
     "subscription.canceled": handle_subscription_canceled,
     "subscription.revoked": handle_subscription_revoked,
+    "subscription.uncanceled": handle_subscription_uncanceled,
 }
 
 

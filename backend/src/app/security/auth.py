@@ -165,7 +165,7 @@ def create_user_settings(user_id: str, email: str, trial_days: int = 7) -> UserS
     return UserSettings(
         user_id=user_id,
         user_email=email,
-        trial_ends_at=datetime.now(timezone.utc) + timedelta(days=trial_days)
+        trial_ends_at=None  # Deferred trial: starts only when explicitly activated
     )
 
 

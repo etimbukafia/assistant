@@ -5,13 +5,14 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
-import { api } from '../../src/services/api';
 import { useAuth } from '../../src/context/AuthContext';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { activateTrial, triggerInitialSync } from '../../src/services/billing';
 
 export default function ActivateTrialScreen() {
     const router = useRouter();
+    const queryClient = useQueryClient();
     const { refreshProfile } = useAuth();
-    const [loading, setLoading] = useState(false);
     const [selectedIntegrations, setSelectedIntegrations] = useState(['gmail']);
 
     const toggleIntegration = (id: string) => {
@@ -23,32 +24,33 @@ export default function ActivateTrialScreen() {
         }
     };
 
-    const handleActivate = async () => {
-        try {
-            setLoading(true);
-
+    // Combined mutation for trial activation + initial sync
+    const activationMutation = useMutation({
+        mutationFn: async () => {
             // 1. Activate Trial
-            await api.post('/subscription/activate-trial');
-
+            await activateTrial();
             // 2. Trigger Initial Sync
-            // We do this immediately so the user sees "Syncing..." on the dashboard
-            await api.post('/gmail/sync/initial');
-
-            // 3. Refresh local profile to update "isSandbox" state
+            await triggerInitialSync();
+        },
+        onSuccess: async () => {
+            // 3. Invalidate subscription queries
+            queryClient.invalidateQueries({ queryKey: ['subscription'] });
+            // 4. Refresh local profile to update "isSandbox" state
             await refreshProfile();
-
-            // 4. Navigate back to Inbox
+            // 5. Navigate back to Inbox
             router.replace('/(tabs)');
-
-        } catch (error: any) {
+        },
+        onError: (error: any) => {
             console.error('Activation failed:', error);
             Alert.alert(
                 "Activation Failed",
                 error.response?.data?.detail || "Something went wrong. Please try again."
             );
-        } finally {
-            setLoading(false);
-        }
+        },
+    });
+
+    const handleActivate = () => {
+        activationMutation.mutate();
     };
 
     return (
@@ -117,11 +119,11 @@ export default function ActivateTrialScreen() {
 
             <View style={styles.footer}>
                 <TouchableOpacity
-                    style={styles.activateButton}
+                    style={[styles.activateButton, activationMutation.isPending && styles.buttonDisabled]}
                     onPress={handleActivate}
-                    disabled={loading}
+                    disabled={activationMutation.isPending}
                 >
-                    {loading ? (
+                    {activationMutation.isPending ? (
                         <ActivityIndicator color="#FFFFFF" />
                     ) : (
                         <>
@@ -238,6 +240,9 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.3,
         shadowRadius: 8,
         elevation: 4,
+    },
+    buttonDisabled: {
+        opacity: 0.6,
     },
     activateButtonText: {
         color: '#FFFFFF',

@@ -9,6 +9,15 @@ from app.jobs.queue import enqueue_task
 
 router = APIRouter(prefix="/digests", tags=["Digests"])
 
+
+@router.get("/settings")
+def get_digest_preferences(
+    settings: UserSettings = Depends(get_user_settings),
+):
+    """Get user's current digest preferences."""
+    return {"preferences": settings.digest_preferences or {}}
+
+
 @router.put("/settings")
 def update_digest_preferences(
     preferences: DigestPreferences,

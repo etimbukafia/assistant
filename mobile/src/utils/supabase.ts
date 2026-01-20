@@ -33,10 +33,14 @@ if (!isSupabaseConfigured) {
 const SecureStoreAdapter = {
     getItem: async (key: string): Promise<string | null> => {
         try {
-            // SecureStore is not available on web
+            // Web compatibility
             if (Platform.OS === 'web') {
-                return localStorage.getItem(key);
+                if (typeof localStorage !== 'undefined') {
+                    return localStorage.getItem(key);
+                }
+                return null; // Return null if localStorage unavailable on web
             }
+            // Native
             return await SecureStore.getItemAsync(key);
         } catch (error) {
             console.error('SecureStore getItem error:', error);
@@ -47,7 +51,9 @@ const SecureStoreAdapter = {
     setItem: async (key: string, value: string): Promise<void> => {
         try {
             if (Platform.OS === 'web') {
-                localStorage.setItem(key, value);
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem(key, value);
+                }
                 return;
             }
             await SecureStore.setItemAsync(key, value);
@@ -59,7 +65,9 @@ const SecureStoreAdapter = {
     removeItem: async (key: string): Promise<void> => {
         try {
             if (Platform.OS === 'web') {
-                localStorage.removeItem(key);
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.removeItem(key);
+                }
                 return;
             }
             await SecureStore.deleteItemAsync(key);

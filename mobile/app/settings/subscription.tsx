@@ -1,12 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { View, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Alert, ActivityIndicator, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
-import { api } from '../../src/services/api';
 import * as WebBrowser from 'expo-web-browser';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+    fetchSubscription,
+    createCheckout,
+    getPortalUrl,
+    SubscriptionData,
+} from '../../src/services/billing';
 
 const FEATURES = [
     'Inbox intelligence',
@@ -17,47 +23,50 @@ const FEATURES = [
     'Secure processing',
 ];
 
-interface SubscriptionData {
-    tier: 'trial' | 'pro';
-    status: 'trialing' | 'active' | 'canceled' | 'past_due' | 'expired';
-    is_active: boolean;
-    trial_ends_at: string | null;
-    expires_at: string | null;
-    days_remaining: number;
-}
-
 export default function SubscriptionScreen() {
     const router = useRouter();
-    const [subscription, setSubscription] = useState<SubscriptionData | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
-    const [refreshing, setRefreshing] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const queryClient = useQueryClient();
 
-    const fetchSubscription = useCallback(async () => {
-        try {
-            setError(null);
-            const response = await api.get('/billing/subscription');
-            setSubscription(response.data);
-        } catch (err: any) {
-            console.error('Failed to fetch subscription:', err);
-            setError(err.response?.data?.detail || 'Failed to load subscription status');
-        } finally {
-            setIsLoading(false);
-            setRefreshing(false);
-        }
-    }, []);
+    // Fetch subscription with TanStack Query
+    const { data: subscription, isLoading, error, refetch, isRefetching } = useQuery({
+        queryKey: ['subscription'],
+        queryFn: fetchSubscription,
+    });
 
-    useEffect(() => {
-        fetchSubscription();
-    }, [fetchSubscription]);
+    // Checkout mutation
+    const checkoutMutation = useMutation({
+        mutationFn: () => createCheckout({
+            success_url: 'corta://billing/success',
+            cancel_url: 'corta://billing/cancel',
+        }),
+        onSuccess: async (data) => {
+            if (data?.checkout_url) {
+                await WebBrowser.openBrowserAsync(data.checkout_url);
+                // Refresh subscription status after checkout
+                queryClient.invalidateQueries({ queryKey: ['subscription'] });
+            }
+        },
+        onError: (err: any) => {
+            Alert.alert('Error', err.response?.data?.detail || 'Failed to create checkout. Please try again.');
+        },
+    });
 
-    const onRefresh = useCallback(() => {
-        setRefreshing(true);
-        fetchSubscription();
-    }, [fetchSubscription]);
+    // Portal mutation
+    const portalMutation = useMutation({
+        mutationFn: getPortalUrl,
+        onSuccess: async (data) => {
+            if (data?.portal_url) {
+                await WebBrowser.openBrowserAsync(data.portal_url);
+            }
+        },
+        onError: (err: any) => {
+            Alert.alert('Error', err.response?.data?.detail || 'Failed to open portal. Please try again.');
+        },
+    });
 
-    const handleUpgrade = async () => {
+    const isCheckoutLoading = checkoutMutation.isPending || portalMutation.isPending;
+
+    const handleUpgrade = () => {
         Alert.alert(
             'Secure Checkout',
             "You'll be redirected to our secure checkout.",
@@ -65,43 +74,14 @@ export default function SubscriptionScreen() {
                 { text: 'Cancel', style: 'cancel' },
                 {
                     text: 'Continue',
-                    onPress: async () => {
-                        setIsCheckoutLoading(true);
-                        try {
-                            const response = await api.post('/billing/checkout', {
-                                success_url: 'corta://billing/success',
-                                cancel_url: 'corta://billing/cancel',
-                            });
-
-                            if (response.data?.checkout_url) {
-                                await WebBrowser.openBrowserAsync(response.data.checkout_url);
-                                // Refresh subscription status after checkout
-                                fetchSubscription();
-                            }
-                        } catch (err: any) {
-                            Alert.alert('Error', err.response?.data?.detail || 'Failed to create checkout. Please try again.');
-                        } finally {
-                            setIsCheckoutLoading(false);
-                        }
-                    }
+                    onPress: () => checkoutMutation.mutate(),
                 }
             ]
         );
     };
 
-    const handleManageSubscription = async () => {
-        setIsCheckoutLoading(true);
-        try {
-            const response = await api.get('/billing/portal-url');
-
-            if (response.data?.portal_url) {
-                await WebBrowser.openBrowserAsync(response.data.portal_url);
-            }
-        } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail || 'Failed to open portal. Please try again.');
-        } finally {
-            setIsCheckoutLoading(false);
-        }
+    const handleManageSubscription = () => {
+        portalMutation.mutate();
     };
 
     const formatDate = (dateString: string | null) => {
@@ -147,8 +127,8 @@ export default function SubscriptionScreen() {
                 contentContainerStyle={styles.content}
                 refreshControl={
                     <RefreshControl
-                        refreshing={refreshing}
-                        onRefresh={onRefresh}
+                        refreshing={isRefetching}
+                        onRefresh={() => refetch()}
                         tintColor={Colors.accentPrimary}
                     />
                 }
@@ -163,8 +143,8 @@ export default function SubscriptionScreen() {
                 {error && (
                     <View style={styles.errorCard}>
                         <Ionicons name="warning-outline" size={20} color={Colors.error} />
-                        <DonnaText style={styles.errorText}>{error}</DonnaText>
-                        <TouchableOpacity onPress={fetchSubscription}>
+                        <DonnaText style={styles.errorText}>Failed to load subscription status</DonnaText>
+                        <TouchableOpacity onPress={() => refetch()}>
                             <DonnaText style={styles.retryText}>Retry</DonnaText>
                         </TouchableOpacity>
                     </View>

@@ -22,8 +22,10 @@ from app.routes.v1 import (
     memory,
     gdpr,
     system,
-    chat
+    chat,
+    subscription
 )
+from app.handlers.webhook_handlers import router as billing_router
 
 app = FastAPI(
     title="AI Assistant for Assistants",
@@ -124,7 +126,7 @@ app.include_router(gdpr.router)
 app.include_router(system.router)
 app.include_router(chat.router)
 app.include_router(subscription.router)
-app.include_router(sync.router)
+app.include_router(billing_router)
 
 
 @app.get("/")

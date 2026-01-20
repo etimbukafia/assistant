@@ -102,6 +102,7 @@ export default function RootLayout() {
                 <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
                 <Stack.Screen name="settings/profile" options={{ presentation: 'modal' }} />
                 <Stack.Screen name="settings/activate_trial" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="settings/privacy" options={{ presentation: 'modal' }} />
                 <Stack.Screen name="(tabs)" options={{
                   headerShown: false,
                   presentation: 'card',

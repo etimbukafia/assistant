@@ -73,7 +73,7 @@ class PolarService:
             
             # Create new customer
             customer = self.client.customers.create(
-                email=email
+                customer_create={"email": email}
             )
             
             logger.info(f"Created new Polar customer: {customer.id}")
@@ -110,10 +110,12 @@ class PolarService:
         
         try:
             checkout = self.client.checkouts.create(
-                product_id=self.settings.POLAR_PRODUCT_ID,
-                customer_id=customer_id,
-                success_url=success_url,
-                cancel_url=cancel_url,
+                request={
+                    "products": [self.settings.POLAR_PRODUCT_ID],
+                    "customer_id": customer_id,
+                    "success_url": success_url,
+                    "return_url": cancel_url,
+                }
             )
             
             logger.info(f"Created checkout session: {checkout.id}")
@@ -189,12 +191,11 @@ class PolarService:
         
         try:
             session = self.client.customer_sessions.create(
-                customer_id=customer_id
+                request={"customer_id": customer_id}
             )
             
             return session.customer_portal_url
             
-
         except Exception as e:
             logger.error(f"Error getting portal URL for customer {customer_id}: {e}", exc_info=True)
             return None

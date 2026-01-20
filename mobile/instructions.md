@@ -21,7 +21,7 @@ Follow these rules and guidelines:
 ### Styling & layout
 - Use Flexbox-first layouts
 - Avoid excessive inline styles; use StyleSheet or a consistent utility system
-- Handle safe areas properly using SafeAreaView or safe area hooks
+- Handle safe areas properly using safe area view from react-native-safe-area-context or safe area hooks
 - Never hardcode screen sizes
 
 ### State & data

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { StyleSheet, View, ScrollView, SafeAreaView, TouchableOpacity, Switch, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,7 +6,8 @@ import { Colors, Spacing, Radius } from '@/src/theme/Theme';
 import { DonnaText } from '@/src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '@/src/context/AuthContext';
-import { api } from '@/src/services/api';
+import { useQuery } from '@tanstack/react-query';
+import { fetchSubscription, SubscriptionData } from '@/src/services/billing';
 
 interface SettingRowProps {
     icon: string;
@@ -46,35 +47,20 @@ const SettingRow: React.FC<SettingRowProps> = ({
     </TouchableOpacity>
 );
 
-interface SubscriptionInfo {
-    tier: string;
-    status: string;
-    is_active: boolean;
-    days_remaining: number;
-}
-
 export default function ProfileScreen() {
     const router = useRouter();
     const { user, signOut } = useAuth();
-    const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
+
+    // Fetch subscription with TanStack Query
+    const { data: subscription } = useQuery({
+        queryKey: ['subscription'],
+        queryFn: fetchSubscription,
+    });
 
     // Get display name from Supabase user_metadata (populated by Google OAuth)
     const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name;
     const displayEmail = user?.email;
     const initial = displayName?.[0]?.toUpperCase() || 'J';
-
-    // Fetch subscription status
-    useEffect(() => {
-        const fetchSubscription = async () => {
-            try {
-                const response = await api.get('/billing/subscription');
-                setSubscription(response.data);
-            } catch (err) {
-                console.error('Failed to fetch subscription:', err);
-            }
-        };
-        fetchSubscription();
-    }, []);
 
     // Generate subscription subtitle from real data
     const getSubscriptionSubtitle = () => {
@@ -226,7 +212,7 @@ export default function ProfileScreen() {
                             iconColor={Colors.accentSecondary}
                             title="Digests"
                             subtitle="Morning briefing & summaries"
-                            onPress={() => Alert.alert('Coming Soon', 'Digest settings')}
+                            onPress={() => router.push('/settings/digests' as any)}
                         />
                     </View>
                 </View>
@@ -236,32 +222,11 @@ export default function ProfileScreen() {
                     <DonnaText style={styles.sectionLabel}>DATA & PRIVACY</DonnaText>
                     <View style={styles.sectionCard}>
                         <SettingRow
-                            icon="download-outline"
-                            iconColor={Colors.textSecondary}
-                            title="Export My Data"
-                            onPress={() => Alert.alert('Export', 'Your data export will be ready shortly.')}
-                        />
-                        <SettingRow
-                            icon="log-out-outline"
-                            iconColor={Colors.error}
-                            title="Revoke Gmail Access"
-                            destructive
-                            onPress={() => Alert.alert(
-                                'Revoke Access',
-                                'This will disconnect your Gmail. You can reconnect anytime.',
-                                [{ text: 'Cancel' }, { text: 'Revoke', style: 'destructive' }]
-                            )}
-                        />
-                        <SettingRow
-                            icon="trash-outline"
-                            iconColor={Colors.error}
-                            title="Delete All Data"
-                            destructive
-                            onPress={() => Alert.alert(
-                                'Delete Data',
-                                'This action cannot be undone. All your data will be permanently deleted.',
-                                [{ text: 'Cancel' }, { text: 'Delete', style: 'destructive' }]
-                            )}
+                            icon="shield-checkmark-outline"
+                            iconColor={Colors.accentPrecision}
+                            title="Data & Privacy"
+                            subtitle="Export, revoke access, delete data"
+                            onPress={() => router.push('/settings/privacy' as any)}
                         />
                     </View>
                 </View>

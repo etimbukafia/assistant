@@ -10,6 +10,14 @@ This module provides:
 Note: Uses lazy imports inside fixtures to avoid import errors
 when running in environments with version conflicts.
 """
+import sys
+from pathlib import Path
+
+# Add src directory to Python path for imports
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
+
 import pytest
 from unittest.mock import MagicMock, patch
 from typing import Generator, Dict, Any, TYPE_CHECKING
@@ -27,7 +35,7 @@ if TYPE_CHECKING:
 def db_engine():
     """Create an in-memory SQLite database for testing."""
     from sqlalchemy import create_engine
-    from app.models import Base
+    from app.data.models import Base
     
     engine = create_engine(
         "sqlite:///:memory:",
@@ -62,20 +70,23 @@ def postgres_session():
     Create a session using the real Postgres database for integration tests.
     
     Uses DATABASE_URL from environment (Supabase or local Postgres).
-    Each test runs in a transaction that is rolled back after the test.
+    Each test runs in a SAVEPOINT that is rolled back after the test.
+    This ensures complete isolation between tests.
     
     Usage:
         @pytest.mark.integration
         def test_something(postgres_session):
             ...
     """
-    from app.database import SessionLocal
+    from app.infra.database import SessionLocal
     
     session = SessionLocal()
+    # Start a transaction
+    session.begin_nested()  # SAVEPOINT
     try:
         yield session
     finally:
-        session.rollback()
+        session.rollback()  # Rollback to SAVEPOINT
         session.close()
 
 
@@ -83,8 +94,8 @@ def postgres_session():
 def postgres_test_client(postgres_session):
     """FastAPI test client using real Postgres database."""
     from fastapi.testclient import TestClient
-    from app.main import app
-    from app.database import get_db
+    from main import app
+    from app.infra.database import get_db
     
     def override_get_db():
         try:
@@ -104,8 +115,8 @@ def postgres_test_client(postgres_session):
 def test_client(db_session):
     """Create a FastAPI test client with database session override."""
     from fastapi.testclient import TestClient
-    from app.main import app
-    from app.database import get_db
+    from main import app
+    from app.infra.database import get_db
     
     def override_get_db():
         try:
@@ -241,7 +252,7 @@ def email_factory():
 @pytest.fixture
 def message_factory(db_session):
     """Factory for creating Message model instances in the database."""
-    from app.models import Message
+    from app.data.models import Message
     
     def _create_message(
         gmail_id: str = "gmail_123",
