@@ -28,7 +28,7 @@ export interface DeletionSummary {
  * GDPR Data Export - Export all user data as JSON.
  */
 export async function exportUserData(): Promise<ExportData> {
-    const response = await api.get<ExportData>('/v1/user/export');
+    const response = await api.get<ExportData>('/user/export');
     return response.data;
 }
 
@@ -37,7 +37,7 @@ export async function exportUserData(): Promise<ExportData> {
  * Keeps user settings but removes all email-related data.
  */
 export async function revokeGmailAccess(): Promise<{ success: boolean; message: string }> {
-    const response = await api.post<{ success: boolean; message: string }>('/v1/auth/gmail/revoke');
+    const response = await api.post<{ success: boolean; message: string }>('/auth/gmail/revoke');
     return response.data;
 }
 
@@ -46,7 +46,7 @@ export async function revokeGmailAccess(): Promise<{ success: boolean; message: 
  * Deletes ALL user data including settings. This is irreversible.
  */
 export async function deleteAllData(): Promise<DeletionSummary> {
-    const response = await api.delete<DeletionSummary>('/v1/user/delete', {
+    const response = await api.delete<DeletionSummary>('/user/delete', {
         params: { confirm: true }
     });
     return response.data;

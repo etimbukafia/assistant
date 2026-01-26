@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, SafeAreaView, ScrollView, Pressable } from 'react-native';
+import { View, StyleSheet, ScrollView, Pressable } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Colors, Spacing, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
@@ -9,10 +10,17 @@ import demoData from '../../src/data/demo_state.json';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Animated, { FadeIn, FadeOut, Layout } from 'react-native-reanimated';
 
+// Helper to format date
+const formatMessageTime = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
+
 export default function DetailsScreen() {
-    const { id } = useLocalSearchParams();
+    const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
-    const message = demoData.messages.find(m => m.id === id) || demoData.messages[0];
+    const numericId = typeof id === 'string' ? parseInt(id, 10) : Array.isArray(id) ? parseInt(id[0], 10) : 0;
+    const message = demoData.messages.find(m => m.id === numericId) || demoData.messages[0];
 
     const [selectedSlots, setSelectedSlots] = useState<string[]>([]);
     const [isSent, setIsSent] = useState(false);
@@ -60,14 +68,14 @@ export default function DetailsScreen() {
 
             <ScrollView contentContainerStyle={styles.scrollContent}>
                 <View style={styles.messageSection}>
-                    <DonnaText variant="labelSmall" color={Colors.textMuted}>{message.sender} • {message.time}</DonnaText>
-                    <DonnaText variant="h1" style={styles.title}>{message.title}</DonnaText>
+                    <DonnaText variant="labelSmall" color={Colors.textMuted}>{message.sender} • {formatMessageTime(message.received_at)}</DonnaText>
+                    <DonnaText variant="h1" style={styles.title}>{message.subject}</DonnaText>
                     <DonnaText variant="bodyLarge" style={styles.snippet}>{message.snippet}</DonnaText>
                 </View>
 
                 <View style={styles.insightBox}>
                     <DonnaText variant="labelSmall" color={Colors.accentPrecision}>CERULEAN INSIGHT</DonnaText>
-                    <DonnaText variant="bodyBase" style={styles.insightText}>{message.insight}</DonnaText>
+                    <DonnaText variant="bodyBase" style={styles.insightText}>{message.summary}</DonnaText>
                 </View>
 
                 <View style={styles.suggestionSection}>

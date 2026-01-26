@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { StyleSheet, View, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FlashList } from '@shopify/flash-list';
@@ -7,8 +7,13 @@ import { DonnaText } from '../../src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { format, parseISO, isToday } from 'date-fns';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchCalendarEvents, syncCalendar, generateFollowUps, CalendarEvent, CalendarBriefing } from '../../src/services/calendar';
+import { CalendarEvent, CalendarBriefing } from '../../src/services/calendar';
+import { useCalendarEvents, useCalendarMutations } from '../../src/hooks/useCalendar';
+import { useAuth } from '../../src/context/AuthContext';
+import { SyncDataCTA } from '../../src/components/ui/SyncDataCTA';
+import { ConnectIntegrationCTA } from '../../src/components/ui/ConnectIntegrationCTA';
+import { SubscriptionExpiredCTA } from '../../src/components/ui/SubscriptionExpiredCTA';
+import demoData from '../../src/data/demo_state.json';
 
 // Extracted EventCard component for better FlashList performance
 const EventCard = React.memo(({
@@ -163,36 +168,44 @@ const EventCard = React.memo(({
 
 export default function CalendarScreen() {
     const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
-    const queryClient = useQueryClient();
+    const { isSandbox, isActive, subscriptionTier, calendarConnected } = useAuth();
 
-    // Fetch events from backend
-    const { data, isLoading, isRefetching, refetch } = useQuery({
-        queryKey: ['calendar-events'],
-        queryFn: () => fetchCalendarEvents(),
-        staleTime: 1000 * 60 * 5, // 5 minutes
-    });
+    // Fetch events from backend (disabled in sandbox mode)
+    const { data: eventsResponse, isLoading, isRefetching, refetch } = useCalendarEvents(
+        undefined, // no status filter
+        { enabled: !isSandbox && calendarConnected }
+    );
 
-    const events = data?.events || [];
+    // Calendar mutations
+    const { sync, isSyncing, generateFollowUps, isGeneratingFollowUps } = useCalendarMutations();
 
-    // Sync mutation
-    const syncMutation = useMutation({
-        mutationFn: () => syncCalendar(7),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['calendar-events'] });
-        },
-    });
-
-    // Follow-up generation mutation
-    const followUpMutation = useMutation({
-        mutationFn: (eventId: number) => generateFollowUps(eventId),
-    });
+    // In sandbox mode, use demo data with dynamic dates; otherwise use API response
+    const events = useMemo(() => {
+        if (isSandbox) {
+            const now = new Date();
+            return ((demoData as any).calendar || []).map((event: any, index: number) => {
+                // Make dates relative to today for realistic demo
+                const startDate = new Date(now);
+                startDate.setHours(10 + index * 2, 0, 0, 0);
+                const endDate = new Date(startDate);
+                endDate.setMinutes(endDate.getMinutes() + 30 + (index * 15));
+                return {
+                    ...event,
+                    start_time: startDate.toISOString(),
+                    end_time: endDate.toISOString(),
+                    status: index === 0 ? 'upcoming' : event.status,
+                };
+            }) as CalendarEvent[];
+        }
+        return eventsResponse?.events || [];
+    }, [isSandbox, eventsResponse]);
 
     const onRefresh = useCallback(() => {
         refetch();
     }, [refetch]);
 
     const handleSync = () => {
-        syncMutation.mutate();
+        sync(7);
     };
 
     const formatTime = useCallback((isoString: string) => {
@@ -223,28 +236,74 @@ export default function CalendarScreen() {
             </View>
             <TouchableOpacity
                 onPress={handleSync}
-                style={[styles.syncButton, syncMutation.isPending && styles.syncButtonDisabled]}
-                disabled={syncMutation.isPending}
+                style={[styles.syncButton, isSyncing && styles.syncButtonDisabled]}
+                disabled={isSyncing}
             >
-                <Ionicons name="refresh" size={20} color={syncMutation.isPending ? Colors.textMuted : Colors.accentPrecision} />
+                <Ionicons name="refresh" size={20} color={isSyncing ? Colors.textMuted : Colors.accentPrecision} />
             </TouchableOpacity>
         </View>
-    ), [syncMutation.isPending]);
+    ), [isSyncing]);
 
-    const ListEmpty = useCallback(() => (
-        <View style={styles.emptyContainer}>
-            <Ionicons name="calendar-outline" size={48} color={Colors.textMuted} />
-            <DonnaText variant="h2" style={styles.emptyTitle}>No meetings found</DonnaText>
-            <DonnaText variant="caption" style={styles.emptyText}>Your calendar looks clear for the next few days.</DonnaText>
-            <TouchableOpacity style={styles.syncButtonLarge} onPress={handleSync} disabled={syncMutation.isPending}>
-                <DonnaText style={styles.syncButtonText}>
-                    {syncMutation.isPending ? 'Syncing...' : 'Sync Calendar'}
-                </DonnaText>
-            </TouchableOpacity>
-        </View>
-    ), [syncMutation.isPending]);
+    const ListEmpty = useCallback(() => {
+        // State 1: Sandbox mode - show trial CTA
+        if (isSandbox) {
+            return (
+                <View style={styles.emptyContainer}>
+                    <Ionicons name="calendar-outline" size={48} color={Colors.textMuted} />
+                    <DonnaText variant="h2" style={styles.emptyTitle}>Preview Your Calendar</DonnaText>
+                    <DonnaText variant="caption" style={styles.emptyText}>Start your free trial to see your real meetings and get AI briefings.</DonnaText>
+                    <View style={{ marginTop: Spacing.md, width: '100%' }}>
+                        <SyncDataCTA />
+                    </View>
+                </View>
+            );
+        }
 
-    if (isLoading) {
+        // State 2: Subscription expired - show resubscribe CTA
+        if (!isActive) {
+            return (
+                <View style={styles.emptyContainer}>
+                    <Ionicons name="calendar-outline" size={48} color={Colors.textMuted} />
+                    <DonnaText variant="h2" style={styles.emptyTitle}>Calendar Sync Paused</DonnaText>
+                    <DonnaText variant="caption" style={styles.emptyText}>Your subscription has expired. Resubscribe to sync new calendar events.</DonnaText>
+                    <View style={{ marginTop: Spacing.md, width: '100%' }}>
+                        <SubscriptionExpiredCTA tier={subscriptionTier as 'trial' | 'pro'} />
+                    </View>
+                </View>
+            );
+        }
+
+        // State 3: Active but calendar not connected
+        if (!calendarConnected) {
+            return (
+                <View style={styles.emptyContainer}>
+                    <Ionicons name="calendar-outline" size={48} color={Colors.textMuted} />
+                    <DonnaText variant="h2" style={styles.emptyTitle}>Connect Your Calendar</DonnaText>
+                    <DonnaText variant="caption" style={styles.emptyText}>Link Google Calendar to see your meetings and get AI-powered briefings.</DonnaText>
+                    <View style={{ marginTop: Spacing.md, width: '100%' }}>
+                        <ConnectIntegrationCTA integration="calendar" />
+                    </View>
+                </View>
+            );
+        }
+
+        // State 4: Calendar connected but no events
+        return (
+            <View style={styles.emptyContainer}>
+                <Ionicons name="calendar-outline" size={48} color={Colors.textMuted} />
+                <DonnaText variant="h2" style={styles.emptyTitle}>No meetings found</DonnaText>
+                <DonnaText variant="caption" style={styles.emptyText}>Your calendar looks clear for the next few days.</DonnaText>
+                <TouchableOpacity style={styles.syncButtonLarge} onPress={handleSync} disabled={isSyncing}>
+                    <DonnaText style={styles.syncButtonText}>
+                        {isSyncing ? 'Syncing...' : 'Sync Calendar'}
+                    </DonnaText>
+                </TouchableOpacity>
+            </View>
+        );
+    }, [isSandbox, isActive, subscriptionTier, calendarConnected, isSyncing]);
+
+    // Don't show loading in sandbox mode (no API call happening)
+    if (isLoading && !isSandbox) {
         return (
             <SafeAreaView style={styles.container}>
                 <StatusBar style="dark" />
@@ -262,7 +321,7 @@ export default function CalendarScreen() {
             <FlashList
                 data={events}
                 renderItem={renderEvent}
-                keyExtractor={(item) => item.id.toString()}
+                keyExtractor={(item: CalendarEvent) => item.id.toString()}
                 ListHeaderComponent={ListHeader}
                 ListEmptyComponent={ListEmpty}
                 contentContainerStyle={styles.listContent}

@@ -15,6 +15,7 @@ cryptography==41.0.7
 transformers>=4.37.0
 torch>=2.0.0
 outlines>=0.1.14  # Structured JSON generation via constrained decoding
+sentence-transformers>=2.2.0  # Email classification (MiniLM embeddings)
 
 # Testing
 pytest>=8.0.0

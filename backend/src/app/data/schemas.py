@@ -79,9 +79,16 @@ class UserSettingsResponse(BaseModel):
     task_detection_instructions: Optional[str] = None
     reminder_preferences: Dict[str, Any]
     enable_quick_reply_from_task: bool
-    trial_ends_at: Optional[datetime] = None
+    # Subscription fields
+    subscription_tier: str = "trial"
     subscription_status: Optional[str] = None
+    trial_ends_at: Optional[datetime] = None
+    is_active: bool = False  # True if trial/pro is currently valid
+    days_remaining: int = 0
+    # Integration status
     initial_sync_completed: bool = False
+    gmail_connected: bool = False
+    calendar_connected: bool = False
     created_at: datetime
     updated_at: datetime
 

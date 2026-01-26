@@ -1,5 +1,8 @@
 /**
  * Billing & Subscription service - API functions for TanStack Query
+ *
+ * Note: Subscription STATUS is fetched via /settings endpoint (see AuthContext).
+ * This service handles billing ACTIONS (checkout, portal, trial activation).
  */
 
 import { api } from './api';
@@ -7,15 +10,6 @@ import { api } from './api';
 // ================================
 // Types
 // ================================
-
-export interface SubscriptionData {
-    tier: 'trial' | 'pro';
-    status: 'trialing' | 'active' | 'canceled' | 'past_due' | 'expired';
-    is_active: boolean;
-    trial_ends_at: string | null;
-    expires_at: string | null;
-    days_remaining: number;
-}
 
 export interface CheckoutRequest {
     success_url: string;
@@ -30,16 +24,12 @@ export interface PortalResponse {
     portal_url: string;
 }
 
-// ================================
-// Query Functions
-// ================================
-
-/**
- * Fetch current subscription status
- */
-export async function fetchSubscription(): Promise<SubscriptionData> {
-    const response = await api.get('/billing/subscription');
-    return response.data;
+export interface TrialActivationResponse {
+    status: 'activated' | 'active' | 'already_subscribed';
+    trial_ends_at?: string;
+    days_remaining?: number;
+    subscription_tier?: string;
+    message?: string;
 }
 
 // ================================
@@ -47,30 +37,34 @@ export async function fetchSubscription(): Promise<SubscriptionData> {
 // ================================
 
 /**
- * Create a Stripe checkout session for upgrade
+ * Create a Polar checkout session for Pro subscription upgrade.
+ * Returns a checkout URL to redirect the user to.
  */
 export async function createCheckout(request: CheckoutRequest): Promise<CheckoutResponse> {
-    const response = await api.post('/billing/checkout', request);
+    const response = await api.post<CheckoutResponse>('/billing/checkout', request);
     return response.data;
 }
 
 /**
- * Get Stripe customer portal URL for subscription management
+ * Get Polar customer portal URL for subscription management.
+ * Users can manage their subscription, update payment methods, and view invoices.
  */
 export async function getPortalUrl(): Promise<PortalResponse> {
-    const response = await api.get('/billing/portal-url');
+    const response = await api.get<PortalResponse>('/billing/portal-url');
     return response.data;
 }
 
 /**
- * Activate the user's free trial
+ * Activate the user's 7-day free trial.
+ * Called when user explicitly chooses to sync their real data.
  */
-export async function activateTrial(): Promise<void> {
-    await api.post('/subscription/activate-trial');
+export async function activateTrial(): Promise<TrialActivationResponse> {
+    const response = await api.post<TrialActivationResponse>('/subscription/activate-trial');
+    return response.data;
 }
 
 /**
- * Trigger initial Gmail sync after trial activation
+ * Trigger initial Gmail sync after trial activation.
  */
 export async function triggerInitialSync(): Promise<void> {
     await api.post('/messages/gmail/sync/initial');

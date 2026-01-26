@@ -1,44 +1,37 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { DonnaCard } from '../../src/components/ui/DonnaCard';
 import { SyncDataCTA } from '../../src/components/ui/SyncDataCTA';
+import { SubscriptionExpiredCTA } from '../../src/components/ui/SubscriptionExpiredCTA';
 import { StatusBar } from 'expo-status-bar';
 import demoData from '../../src/data/demo_state.json';
-import { Message } from '../../src/types/api';
+import { Message } from '../../src/services/messages';
 import { parseISO, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
-import { api } from '../../src/services/api';
+import { useMessages } from '../../src/hooks/useMessages';
 
 type FilterType = 'all' | 'needs_reply' | 'today';
 
-import { useQuery } from '@tanstack/react-query';
-
 export default function DashboardScreen() {
   const router = useRouter();
-  const { isSandbox, user, initialSyncCompleted } = useAuth();
+  const { isSandbox, isActive, subscriptionTier, initialSyncCompleted } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
   const [focusMode, setFocusMode] = useState(false);
 
-  // TanStack Query for fetching messages
-  const { data: messages = [], isLoading, isRefetching, refetch } = useQuery<Message[]>({
-    queryKey: ['messages', isSandbox],
-    queryFn: async () => {
-      if (isSandbox) {
-        // Simulate network delay for better UX
-        await new Promise(resolve => setTimeout(resolve, 500));
-        return demoData.messages as unknown as Message[];
-      } else {
-        const response = await api.get('/messages');
-        return response.data.messages || [];
-      }
-    },
-    // Remount/Fetch when sandbox state changes
-    enabled: true,
-  });
+  // Fetch messages - disabled in sandbox mode
+  const { data: messagesResponse, isLoading, isRefetching, refetch } = useMessages({ enabled: !isSandbox });
+
+  // In sandbox mode, use demo data; otherwise use API response
+  const messages = useMemo(() => {
+    if (isSandbox) {
+      return demoData.messages as unknown as Message[];
+    }
+    return messagesResponse?.messages || [];
+  }, [isSandbox, messagesResponse]);
 
   const onRefresh = React.useCallback(() => {
     refetch();
@@ -99,11 +92,22 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* Sync CTA Banner (only in Sandbox) */}
-      {isSandbox && <SyncDataCTA />}
+      {/* Sync CTA Banner (only in Sandbox - never started trial) */}
+      {isSandbox && (
+        <View style={styles.ctaBanner}>
+          <SyncDataCTA />
+        </View>
+      )}
 
-      {/* Initial Sync Progress Banner (When NOT in Sandbox and Syncing) */}
-      {!isSandbox && !initialSyncCompleted && (
+      {/* Subscription Expired Banner (started trial but expired) */}
+      {!isSandbox && !isActive && (
+        <View style={styles.ctaBanner}>
+          <SubscriptionExpiredCTA tier={subscriptionTier as 'trial' | 'pro'} />
+        </View>
+      )}
+
+      {/* Initial Sync Progress Banner (When active and syncing) */}
+      {!isSandbox && isActive && !initialSyncCompleted && (
         <View style={styles.syncBanner}>
           <ActivityIndicator size="small" color={Colors.accentPrimary} />
           <View style={styles.syncContent}>
@@ -241,6 +245,10 @@ const styles = StyleSheet.create({
   },
   actionButtonDisabled: {
     opacity: 0.5,
+  },
+  ctaBanner: {
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.md,
   },
   focusBanner: {
     flexDirection: 'row',

@@ -23,9 +23,11 @@ from app.routes.v1 import (
     gdpr,
     system,
     chat,
-    subscription
+    subscription,
+    billing,
 )
 from app.handlers.webhook_handlers import router as billing_router
+from app.security.rate_limiter import RateLimitMiddleware
 
 app = FastAPI(
     title="AI Assistant for Assistants",
@@ -45,6 +47,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate limiting middleware (applied to chat and sync endpoints)
+app.add_middleware(RateLimitMiddleware)
+
 # Initialize database and logging on startup
 @app.on_event("startup")
 def startup_event():
@@ -52,6 +57,24 @@ def startup_event():
     init_db()
     schedule_cleanup_job_if_needed()
     schedule_chat_cleanup_job_if_needed()
+    preload_email_classifier()
+
+
+def preload_email_classifier():
+    """
+    Preload the email classifier model to avoid first-request latency.
+
+    The MiniLM model (~80MB) takes a few seconds to load on first use.
+    Preloading at startup ensures the first sync request is fast.
+    """
+    try:
+        from app.services.email_classifier import preload_classifier
+        if preload_classifier():
+            print("Email classifier model preloaded successfully")
+        else:
+            print("Email classifier not available (sentence-transformers not installed)")
+    except Exception as e:
+        print(f"Failed to preload email classifier: {e}")
 
 
 def schedule_cleanup_job_if_needed():
@@ -126,7 +149,8 @@ app.include_router(gdpr.router)
 app.include_router(system.router)
 app.include_router(chat.router)
 app.include_router(subscription.router)
-app.include_router(billing_router)
+app.include_router(billing.router)
+app.include_router(billing_router)  # Polar webhooks
 
 
 @app.get("/")

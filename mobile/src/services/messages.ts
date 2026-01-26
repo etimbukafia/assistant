@@ -166,6 +166,62 @@ export async function syncMessages(maxResults: number = 3): Promise<{ synced: nu
     return response.data;
 }
 
+/**
+ * Poll for new messages since a timestamp
+ * Used for real-time updates without full sync
+ */
+export async function fetchNewMessages(since: string): Promise<{ messages: Message[]; count: number }> {
+    const response = await api.get<{ messages: Message[]; count: number }>(
+        `/messages/new?since=${encodeURIComponent(since)}`
+    );
+    return response.data;
+}
+
+/**
+ * Sync Gmail-side deletions to mark messages as source_deleted
+ * Detects messages deleted from Gmail after being synced
+ */
+export async function syncDeletions(): Promise<{
+    marked_deleted: number;
+    total_deletions: number;
+    message: string;
+}> {
+    const response = await api.post<{
+        marked_deleted: number;
+        total_deletions: number;
+        message: string;
+    }>('/messages/sync/deletions');
+    return response.data;
+}
+
+/**
+ * Sync sent messages to clear needs_reply flags
+ * Any outbound message from user clears ThreadState.needs_reply
+ */
+export async function syncSentMessages(): Promise<{
+    sent_messages_checked: number;
+    threads_updated: number;
+    thread_ids: string[];
+    message: string;
+}> {
+    const response = await api.post<{
+        sent_messages_checked: number;
+        threads_updated: number;
+        thread_ids: string[];
+        message: string;
+    }>('/messages/sync/sent');
+    return response.data;
+}
+
+/**
+ * Reprocess a message with AI analysis
+ * Updates thread state incrementally
+ */
+export async function reprocessMessage(messageId: number): Promise<{ message: string }> {
+    const response = await api.post<{ message: string }>(`/messages/${messageId}/reprocess`);
+    return response.data;
+}
+
 // ============================================
 // Scheduling APIs
 // ============================================

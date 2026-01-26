@@ -86,22 +86,42 @@ async def enqueue_message_for_processing(event: Dict[str, Any], payload: Dict[st
 
 
 @register_handler("message_received")
-async def log_message_stats(event: Dict[str, Any], payload: Dict[str, Any]):
+async def update_contact_stats(event: Dict[str, Any], payload: Dict[str, Any]):
     """
-    Log statistics about received messages (example of multiple handlers)
+    Update contact statistics when a message is received.
+
+    Increments message_count for the sender in ContactContext.
+    This powers Layer 3 relationship-based email filtering.
     """
     message_id = payload.get("message_id")
+    user_id = payload.get("user_id")
 
-    logger.info(
-        f"Message statistics logged for {message_id}",
-        extra={
-            "correlation_id": event["correlation_id"],
-            "event_name": event["name"],
-            "timestamp": event["timestamp"]
-        }
-    )
+    if not message_id or not user_id:
+        return
 
-    # In future: update analytics dashboard, increment counters, etc.
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
+        message = db.query(Message).filter(Message.id == message_id).first()
+        if not message:
+            return
+
+        # Extract sender email
+        sender = message.sender or ""
+        if '<' in sender and '>' in sender:
+            sender_email = sender[sender.index('<') + 1:sender.index('>')].strip().lower()
+        else:
+            sender_email = sender.strip().lower()
+
+        if sender_email:
+            from app.services.contact_stats import increment_message_count
+            increment_message_count(db, user_id, sender_email)
+
+    except Exception as e:
+        logger.warning(f"Failed to update contact stats for message {message_id}: {e}")
+    finally:
+        db.close()
 
 
 @register_handler("message_processed")

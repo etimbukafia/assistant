@@ -1,18 +1,14 @@
 import React from 'react';
-import { View, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Alert, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, RefreshControl } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import * as WebBrowser from 'expo-web-browser';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-    fetchSubscription,
-    createCheckout,
-    getPortalUrl,
-    SubscriptionData,
-} from '../../src/services/billing';
+import { useSettings } from '../../src/hooks/useSettings';
+import { useBillingActions } from '../../src/hooks/useSubscription';
 
 const FEATURES = [
     'Inbox intelligence',
@@ -25,46 +21,47 @@ const FEATURES = [
 
 export default function SubscriptionScreen() {
     const router = useRouter();
-    const queryClient = useQueryClient();
 
-    // Fetch subscription with TanStack Query
-    const { data: subscription, isLoading, error, refetch, isRefetching } = useQuery({
-        queryKey: ['subscription'],
-        queryFn: fetchSubscription,
-    });
+    // Fetch settings (includes subscription data)
+    const { settings, isLoading, error, refetch } = useSettings();
+    const [isRefetching, setIsRefetching] = React.useState(false);
 
-    // Checkout mutation
-    const checkoutMutation = useMutation({
-        mutationFn: () => createCheckout({
-            success_url: 'corta://billing/success',
-            cancel_url: 'corta://billing/cancel',
-        }),
-        onSuccess: async (data) => {
+    // Billing actions
+    const { createCheckoutAsync, getPortalUrlAsync, isCreatingCheckout, isGettingPortalUrl } = useBillingActions();
+
+    const handleRefresh = async () => {
+        setIsRefetching(true);
+        await refetch();
+        setIsRefetching(false);
+    };
+
+    const handleCheckout = async () => {
+        try {
+            const data = await createCheckoutAsync({
+                success_url: 'corta://billing/success',
+                cancel_url: 'corta://billing/cancel',
+            });
             if (data?.checkout_url) {
                 await WebBrowser.openBrowserAsync(data.checkout_url);
-                // Refresh subscription status after checkout
-                queryClient.invalidateQueries({ queryKey: ['subscription'] });
+                refetch();
             }
-        },
-        onError: (err: any) => {
+        } catch (err: any) {
             Alert.alert('Error', err.response?.data?.detail || 'Failed to create checkout. Please try again.');
-        },
-    });
+        }
+    };
 
-    // Portal mutation
-    const portalMutation = useMutation({
-        mutationFn: getPortalUrl,
-        onSuccess: async (data) => {
+    const handlePortal = async () => {
+        try {
+            const data = await getPortalUrlAsync();
             if (data?.portal_url) {
                 await WebBrowser.openBrowserAsync(data.portal_url);
             }
-        },
-        onError: (err: any) => {
+        } catch (err: any) {
             Alert.alert('Error', err.response?.data?.detail || 'Failed to open portal. Please try again.');
-        },
-    });
+        }
+    };
 
-    const isCheckoutLoading = checkoutMutation.isPending || portalMutation.isPending;
+    const isCheckoutLoading = isCreatingCheckout || isGettingPortalUrl;
 
     const handleUpgrade = () => {
         Alert.alert(
@@ -74,14 +71,14 @@ export default function SubscriptionScreen() {
                 { text: 'Cancel', style: 'cancel' },
                 {
                     text: 'Continue',
-                    onPress: () => checkoutMutation.mutate(),
+                    onPress: handleCheckout,
                 }
             ]
         );
     };
 
     const handleManageSubscription = () => {
-        portalMutation.mutate();
+        handlePortal();
     };
 
     const formatDate = (dateString: string | null) => {
@@ -90,12 +87,12 @@ export default function SubscriptionScreen() {
     };
 
     // Derive UI states from backend data
-    const isTrial = subscription?.tier === 'trial';
-    const isPro = subscription?.tier === 'pro';
-    const isActive = subscription?.is_active ?? false;
-    const isExpired = subscription?.status === 'expired';
-    const isGracePeriod = subscription?.status === 'past_due';
-    const isCanceled = subscription?.status === 'canceled';
+    const isTrial = settings?.subscription_tier === 'trial';
+    const isPro = settings?.subscription_tier === 'pro';
+    const isActive = settings?.is_active ?? false;
+    const isExpired = settings?.subscription_status === 'expired';
+    const isGracePeriod = settings?.subscription_status === 'past_due';
+    const isCanceled = settings?.subscription_status === 'canceled';
 
     if (isLoading) {
         return (
@@ -128,7 +125,7 @@ export default function SubscriptionScreen() {
                 refreshControl={
                     <RefreshControl
                         refreshing={isRefetching}
-                        onRefresh={() => refetch()}
+                        onRefresh={handleRefresh}
                         tintColor={Colors.accentPrimary}
                     />
                 }
@@ -151,7 +148,7 @@ export default function SubscriptionScreen() {
                 )}
 
                 {/* Status Card */}
-                {subscription && (
+                {settings && (
                     <View style={[styles.statusCard, isExpired && styles.statusCardExpired]}>
                         <View style={styles.statusHeader}>
                             <DonnaText style={styles.statusTitle}>
@@ -173,11 +170,11 @@ export default function SubscriptionScreen() {
                         </View>
 
                         <DonnaText style={styles.statusDescription}>
-                            {isTrial && isActive ? `You're currently using Corta with full access.\nYour free trial ends on ${formatDate(subscription.trial_ends_at)}.` :
+                            {isTrial && isActive ? `You're currently using Corta with full access.\nYour free trial ends on ${formatDate(settings?.trial_ends_at)}.` :
                                 isGracePeriod ? 'Your trial has ended, but Corta is still available.\nAdd a payment method within 3 days to continue uninterrupted.' :
                                     isExpired ? 'Corta is currently in read-only mode.\nResume your subscription to continue inbox processing and suggestions.' :
-                                        isCanceled ? `Your subscription is canceled but you have access until ${formatDate(subscription.expires_at)}.` :
-                                            isPro && isActive ? `You have full access to all Corta Pro features.\nRenews on ${formatDate(subscription.expires_at)}.` :
+                                        isCanceled ? 'Your subscription is canceled but you still have access for the remaining period.' :
+                                            isPro && isActive ? 'You have full access to all Corta Pro features.' :
                                                 'Checking your subscription status...'}
                         </DonnaText>
 
@@ -187,10 +184,10 @@ export default function SubscriptionScreen() {
                             </DonnaText>
                         )}
 
-                        {subscription.days_remaining > 0 && (
+                        {settings?.days_remaining > 0 && (
                             <View style={styles.daysRemainingBadge}>
                                 <DonnaText style={styles.daysRemainingText}>
-                                    {subscription.days_remaining} days remaining
+                                    {settings?.days_remaining} days remaining
                                 </DonnaText>
                             </View>
                         )}

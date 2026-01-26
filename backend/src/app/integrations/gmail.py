@@ -385,7 +385,7 @@ class GmailClient:
         return sent_messages
 
     def get_message_detail(self, message_id: str):
-        """Get detailed message information"""
+        """Get detailed message information including Gmail labels"""
         if not self.service:
             self.authenticate()
 
@@ -401,7 +401,15 @@ class GmailClient:
         recipient = next((h['value'] for h in headers if h['name'] == 'To'), 'Unknown')
         date = next((h['value'] for h in headers if h['name'] == 'Date'), None)
 
+        # Extract headers for filtering (bulk/automated email detection)
+        list_unsubscribe = next((h['value'] for h in headers if h['name'].lower() == 'list-unsubscribe'), None)
+        precedence = next((h['value'] for h in headers if h['name'].lower() == 'precedence'), None)
+        auto_submitted = next((h['value'] for h in headers if h['name'].lower() == 'auto-submitted'), None)
+
         body = self._get_message_body(message['payload'])
+
+        # Extract Gmail labels (includes CATEGORY_* labels)
+        gmail_labels = message.get('labelIds', [])
 
         return {
             'message_id': message['id'],
@@ -411,7 +419,13 @@ class GmailClient:
             'recipient': recipient,
             'body': body,
             'received_at': self._parse_date(date) if date else datetime.now(timezone.utc),
-            'attachments': self._get_attachment_metadata(message['payload'], message['id'])
+            'attachments': self._get_attachment_metadata(message['payload'], message['id']),
+            'gmail_labels': gmail_labels,
+            'headers': {
+                'list_unsubscribe': list_unsubscribe,
+                'precedence': precedence,
+                'auto_submitted': auto_submitted,
+            }
         }
 
     def _get_attachment_metadata(self, payload, message_id: str) -> list:

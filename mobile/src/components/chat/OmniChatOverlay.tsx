@@ -1,5 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Dimensions, Pressable } from 'react-native';
+import {
+    StyleSheet,
+    View,
+    TextInput,
+    TouchableOpacity,
+    KeyboardAvoidingView,
+    Platform,
+    Dimensions,
+    Pressable,
+    ScrollView,
+    ActivityIndicator,
+} from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius } from '../../theme/Theme';
@@ -9,11 +20,9 @@ import Animated, {
     useAnimatedStyle,
     withSpring,
     withTiming,
-    interpolate,
-    Extrapolation,
 } from 'react-native-reanimated';
+import { useChat, DisplayMessage } from '../../context/ChatContext';
 
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const OVERLAY_HEIGHT = 420;
 
 interface OmniChatOverlayProps {
@@ -21,13 +30,50 @@ interface OmniChatOverlayProps {
     onClose: () => void;
 }
 
-type ChatMode = 'action' | 'reflection';
+// Message Bubble Component
+const MessageBubble: React.FC<{ message: DisplayMessage; accentColor: string }> = ({
+    message,
+    accentColor,
+}) => {
+    const isUser = message.role === 'user';
+    const isProcessing = message.status === 'processing' || message.status === 'sending';
+    const isError = message.status === 'error';
+
+    return (
+        <View style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble]}>
+            {isProcessing && !message.content ? (
+                <View style={styles.processingBubble}>
+                    <ActivityIndicator size="small" color={accentColor} />
+                </View>
+            ) : (
+                <DonnaText
+                    style={[
+                        styles.messageText,
+                        isUser && styles.userMessageText,
+                        isError && styles.errorMessageText,
+                    ]}
+                >
+                    {message.content}
+                </DonnaText>
+            )}
+        </View>
+    );
+};
 
 export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
     isVisible,
     onClose,
 }) => {
-    const [mode, setMode] = useState<ChatMode>('action');
+    const {
+        chatMode,
+        setChatMode,
+        messages,
+        isTyping,
+        sendMessage,
+        startNewSession,
+        currentSession,
+    } = useChat();
+
     const [inputText, setInputText] = useState('');
 
     // Animation values - NOW SLIDES FROM TOP
@@ -71,10 +117,26 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
 
     // Mode Toggle Logic
     const toggleMode = () => {
-        setMode(prev => prev === 'action' ? 'reflection' : 'action');
+        const newMode = chatMode === 'action' ? 'reflection' : 'action';
+        setChatMode(newMode);
     };
 
-    const isAction = mode === 'action';
+    // Handle send message
+    const handleSend = async () => {
+        const text = inputText.trim();
+        if (!text) return;
+
+        setInputText('');
+
+        // Create session if needed
+        if (!currentSession) {
+            await startNewSession(chatMode);
+        }
+
+        await sendMessage(text);
+    };
+
+    const isAction = chatMode === 'action';
     const accentColor = isAction ? Colors.accentSecondary : Colors.success;
     const placeholderText = isAction
         ? "How can I help you execute?"
@@ -134,11 +196,29 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
 
                         {/* Chat Content Area */}
                         <View style={styles.contentArea}>
-                            <DonnaText style={styles.placeholderMessage}>
-                                {isAction
-                                    ? "I'm ready to help you clear your inbox, schedule meetings, or organize tasks."
-                                    : "Let's pause. Reflect on your day, capture thoughts, or clear your mind."}
-                            </DonnaText>
+                            {messages.length === 0 ? (
+                                <DonnaText style={styles.placeholderMessage}>
+                                    {isAction
+                                        ? "I'm ready to help you clear your inbox, schedule meetings, or organize tasks."
+                                        : "Let's pause. Reflect on your day, capture thoughts, or clear your mind."}
+                                </DonnaText>
+                            ) : (
+                                <ScrollView
+                                    style={styles.messagesContainer}
+                                    contentContainerStyle={styles.messagesContent}
+                                    showsVerticalScrollIndicator={false}
+                                >
+                                    {messages.map((msg) => (
+                                        <MessageBubble key={msg.id} message={msg} accentColor={accentColor} />
+                                    ))}
+                                    {isTyping && (
+                                        <View style={styles.typingIndicator}>
+                                            <ActivityIndicator size="small" color={accentColor} />
+                                            <DonnaText style={styles.typingText}>Thinking...</DonnaText>
+                                        </View>
+                                    )}
+                                </ScrollView>
+                            )}
                         </View>
 
                         {/* Input Area */}
@@ -151,10 +231,15 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
                                 onChangeText={setInputText}
                                 multiline
                                 maxLength={500}
+                                editable={!isTyping}
                             />
                             <TouchableOpacity
-                                style={[styles.sendButton, { backgroundColor: inputText.trim() ? accentColor : Colors.border }]}
-                                disabled={!inputText.trim()}
+                                style={[
+                                    styles.sendButton,
+                                    { backgroundColor: inputText.trim() && !isTyping ? accentColor : Colors.border }
+                                ]}
+                                disabled={!inputText.trim() || isTyping}
+                                onPress={handleSend}
                             >
                                 <Ionicons name="arrow-up" size={20} color="#FFF" />
                             </TouchableOpacity>
@@ -267,7 +352,7 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingHorizontal: Spacing.xl,
+        paddingHorizontal: Spacing.md,
     },
     placeholderMessage: {
         textAlign: 'center',
@@ -275,6 +360,56 @@ const styles = StyleSheet.create({
         fontSize: 15,
         lineHeight: 22,
         fontFamily: 'Inter_400Regular',
+        paddingHorizontal: Spacing.md,
+    },
+    messagesContainer: {
+        flex: 1,
+        width: '100%',
+    },
+    messagesContent: {
+        paddingVertical: Spacing.sm,
+        gap: Spacing.sm,
+    },
+    messageBubble: {
+        maxWidth: '85%',
+        paddingVertical: Spacing.sm,
+        paddingHorizontal: Spacing.md,
+        borderRadius: Radius.lg,
+    },
+    userBubble: {
+        alignSelf: 'flex-end',
+        backgroundColor: Colors.accentSecondary,
+    },
+    assistantBubble: {
+        alignSelf: 'flex-start',
+        backgroundColor: 'rgba(0,0,0,0.05)',
+    },
+    messageText: {
+        fontSize: 14,
+        lineHeight: 20,
+        color: Colors.textPrimary,
+    },
+    userMessageText: {
+        color: '#FFFFFF',
+    },
+    errorMessageText: {
+        color: Colors.error,
+    },
+    processingBubble: {
+        paddingVertical: Spacing.xs,
+        paddingHorizontal: Spacing.sm,
+    },
+    typingIndicator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: Spacing.xs,
+        alignSelf: 'flex-start',
+        paddingVertical: Spacing.xs,
+        paddingHorizontal: Spacing.sm,
+    },
+    typingText: {
+        fontSize: 12,
+        color: Colors.textMuted,
     },
     inputContainer: {
         flexDirection: 'row',

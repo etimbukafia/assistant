@@ -322,6 +322,24 @@ def update_task(
     return task
 
 
+@router.post("/{task_id}/start")
+def start_task(task_id: int, db: Session = Depends(get_db_for_user)):
+    """Move task to in_progress status
+
+    Typically used when a waiting_for task receives the expected response
+    and the user needs to take action on it.
+    """
+
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task.status = "in_progress"
+    db.commit()
+
+    return {"message": "Task started", "task_id": task_id}
+
+
 @router.post("/{task_id}/complete")
 def complete_task(task_id: int, db: Session = Depends(get_db_for_user)):
     """Mark task as completed"""

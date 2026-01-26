@@ -21,8 +21,16 @@ interface AuthContextType {
     isLoading: boolean;
     session: Session | null;
     user: User | null;
-    isSandbox: boolean;
+    // Subscription state
+    isSandbox: boolean;        // True if user never started trial (show demo data)
+    isActive: boolean;         // True if trial/pro is currently valid (allow sync)
+    subscriptionTier: string;  // "trial" | "pro"
+    daysRemaining: number;     // Days left in trial/subscription
+    // Integration state
     initialSyncCompleted: boolean;
+    gmailConnected: boolean;
+    calendarConnected: boolean;
+    // Actions
     signInWithGoogle: () => Promise<void>;
     signOut: () => Promise<void>;
     refreshProfile: () => Promise<void>;
@@ -34,8 +42,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [session, setSession] = useState<Session | null>(null);
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [isSandbox, setIsSandbox] = useState(false);
+    // Subscription state
+    const [isSandbox, setIsSandbox] = useState(true); // True = never started trial
+    const [isActive, setIsActive] = useState(false);  // True = trial/pro currently valid
+    const [subscriptionTier, setSubscriptionTier] = useState('trial');
+    const [daysRemaining, setDaysRemaining] = useState(0);
+    // Integration state
     const [initialSyncCompleted, setInitialSyncCompleted] = useState(false);
+    const [gmailConnected, setGmailConnected] = useState(false);
+    const [calendarConnected, setCalendarConnected] = useState(false);
 
     const checkSubscription = async () => {
         if (!session?.user) return;
@@ -46,19 +61,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const response = await api.get('/settings');
             const settings = response.data;
 
-            // Sandbox = No trial end date set (Deferred Trial)
-            // If trial_ends_at is set, they are in Trial or Active
-            setIsSandbox(!settings.trial_ends_at);
+            // Subscription state
+            // Sandbox = never started trial (show demo data)
+            setIsSandbox(settings.trial_ends_at == null);
+            // Active = trial/pro is currently valid (from backend)
+            setIsActive(!!settings.is_active);
+            setSubscriptionTier(settings.subscription_tier || 'trial');
+            setDaysRemaining(settings.days_remaining || 0);
 
-            // Sync status
+            // Integration state
             setInitialSyncCompleted(!!settings.initial_sync_completed);
+            setGmailConnected(!!settings.gmail_connected);
+            setCalendarConnected(!!settings.calendar_connected);
         } catch (error) {
             console.error('Failed to fetch settings:', error);
-            // Default to sandbox if check fails to be safe? 
-            // Or default to FALSE to avoid showing mock data to real users on error?
-            // "Secure by default" => if error, maybe assume REAL data (false) to avoid leaking mock data?
-            // But for this specific feature "Deferred Trial", default path is Sandbox.
-            // Let's stick to current state if error.
+            // Safe defaults on error
+            setIsSandbox(true);
+            setIsActive(false);
+            setSubscriptionTier('trial');
+            setDaysRemaining(0);
+            setGmailConnected(false);
+            setCalendarConnected(false);
         }
     };
 
@@ -87,7 +110,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (session) {
             checkSubscription();
         } else {
-            setIsSandbox(false); // Reset
+            // Reset all state on logout
+            setIsSandbox(true);
+            setIsActive(false);
+            setSubscriptionTier('trial');
+            setDaysRemaining(0);
+            setInitialSyncCompleted(false);
+            setGmailConnected(false);
+            setCalendarConnected(false);
         }
     }, [session]);
 
@@ -173,8 +203,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 isLoading,
                 session,
                 user,
+                // Subscription state
                 isSandbox,
+                isActive,
+                subscriptionTier,
+                daysRemaining,
+                // Integration state
                 initialSyncCompleted,
+                gmailConnected,
+                calendarConnected,
+                // Actions
                 signInWithGoogle,
                 signOut,
                 refreshProfile: checkSubscription

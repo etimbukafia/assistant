@@ -1,13 +1,12 @@
 import React from 'react';
-import { StyleSheet, View, ScrollView, SafeAreaView, TouchableOpacity, Switch, Alert } from 'react-native';
+import { StyleSheet, View, ScrollView, TouchableOpacity, Switch, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius } from '@/src/theme/Theme';
 import { DonnaText } from '@/src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '@/src/context/AuthContext';
-import { useQuery } from '@tanstack/react-query';
-import { fetchSubscription, SubscriptionData } from '@/src/services/billing';
 
 interface SettingRowProps {
     icon: string;
@@ -49,27 +48,20 @@ const SettingRow: React.FC<SettingRowProps> = ({
 
 export default function ProfileScreen() {
     const router = useRouter();
-    const { user, signOut } = useAuth();
-
-    // Fetch subscription with TanStack Query
-    const { data: subscription } = useQuery({
-        queryKey: ['subscription'],
-        queryFn: fetchSubscription,
-    });
+    const { user, signOut, subscriptionTier, isActive, daysRemaining } = useAuth();
 
     // Get display name from Supabase user_metadata (populated by Google OAuth)
     const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name;
     const displayEmail = user?.email;
     const initial = displayName?.[0]?.toUpperCase() || 'J';
 
-    // Generate subscription subtitle from real data
+    // Generate subscription subtitle from AuthContext data
     const getSubscriptionSubtitle = () => {
-        if (!subscription) return 'Loading...';
-        if (subscription.tier === 'pro' && subscription.status === 'active') {
+        if (subscriptionTier === 'pro' && isActive) {
             return 'Active subscription';
         }
-        if (subscription.days_remaining > 0) {
-            return `${subscription.days_remaining} days left in trial`;
+        if (daysRemaining > 0) {
+            return `${daysRemaining} days left in trial`;
         }
         return 'Trial expired';
     };
@@ -137,75 +129,48 @@ export default function ProfileScreen() {
                         <DonnaText style={styles.subscriptionSubtitle}>{getSubscriptionSubtitle()}</DonnaText>
                     </View>
                     <DonnaText style={styles.upgradeText}>
-                        {subscription?.tier === 'pro' && subscription?.status === 'active' ? 'Manage →' : 'Upgrade →'}
+                        {subscriptionTier === 'pro' && isActive ? 'Manage →' : 'Upgrade →'}
                     </DonnaText>
                 </TouchableOpacity>
 
                 {/* General Section */}
                 <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>GENERAL</DonnaText>
+                    <DonnaText style={styles.sectionLabel}>PREFERENCES</DonnaText>
                     <View style={styles.sectionCard}>
                         <SettingRow
-                            icon="notifications-outline"
+                            icon="settings-outline"
                             iconColor={Colors.accentSecondary}
-                            title="Notifications"
-                            subtitle="Push & email preferences"
-                            onPress={() => Alert.alert('Coming Soon', 'Notification settings')}
+                            title="General"
+                            subtitle="AI behavior & notification settings"
+                            onPress={() => router.push('/settings/general' as any)}
                         />
                         <SettingRow
-                            icon="moon-outline"
+                            icon="people-outline"
                             iconColor={Colors.accentPrecision}
-                            title="Appearance"
-                            subtitle="Theme & display options"
-                            onPress={() => Alert.alert('Coming Soon', 'Appearance settings')}
-                        />
-                    </View>
-                </View>
-
-                {/* AI & Automation Section */}
-                <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>AI & AUTOMATION</DonnaText>
-                    <View style={styles.sectionCard}>
-                        <SettingRow
-                            icon="sparkles-outline"
-                            iconColor={Colors.accentSecondary}
-                            title="Task Detection"
-                            subtitle="How Donna extracts tasks"
-                            onPress={() => Alert.alert('Coming Soon', 'Task detection settings')}
-                        />
-                        <SettingRow
-                            icon="checkmark-done-outline"
-                            iconColor={Colors.success}
-                            title="Auto-Approve Tasks"
-                            showArrow={false}
-                            rightElement={
-                                <Switch
-                                    value={false}
-                                    trackColor={{ true: Colors.success }}
-                                    thumbColor="#FFF"
-                                />
-                            }
+                            title="Contacts"
+                            subtitle="Relationship intelligence & VIPs"
+                            onPress={() => router.push('/settings/contacts' as any)}
                         />
                         <SettingRow
                             icon="brain-outline"
                             iconColor="#9B59B6"
                             title="Memory & Preferences"
                             subtitle="What Donna remembers"
-                            onPress={() => Alert.alert('Coming Soon', 'Memory settings')}
+                            onPress={() => router.push('/settings/memory' as any)}
                         />
                     </View>
                 </View>
 
                 {/* Calendar Section */}
                 <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>CALENDAR</DonnaText>
+                    <DonnaText style={styles.sectionLabel}>PRODUCTIVITY</DonnaText>
                     <View style={styles.sectionCard}>
                         <SettingRow
                             icon="calendar-outline"
                             iconColor={Colors.accentPrecision}
                             title="Calendar Settings"
                             subtitle="Working hours, buffers, timezone"
-                            onPress={() => Alert.alert('Coming Soon', 'Calendar settings')}
+                            onPress={() => router.push('/settings/calendar' as any)}
                         />
                         <SettingRow
                             icon="mail-outline"

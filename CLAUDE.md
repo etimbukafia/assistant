@@ -4,70 +4,104 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AI-powered executive assistant inbox management system. FastAPI backend + React frontend that connects to Gmail, auto-summarizes threads, extracts tasks/dates/people/decisions, classifies emails, and drafts replies.
+AI-powered executive assistant inbox management system. FastAPI backend + React frontend + React Native (Expo) mobile app. Connects to Gmail, auto-summarizes threads, extracts tasks/dates/people/decisions, classifies emails, and drafts replies using AI.
 
 ## Development Commands
 
-### Backend
+### Backend (from `backend/` directory)
 ```bash
-# Run API server
-uvicorn app.main:app --reload
-
-# Run background worker (processes email analysis queue)
-python -m app.worker
-
-# Monitor queue
-curl http://localhost:8000/queue/stats
+uvicorn src.main:app --reload          # Run API server
+python -m src.app.jobs.worker          # Run background worker
+curl http://localhost:8000/queue/stats # Monitor queue
 ```
 
-### Frontend
+### Frontend (from `frontend/` directory)
 ```bash
-cd frontend
-npm run dev      # Development server
+npm run dev      # Development server (Vite)
 npm run build    # Production build
 ```
 
-### Testing
+### Mobile (from `mobile/` directory)
 ```bash
-# Run all tests
-pytest
+npm start        # Start Expo
+npm run android  # Run on Android
+npm run ios      # Run on iOS
+```
 
-# Run specific test file
-pytest tests/unit/test_example.py
-
-# Run by marker
-pytest -m unit           # Fast, mocked tests
-pytest -m integration    # May use real resources
-pytest -m "not slow"     # Skip LLM/API tests
-pytest -m "not live"     # Skip tests that cost money
+### Testing (from `backend/` directory)
+```bash
+pytest                              # Run all tests
+pytest tests/unit/test_auth.py      # Run specific test file
+pytest -m unit                      # Fast, mocked tests
+pytest -m integration               # May use real resources
+pytest -m sandbox                   # Polar sandbox tests
+pytest -m api                       # API endpoint tests
+pytest -m "not slow"                # Skip LLM/API tests
+pytest -m "not live"                # Skip tests that cost money
 ```
 
 ## Architecture
 
 ### Directory Structure
-- `core/` - **Reusable frameworks** (copy to other projects unchanged)
-  - `core/events/` - Event emission with FastAPI BackgroundTasks
-  - `core/queue/` - Postgres-backed task queue with row-level locking
-  - `core/llm/` - LLM provider abstraction (Gemini, HuggingFace/Outlines)
-- `app/` - Application-specific code
-  - `app/handlers/` - Event handlers (message_received, task events, etc.)
-  - `app/agents/` - Autonomous modules (scheduling, follow-up, communication)
-  - `app/main.py` - FastAPI endpoints
-  - `app/worker.py` - Queue worker with task handlers
-- `prompts/` - AI prompts as markdown files (loaded with caching)
-- `frontend/src/` - React components in `components/` and `views/`
+```
+backend/src/
+├── core/              # Reusable frameworks (copy to other projects unchanged)
+│   ├── events/        # Event emission with FastAPI BackgroundTasks
+│   ├── queue/         # Postgres-backed task queue with row-level locking
+│   └── llm/           # LLM provider abstraction (Gemini, HuggingFace/Outlines)
+├── app/               # Application-specific code
+│   ├── routes/v1/     # API endpoints
+│   ├── handlers/      # Event handlers
+│   ├── services/      # Business logic (thread_state, digest, calendar, polar)
+│   ├── processors/    # AI processing (ai.py, message.py, document.py)
+│   ├── agents/        # Autonomous modules (scheduling, follow-up, communication)
+│   ├── chat/          # Chat/conversation system
+│   ├── intelligence/  # Context building & pattern tracking
+│   ├── integrations/  # Gmail integration
+│   ├── data/          # Models & schemas
+│   ├── infra/         # Config, database, logging
+│   └── security/      # Encryption, auth, feature gating
+backend/prompts/       # AI prompts as markdown files (cached loading)
 
-### Key Patterns
+mobile/
+├── app/               # Expo Router screens (file-based routing)
+│   └── (tabs)/        # Tab navigation screens
+├── src/
+│   ├── components/    # Reusable UI components
+│   ├── context/       # React contexts (AuthContext, ChatContext)
+│   ├── hooks/         # TanStack Query hooks
+│   ├── services/      # API service functions
+│   └── theme/         # Design tokens and colors
+```
 
-**Event-Driven Processing**: Endpoints emit events via `emit_event()`, handlers run in BackgroundTasks. Handlers are registered with `@register_handler("event_name")` decorator.
+### Key Backend Patterns
 
-**LLM Orchestration**: `LLMOrchestrator` abstracts provider selection. Providers cached at class level. Use `hf_outlines` provider for structured JSON output.
+**Event-Driven Processing**: Endpoints emit events via `emit_event()`, handlers run in BackgroundTasks. Register handlers with `@register_handler("event_name")`.
+
+**LLM Orchestration**: `LLMOrchestrator` in `core/llm/` abstracts provider selection. Use `hf_outlines` provider for structured JSON output.
 
 **Thread State Machine**: `ThreadStateService` tracks thread state incrementally (open_tasks, decisions, participants). Avoids re-analyzing full transcripts on each message.
 
 **Batch Processing**: Worker batches messages by user for efficient LLM inference. User data never mixed.
 
 **Context Injection**: `ContextBuilder` injects user preferences from `PrincipalMemory`, `DecisionPattern`, and `ContactContext` into prompts.
+
+**Subscription Gating**: Two levels of access control:
+- `require_active_subscription` - FastAPI dependency for endpoints requiring active trial/pro
+- `require_feature(Feature.X)` - Fine-grained feature gating with 3-day grace period
+
+### Key Mobile Patterns
+
+**State Management**: TanStack Query for server state (API data), React Context for client state (auth, settings).
+
+**Sandbox Mode**: Before trial activation, `isSandbox=true` shows demo data from `demo_state.json`. After trial activation, fetches real data.
+
+**Subscription States**:
+- `isSandbox` - Never started trial (show demo data)
+- `isActive` - Trial/pro currently valid (allow sync)
+- `!isActive && !isSandbox` - Expired (show CTA, read-only access)
+
+**API Hooks Pattern**: Create hooks in `src/hooks/` that wrap TanStack Query, pass `enabled: false` when in sandbox to avoid unnecessary API calls.
 
 ### Data Flow
 1. `/sync` fetches Gmail messages → saved to DB → `emit_event("message_received")`
@@ -79,25 +113,32 @@ pytest -m "not live"     # Skip tests that cost money
 
 Required in `.env`:
 - `DATABASE_URL` - PostgreSQL connection string (or SQLite for local dev)
-- `GOOGLE_API_KEY` - Gemini API key (if using Gemini provider)
-- `ENCRYPTION_KEY` - For at-rest email body encryption
+- `GOOGLE_API_KEY` - Gemini API key
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` - Gmail OAuth credentials
+- `ENCRYPTION_KEY` - For at-rest email body encryption (Fernet key)
+- `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_JWT_SECRET` - Supabase auth
+- `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET` - Polar billing
 
 Optional:
 - `LLM_PROVIDER` - "huggingface" or "gemini" (default)
 - `LLM_HF_MODEL` - HuggingFace model ID for local inference
+- `FRONTEND_URL` - Frontend URL for OAuth redirects
 
 ## Database
 
-SQLAlchemy models in `app/models.py`. Migrations in `migrations/` as raw SQL files. Key models:
+SQLAlchemy models in `app/data/models.py`. Migrations in `backend/migrations/` as raw SQL files. Key models:
 - `Message`, `ThreadState`, `Task`, `GmailAccount`
 - `PrincipalMemory`, `DecisionPattern`, `ContactContext` (user preferences)
 - `TaskQueue` (persistent job queue)
-- `SchedulingSuggestion`, `CalendarEvent`, `Digest`
+- `SchedulingSuggestion`, `CalendarEvent`, `Digest`, `ChatSession`
+- `UserSettings` - has `@property` methods `is_active` and `days_remaining` for computed subscription status
 
 ## Test Markers
 
-Tests use pytest markers defined in `pytest.ini`:
+Tests use pytest markers defined in `backend/pytest.ini`:
 - `@pytest.mark.unit` - Fast, isolated, mocked dependencies
 - `@pytest.mark.integration` - May use real resources
+- `@pytest.mark.sandbox` - Polar sandbox tests
+- `@pytest.mark.api` - API endpoint tests
 - `@pytest.mark.slow` - LLM inference, API calls
 - `@pytest.mark.live` - Real API calls (costs money)

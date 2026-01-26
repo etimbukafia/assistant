@@ -93,6 +93,14 @@ export async function fetchCalendarEvents(status?: string): Promise<CalendarEven
 }
 
 /**
+ * Fetch a single calendar event by ID
+ */
+export async function fetchCalendarEvent(eventId: number): Promise<CalendarEvent> {
+    const response = await api.get<CalendarEvent>(`/calendar/events/${eventId}`);
+    return response.data;
+}
+
+/**
  * Sync calendar events from Google Calendar
  */
 export async function syncCalendar(daysAhead: number = 7): Promise<SyncResponse> {

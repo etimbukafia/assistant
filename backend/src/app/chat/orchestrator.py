@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from app.data.models import ChatSession, ChatMessage, ChatPendingAction
 from .context import ChatContextManager, ConversationState
 from .tools import ChatToolRegistry, ToolResult, ToolType
+from app.security.prompt_sanitizer import detect_injection_attempt, detect_injection_patterns
+from app.security.security_logger import log_injection_attempt
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +77,23 @@ class ChatOrchestrator:
     ) -> Dict[str, Any]:
         """
         Process a user message and generate a response.
-        
+
         Returns:
             Dict with 'response', 'pending_actions', 'state_updates'
         """
+        # Security: Check for injection patterns in user message
+        injection_patterns = detect_injection_patterns(user_message)
+        if injection_patterns:
+            log_injection_attempt(
+                user_id=self.user_id,
+                source="user_message",
+                pattern_matched=", ".join(injection_patterns),
+                content_preview=user_message[:100]
+            )
+            # Note: We log but don't block - the system prompt instructs the LLM
+            # to not follow instructions from users. Blocking could affect legitimate
+            # users who happen to use certain phrases.
+
         # Load current state
         state = self.context_manager.get_session_state(session)
         

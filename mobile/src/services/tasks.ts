@@ -105,6 +105,14 @@ export async function completeTask(taskId: number): Promise<Task> {
 }
 
 /**
+ * Move task to in_progress (e.g., when waiting_for task receives response)
+ */
+export async function startTask(taskId: number): Promise<Task> {
+    const response = await api.post<Task>(`/tasks/${taskId}/start`);
+    return response.data;
+}
+
+/**
  * Update task details
  */
 export async function updateTask(taskId: number, request: UpdateTaskRequest): Promise<Task> {

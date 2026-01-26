@@ -8,7 +8,7 @@ import { useChat } from '../../src/context/ChatContext';
 import { TouchableOpacity, View } from 'react-native';
 import { AdaptivePillNav } from '../../src/components/navigation/AdaptivePillNav';
 
-const TAB_ROUTES = ['index', 'focus', 'calendar', 'chat'];
+const TAB_ROUTES = ['index', 'focus', 'calendar', 'settings'];
 
 function TabBarIcon(props: {
   name: React.ComponentProps<typeof Ionicons>['name'];
@@ -40,7 +40,7 @@ export default function TabLayout() {
   const handleTabChange = (index: number) => {
     const route = TAB_ROUTES[index];
 
-    // If Chat tab selected, open global overlay instead of navigating
+    // If Chat tab selected (not in routes anymore but just for safety)
     if (route === 'chat') {
       openChat();
       return;
@@ -81,7 +81,7 @@ export default function TabLayout() {
           headerTitleAlign: 'center',
           headerLeft: () => (
             <TouchableOpacity
-              onPress={() => router.push('/settings/profile' as any)}
+              onPress={() => router.push('/(tabs)/settings' as any)}
               style={{ marginLeft: 16 }}
             >
               <View style={{
@@ -126,10 +126,18 @@ export default function TabLayout() {
           }}
         />
         <Tabs.Screen
+          name="settings"
+          options={{
+            title: 'Settings',
+            tabBarIcon: ({ color }) => <TabBarIcon name="settings-outline" color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="chat"
           options={{
             title: 'Chat',
             tabBarIcon: ({ color }) => <TabBarIcon name="chatbubbles-outline" color={color} />,
+            href: null, // Hide from tab bar
           }}
         />
       </Tabs>

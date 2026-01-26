@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, View, ScrollView, TouchableOpacity, Switch, Platform, ActivityIndicator, Alert } from 'react-native';
+import { StyleSheet, View, ScrollView, TouchableOpacity, Switch, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,12 +7,8 @@ import { Colors, Spacing, Radius } from '@/src/theme/Theme';
 import { DonnaText } from '@/src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-    fetchDigestPreferences,
-    updateDigestPreferences,
-    DigestPreferences,
-} from '@/src/services/digests';
+import { useDigestPreferences, useDigestMutations } from '@/src/hooks/useDigests';
+import { DigestPreferences } from '@/src/services/digests';
 
 // ================================
 // Time Helpers
@@ -36,26 +32,12 @@ const dateToTimeString = (date: Date): string => {
 
 export default function DigestsScreen() {
     const router = useRouter();
-    const queryClient = useQueryClient();
 
     const [activePicker, setActivePicker] = useState<'morning' | 'eod' | 'weekly' | null>(null);
 
-    // Fetch preferences with TanStack Query
-    const { data: preferences, isLoading, error } = useQuery({
-        queryKey: ['digest-preferences'],
-        queryFn: fetchDigestPreferences,
-    });
-
-    // Update mutation
-    const updateMutation = useMutation({
-        mutationFn: updateDigestPreferences,
-        onSuccess: (data) => {
-            queryClient.setQueryData(['digest-preferences'], data);
-        },
-        onError: () => {
-            Alert.alert('Error', 'Failed to save preferences. Please try again.');
-        },
-    });
+    // Fetch preferences and mutations using hooks
+    const { data: preferences, isLoading, error } = useDigestPreferences();
+    const { update, isUpdating } = useDigestMutations();
 
     // Derived state from server data
     const morningBriefing = preferences?.morning_briefing ?? { enabled: true, time: '07:30' };
@@ -73,7 +55,7 @@ export default function DigestsScreen() {
             weekly_review: updates.weekly_review ?? weeklyReview,
             delivery_channel: 'email',
         };
-        updateMutation.mutate(newPrefs);
+        update(newPrefs);
     };
 
     const renderDigestCard = (
@@ -104,7 +86,7 @@ export default function DigestsScreen() {
                         onValueChange={onToggle}
                         trackColor={{ true: Colors.success }}
                         thumbColor="#FFF"
-                        disabled={updateMutation.isPending}
+                        disabled={isUpdating}
                     />
                 </View>
 
@@ -112,7 +94,7 @@ export default function DigestsScreen() {
                     <TouchableOpacity
                         style={styles.timeButton}
                         onPress={() => setActivePicker(pickerKey)}
-                        disabled={updateMutation.isPending}
+                        disabled={isUpdating}
                     >
                         <Ionicons name="time-outline" size={18} color={Colors.textSecondary} />
                         <DonnaText style={styles.timeText}>
@@ -175,7 +157,7 @@ export default function DigestsScreen() {
                 </TouchableOpacity>
                 <DonnaText style={styles.headerTitle}>Digests</DonnaText>
                 <View style={styles.placeholder}>
-                    {updateMutation.isPending && <ActivityIndicator size="small" color={Colors.textMuted} />}
+                    {isUpdating && <ActivityIndicator size="small" color={Colors.textMuted} />}
                 </View>
             </View>
 

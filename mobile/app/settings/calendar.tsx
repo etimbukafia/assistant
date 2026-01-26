@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { StyleSheet, View, ScrollView, TouchableOpacity, Switch, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -7,15 +7,8 @@ import { Colors, Spacing, Radius } from '@/src/theme/Theme';
 import { DonnaText } from '@/src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-    fetchCalendarSettings,
-    updateCalendarSettings,
-    fetchUserCalendars,
-    CalendarSettings,
-    CalendarSettingsUpdate,
-    CalendarInfo
-} from '@/src/services/calendar';
+import { useCalendarSettings, useUserCalendars, useCalendarMutations } from '@/src/hooks/useCalendar';
+import { CalendarSettingsUpdate } from '@/src/services/calendar';
 
 interface TimePickerButtonProps {
     label: string;
@@ -32,7 +25,6 @@ const TimePickerButton: React.FC<TimePickerButtonProps> = ({ label, time, onPres
 
 export default function CalendarSettingsScreen() {
     const router = useRouter();
-    const queryClient = useQueryClient();
 
     // Local state for pickers
     const [showStartPicker, setShowStartPicker] = useState(false);
@@ -43,27 +35,10 @@ export default function CalendarSettingsScreen() {
     const DURATIONS = [15, 25, 30, 45, 60];
     const BUFFERS = [0, 5, 10, 15];
 
-    // Fetch settings from backend
-    const { data: settings, isLoading, error } = useQuery({
-        queryKey: ['calendar-settings'],
-        queryFn: fetchCalendarSettings,
-    });
-
-    // Update mutation
-    const updateMutation = useMutation({
-        mutationFn: (updates: CalendarSettingsUpdate) => updateCalendarSettings(updates),
-        onSuccess: (data) => {
-            queryClient.setQueryData(['calendar-settings'], data);
-        },
-    });
-
-    // Fetch user's Google calendars (cache aggressively - rarely changes)
-    const { data: calendarsData, isLoading: calendarsLoading } = useQuery({
-        queryKey: ['user-calendars'],
-        queryFn: fetchUserCalendars,
-        staleTime: 1000 * 60 * 30, // 30 minutes - calendar list rarely changes
-        retry: 1,
-    });
+    // Fetch settings and calendars using hooks
+    const { data: settings, isLoading, error } = useCalendarSettings();
+    const { data: calendarsData, isLoading: calendarsLoading } = useUserCalendars();
+    const { updateSettings, isUpdatingSettings } = useCalendarMutations();
 
     const calendars = calendarsData?.calendars || [];
 
@@ -98,7 +73,7 @@ export default function CalendarSettingsScreen() {
     };
 
     const handleSettingChange = (key: keyof CalendarSettingsUpdate, value: any) => {
-        updateMutation.mutate({ [key]: value });
+        updateSettings({ [key]: value });
     };
 
     if (isLoading) {
@@ -314,7 +289,7 @@ export default function CalendarSettingsScreen() {
                 </View>
 
                 {/* Saving indicator */}
-                {updateMutation.isPending && (
+                {isUpdatingSettings && (
                     <View style={styles.savingIndicator}>
                         <ActivityIndicator size="small" color={Colors.accentPrimary} />
                         <DonnaText style={styles.savingText}>Saving...</DonnaText>

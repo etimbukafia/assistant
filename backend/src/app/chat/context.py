@@ -7,13 +7,24 @@ Integrates with ContextBuilder for memory systems.
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
+import logging
 from sqlalchemy.orm import Session
 
 from app.data.models import (
     ChatSession, ChatMessage, Message, Task, CalendarEvent,
     UserSettings, PrincipalMemory
 )
-from app.intelligence.context_builder import ContextBuilder 
+from app.intelligence.context_builder import ContextBuilder
+from app.security.prompt_sanitizer import (
+    sanitize_for_prompt,
+    wrap_user_content,
+    detect_injection_attempt,
+    sanitize_email_content,
+    sanitize_task_content
+)
+from app.security.security_logger import log_injection_attempt
+
+logger = logging.getLogger(__name__) 
 
 
 @dataclass
@@ -193,38 +204,69 @@ class ChatContextManager:
         return context
     
     def get_current_entity_context(self, state: ConversationState) -> Dict[str, Any]:
-        """Get details about currently referenced entities."""
+        """Get details about currently referenced entities with sanitization."""
         context = {}
-        
+
         if state.current_email_id:
             email = self.db.query(Message).filter(
                 Message.id == state.current_email_id,
                 Message.user_id == self.user_id  # Security: verify ownership
             ).first()
             if email:
+                # Sanitize email content for prompt safety
+                sanitized = sanitize_email_content(
+                    subject=email.subject,
+                    sender=email.sender,
+                    body=email.decrypted_body
+                )
+
+                # Log if injection patterns detected
+                if sanitized["patterns_detected"]:
+                    log_injection_attempt(
+                        user_id=self.user_id,
+                        source="email_content",
+                        pattern_matched=", ".join(sanitized["patterns_detected"]),
+                        content_preview=email.subject or ""
+                    )
+
                 context["current_email"] = {
                     "id": email.id,
-                    "subject": email.subject,
-                    "sender": email.sender,
-                    "body_preview": (email.decrypted_body or "")[:500],
+                    "subject": sanitized["subject"],
+                    "sender": sanitized["sender"],
+                    "body_preview": sanitized["body_preview"],
                     "received_at": email.received_at.isoformat() if email.received_at else None
                 }
-        
+
         if state.current_task_id:
             task = self.db.query(Task).filter(
                 Task.id == state.current_task_id,
                 Task.user_id == self.user_id  # Security: verify ownership
             ).first()
             if task:
+                # Sanitize task content for prompt safety
+                sanitized = sanitize_task_content(
+                    title=task.title,
+                    description=task.description
+                )
+
+                # Log if injection patterns detected
+                if sanitized["patterns_detected"]:
+                    log_injection_attempt(
+                        user_id=self.user_id,
+                        source="task_content",
+                        pattern_matched=", ".join(sanitized["patterns_detected"]),
+                        content_preview=task.title or ""
+                    )
+
                 context["current_task"] = {
                     "id": task.id,
-                    "title": task.title,
-                    "description": task.description,
+                    "title": sanitized["title"],
+                    "description": sanitized["description"],
                     "status": task.status,
                     "priority": task.priority,
                     "due_date": task.due_date.isoformat() if task.due_date else None
                 }
-        
+
         return context
     
     def build_prompt_context(
@@ -236,13 +278,16 @@ class ChatContextManager:
         """
         Build the full context string for LLM prompt injection.
         Integrates memory systems via ContextBuilder.
+        User data is wrapped in <data> tags for prompt injection defense.
         """
         parts = []
-        
+
         # 0. User personalization (from session state, no DB call)
+        # Note: user_first_name comes from JWT, relatively trusted
         if state.user_first_name:
-            parts.append(f"The user's first name is {state.user_first_name}. Address them by name when appropriate.")
-        
+            safe_name = sanitize_for_prompt(state.user_first_name)
+            parts.append(f"The user's first name is {safe_name}. Address them by name when appropriate.")
+
         # 1. Memory context (preferences, patterns)
         memory_context = self.context_builder.build_context(
             context_type=context_type,
@@ -250,50 +295,55 @@ class ChatContextManager:
             include_patterns=True
         )
         if memory_context:
-            parts.append(f"User preferences: {memory_context}")
-        
-        # 2. Current entity context
+            # Memory context is from DB, sanitize it
+            safe_memory = sanitize_for_prompt(memory_context)
+            parts.append(f"User preferences: {safe_memory}")
+
+        # 2. Current entity context (already sanitized by get_current_entity_context)
         entity_context = self.get_current_entity_context(state)
         if entity_context.get("current_email"):
             email = entity_context["current_email"]
+            # Wrap user-controlled data in <data> tags
             parts.append(
-                f"Currently discussing email from {email['sender']}: \"{email['subject']}\""
+                f"Currently discussing email from <data>{email['sender']}</data>: "
+                f"<data>{email['subject']}</data>"
             )
         if entity_context.get("current_task"):
             task = entity_context["current_task"]
+            # Wrap user-controlled data in <data> tags
             parts.append(
-                f"Currently discussing task: \"{task['title']}\" (status: {task['status']})"
+                f"Currently discussing task: <data>{task['title']}</data> (status: {task['status']})"
             )
-        
+
         # 3. Work context summary (if command mode)
         if session.session_type == "command":
             work_ctx = self.get_work_context(state)
-            
+
             if work_ctx["today_calendar"]:
                 event_count = len(work_ctx["today_calendar"])
                 parts.append(f"User has {event_count} calendar events today/tomorrow.")
-            
+
             if work_ctx["urgent_tasks"]:
                 task_count = len(work_ctx["urgent_tasks"])
                 parts.append(f"User has {task_count} urgent/high-priority tasks pending.")
-            
+
             if work_ctx["recent_emails_needing_reply"]:
                 email_count = len(work_ctx["recent_emails_needing_reply"])
                 parts.append(f"{email_count} emails awaiting reply.")
-        
+
         # 4. Workflow state
         if state.active_workflow:
             parts.append(f"Active workflow: {state.active_workflow}")
             if state.awaiting_input:
                 parts.append(f"Awaiting: {state.awaiting_input}")
-        
+
         # Apply token budget
         full_context = " ".join(parts)
         max_chars = self.MAX_CONTEXT_TOKENS * self.CHARS_PER_TOKEN
-        
+
         if len(full_context) > max_chars:
             full_context = full_context[:max_chars - 3] + "..."
-        
+
         return full_context
     
     def update_entity_reference(

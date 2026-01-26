@@ -14,8 +14,15 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.data.models import Message, Task, CalendarEvent, PrincipalMemory
+from app.security.tool_validator import validate_tool_args
+from app.security.security_logger import log_validation_failure
 
 logger = logging.getLogger(__name__)
+
+
+def escape_like(value: str) -> str:
+    """Escape special LIKE characters to prevent SQL LIKE wildcard injection."""
+    return value.replace("%", r"\%").replace("_", r"\_")
 
 
 class ToolType(Enum):
@@ -242,20 +249,39 @@ class ChatToolRegistry:
     
     def execute_tool(self, name: str, parameters: Dict[str, Any]) -> ToolResult:
         """
-        Execute a tool.
-        
+        Execute a tool with argument validation.
+
         For read-only tools, executes immediately.
         For approval-gated tools, prepares a pending action.
         """
         tool = self._tools.get(name)
         if not tool:
             return ToolResult(success=False, error=f"Unknown tool: {name}")
-        
+
+        # Validate and sanitize parameters
+        validation = validate_tool_args(name, parameters, tool.parameters)
+        if not validation.valid:
+            # Log validation failures for security monitoring
+            for error in validation.errors:
+                log_validation_failure(
+                    user_id=self.user_id,
+                    tool_name=name,
+                    field=error.split(":")[0] if ":" in error else "unknown",
+                    error=error
+                )
+            return ToolResult(
+                success=False,
+                error=f"Invalid parameters: {'; '.join(validation.errors)}"
+            )
+
+        # Use sanitized arguments
+        sanitized_params = validation.sanitized_args
+
         try:
-            # Route to appropriate handler
+            # Route to appropriate handler with sanitized params
             handler = getattr(self, f"_execute_{name}", None)
             if handler:
-                return handler(parameters)
+                return handler(sanitized_params)
             else:
                 return ToolResult(success=False, error=f"No handler for tool: {name}")
         except Exception as e:
@@ -275,11 +301,7 @@ class ChatToolRegistry:
         db_query = self.db.query(Message).filter(
             Message.user_id == self.user_id
         )
-        
-        def escape_like(value: str) -> str:
-            """Escape special LIKE characters to prevent injection."""
-            return value.replace("%", r"\%").replace("_", r"\_")
-        
+
         # Parse simple query syntax
         if "from:" in query:
             sender = query.split("from:")[1].split()[0]
@@ -331,9 +353,10 @@ class ChatToolRegistry:
         if priority:
             db_query = db_query.filter(Task.priority == priority)
         if query:
+            safe_query = escape_like(query)
             db_query = db_query.filter(
-                Task.title.ilike(f"%{query}%") |
-                Task.description.ilike(f"%{query}%")
+                Task.title.ilike(f"%{safe_query}%", escape="\\") |
+                Task.description.ilike(f"%{safe_query}%", escape="\\")
             )
         
         tasks = db_query.order_by(Task.created_at.desc()).limit(limit).all()

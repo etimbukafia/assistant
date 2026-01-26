@@ -2,14 +2,18 @@
 Chat API Routes
 
 REST endpoints for AI Chat feature.
+
+Processing Strategy: Optimistic Sync with Async Fallback
+- Reflection mode: Always synchronous (warm, immediate)
+- Action mode: Sync with timeout, falls back to async for tool-heavy requests
 """
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser as User
-from app.chat.service import ChatService
+from app.security.auth import get_current_user, get_db_for_user, require_active_subscription, AuthenticatedUser as User
+from app.chat.service import ChatService, ProcessingStatus
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -68,7 +72,7 @@ class PendingActionResponse(BaseModel):
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(
     request: CreateSessionRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user)
 ):
     """Create a new chat session."""
@@ -191,31 +195,88 @@ async def delete_session(
 async def send_message(
     session_id: str,
     request: SendMessageRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user)
 ):
-    """Send a message and get AI response."""
+    """
+    Send a message and get AI response.
+
+    Response varies based on processing path:
+    - Sync (immediate): status="complete", response included
+    - Async (queued): status="processing", job_id for polling
+
+    Frontend should:
+    1. Show typing indicator
+    2. If status="complete": display response immediately
+    3. If status="processing": poll /jobs/{job_id} every 1-2s
+    """
     service = ChatService(db, user.user_id)
-    
+
     # Verify session exists
     session = service.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     # Process message
     result = await service.send_message(session_id, request.content)
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to process message"))
-    
-    # Return the assistant's response in format frontend expects
-    return {
-        "id": result["assistant_message"]["id"],
-        "role": "assistant",
-        "content": result["assistant_message"]["content"],
-        "created_at": result["assistant_message"]["created_at"],
-        "pending_actions": result.get("pending_actions", [])
+
+    if result.status == ProcessingStatus.FAILED:
+        raise HTTPException(status_code=500, detail=result.error or "Failed to process message")
+
+    # Return unified response format
+    response = {
+        "status": result.status.value,
+        "message_id": result.message_id
     }
+
+    if result.status == ProcessingStatus.PROCESSING:
+        # Async path - return job_id for polling
+        response["job_id"] = result.job_id
+    else:
+        # Sync path - return response immediately
+        response["response"] = result.response
+        response["pending_actions"] = result.pending_actions or []
+
+    return response
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user)
+):
+    """
+    Check the status of an async chat job.
+
+    Poll this endpoint every 1-2 seconds when status="processing".
+
+    Returns:
+    - status="processing": Still working, keep polling
+    - status="complete": Done, response and pending_actions included
+    - status="failed": Error occurred, error message included
+    """
+    service = ChatService(db, user.user_id)
+    result = service.get_job_status(job_id)
+
+    if result.status == ProcessingStatus.FAILED and result.error == "Job not found":
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    response = {
+        "status": result.status.value,
+        "job_id": job_id
+    }
+
+    if result.message_id:
+        response["message_id"] = result.message_id
+
+    if result.status == ProcessingStatus.COMPLETE:
+        response["response"] = result.response
+        response["pending_actions"] = result.pending_actions or []
+    elif result.status == ProcessingStatus.FAILED:
+        response["error"] = result.error
+
+    return response
 
 
 @router.get("/sessions/{session_id}/messages")

@@ -2,7 +2,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_db_for_user, get_user_settings
+from app.security.auth import get_db_for_user, get_user_settings, require_active_subscription, AuthenticatedUser
 from app.data.models import CalendarEvent, UserSettings
 from app.data.schemas import (
     CalendarEventCreateRequest, CalendarEventResponse, 
@@ -65,9 +65,24 @@ def get_calendar_events(
     }
 
 
+@router.get("/events/{event_id}", response_model=CalendarEventResponse)
+def get_calendar_event(
+    event_id: int,
+    db: Session = Depends(get_db_for_user)
+):
+    """Get a single calendar event by ID"""
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    return event
+
+
 @router.post("/sync")
 async def sync_calendar_events(
     days_ahead: int = 7,
+    user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user)
 ):
     """Sync upcoming events from Google Calendar to database"""

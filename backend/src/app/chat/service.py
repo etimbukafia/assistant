@@ -3,18 +3,107 @@ Chat Service
 
 CRUD operations for chat sessions, messages, and pending actions.
 Handles session lifecycle including cleanup of expired sessions.
+
+Processing Strategy: Optimistic Sync with Async Fallback
+- Reflection mode: Always synchronous (immediate, warm responses)
+- Action mode: Try sync first, fallback to async for:
+  - Tool calls detected
+  - Processing timeout (>8s)
+  - High server load
 """
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone, timedelta
+from dataclasses import dataclass
+from enum import Enum
+import asyncio
 import uuid
+import re
 import logging
 
 from sqlalchemy.orm import Session
 
-from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory
+from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory, TaskQueue
+from app.jobs.queue import queue_service
 from .orchestrator import ChatOrchestrator
 
-logger = logging.getLogger(__name__) 
+logger = logging.getLogger(__name__)
+
+# Timeout for synchronous processing (seconds)
+SYNC_TIMEOUT_SECONDS = 8.0
+
+
+class ProcessingStatus(str, Enum):
+    """Chat message processing status."""
+    COMPLETE = "complete"
+    PROCESSING = "processing"
+    FAILED = "failed"
+
+
+@dataclass
+class ChatResponse:
+    """Unified response for chat messages."""
+    status: ProcessingStatus
+    message_id: Optional[int] = None
+    job_id: Optional[str] = None
+    response: Optional[str] = None
+    pending_actions: Optional[List[Dict]] = None
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = {"status": self.status.value}
+        if self.message_id:
+            result["message_id"] = self.message_id
+        if self.job_id:
+            result["job_id"] = self.job_id
+        if self.response:
+            result["response"] = self.response
+        if self.pending_actions:
+            result["pending_actions"] = self.pending_actions
+        if self.error:
+            result["error"] = self.error
+        return result
+
+
+# Patterns that suggest tool usage will be needed
+TOOL_INTENT_PATTERNS = [
+    # Email operations
+    r"\b(search|find|look for|show me).*(email|message|mail)",
+    r"\b(draft|write|compose|reply).*(email|message|response)",
+    r"\bemail.*(from|about|regarding)",
+
+    # Task operations
+    r"\b(create|add|make|new).*(task|todo|reminder)",
+    r"\b(list|show|what).*(task|todo)",
+    r"\bmark.*(done|complete|finished)",
+
+    # Calendar operations
+    r"\b(schedule|book|set up).*(meeting|call|appointment)",
+    r"\b(calendar|availability|free time)",
+    r"\bwhat.*meeting",
+
+    # Memory operations
+    r"\bremember.*(that|this|my)",
+    r"\bprefer(ence)?",
+
+    # General action keywords
+    r"\b(update|change|modify|edit|delete|remove|cancel)",
+]
+
+# Compiled patterns for efficiency
+_TOOL_INTENT_RE = [re.compile(p, re.IGNORECASE) for p in TOOL_INTENT_PATTERNS]
+
+
+def detect_tool_intent(message: str) -> bool:
+    """
+    Detect if a message likely requires tool usage.
+
+    Used to decide between sync and async processing paths.
+    Returns True if the message appears to need tools.
+    """
+    for pattern in _TOOL_INTENT_RE:
+        if pattern.search(message):
+            return True
+    return False 
 
 
 class ChatService:
@@ -120,7 +209,7 @@ class ChatService:
             role=role,
             content=content,
             created_at=datetime.now(timezone.utc),
-            metadata=metadata or {}
+            message_metadata=metadata or {}
         )
         
         self.db.add(message)
@@ -442,76 +531,228 @@ class ChatService:
     # =========================================================================
     # High-level Chat Flow
     # =========================================================================
-    
+
     async def send_message(
         self,
         session_id: str,
         content: str
-    ) -> Dict[str, Any]:
+    ) -> ChatResponse:
         """
         Send a message and get AI response.
-        
-        This is the main entry point for chat interactions.
-        
+
+        Processing Strategy:
+        - Reflection mode: Always synchronous (warm, immediate)
+        - Action mode: Optimistic sync with async fallback
+          - If tool intent detected → async immediately
+          - Otherwise try sync with timeout → fallback to async
+
         Returns:
-            Dict with 'user_message', 'assistant_message', 'pending_actions'
+            ChatResponse with status, message/job info
         """
         session = self.get_session(session_id)
         if not session:
-            return {"success": False, "error": "Session not found"}
-        
+            return ChatResponse(
+                status=ProcessingStatus.FAILED,
+                error="Session not found"
+            )
+
         # Save user message
         user_msg = self.add_message(session_id, "user", content)
-        
-        # Process through orchestrator
-        orchestrator = ChatOrchestrator(self.db, self.user_id)
-        result = await orchestrator.process_message(session, content)
-        
-        # Save assistant response
-        assistant_msg = self.add_message(
-            session_id,
-            "assistant",
-            result.get("response", ""),
-            metadata={"state": result.get("state", {})}
-        )
-        
-        # Create pending actions
-        pending_actions = []
-        for pa_data in result.get("pending_actions", []):
-            pa = ChatPendingAction(
-                id=str(uuid.uuid4()),
-                session_id=session_id,
-                message_id=assistant_msg.id,
-                action_type=pa_data["action_type"],
-                action_data=pa_data["action_data"],
-                status="pending",
-                created_at=datetime.now(timezone.utc)
-            )
-            self.db.add(pa)
-            pending_actions.append(pa)
-        
-        self.db.commit()
-        
+
         # Auto-generate title from first message if not set
         if not session.title and session.session_type == "command":
             session.title = content[:50] + ("..." if len(content) > 50 else "")
             self.db.commit()
-        
-        return {
-            "success": True,
-            "user_message": {
-                "id": user_msg.id,
-                "role": user_msg.role,
-                "content": user_msg.content,
-                "created_at": user_msg.created_at.isoformat()
+
+        # REFLECTION MODE: Always synchronous
+        if session.session_type == "reflection":
+            return await self._process_sync(session, content, user_msg.id)
+
+        # ACTION MODE: Optimistic sync with async fallback
+        # Check if message likely needs tools
+        if detect_tool_intent(content):
+            logger.info(f"Tool intent detected, using async path for session {session_id}")
+            return self._enqueue_async(session, content, user_msg.id)
+
+        # Try synchronous processing with timeout
+        try:
+            return await asyncio.wait_for(
+                self._process_sync(session, content, user_msg.id),
+                timeout=SYNC_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.info(f"Sync timeout, falling back to async for session {session_id}")
+            return self._enqueue_async(session, content, user_msg.id)
+
+    async def _process_sync(
+        self,
+        session: ChatSession,
+        content: str,
+        user_message_id: int
+    ) -> ChatResponse:
+        """
+        Process message synchronously.
+
+        Used for:
+        - All reflection mode messages
+        - Action mode messages that don't need tools
+        """
+        try:
+            orchestrator = ChatOrchestrator(self.db, self.user_id)
+            result = await orchestrator.process_message(session, content)
+
+            # Save assistant response
+            assistant_msg = self.add_message(
+                session.id,
+                "assistant",
+                result.get("response", ""),
+                metadata={"state": result.get("state", {})}
+            )
+
+            # Create pending actions
+            pending_actions = []
+            for pa_data in result.get("pending_actions", []):
+                pa = ChatPendingAction(
+                    id=str(uuid.uuid4()),
+                    session_id=session.id,
+                    message_id=assistant_msg.id,
+                    action_type=pa_data["action_type"],
+                    action_data=pa_data["action_data"],
+                    status="pending",
+                    created_at=datetime.now(timezone.utc)
+                )
+                self.db.add(pa)
+                pending_actions.append({
+                    "id": pa.id,
+                    "action_type": pa.action_type,
+                    "action_data": pa.action_data,
+                    "status": pa.status,
+                    "message_id": pa.message_id
+                })
+
+            self.db.commit()
+
+            return ChatResponse(
+                status=ProcessingStatus.COMPLETE,
+                message_id=assistant_msg.id,
+                response=assistant_msg.content,
+                pending_actions=pending_actions if pending_actions else None
+            )
+
+        except Exception as e:
+            logger.error(f"Sync processing failed: {e}")
+            return ChatResponse(
+                status=ProcessingStatus.FAILED,
+                error=str(e)
+            )
+
+    def _enqueue_async(
+        self,
+        session: ChatSession,
+        content: str,
+        user_message_id: int
+    ) -> ChatResponse:
+        """
+        Enqueue message for async processing.
+
+        Creates a job in TaskQueue and returns job_id for polling.
+        """
+        job_id = str(uuid.uuid4())
+
+        # Add placeholder assistant message with job tracking
+        placeholder_msg = ChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content="",  # Empty content, will be filled by worker
+            created_at=datetime.now(timezone.utc),
+            message_metadata={"job_id": job_id, "status": "processing"}
+        )
+        self.db.add(placeholder_msg)
+
+        # Update session activity
+        session.last_activity_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(placeholder_msg)
+
+        # Enqueue the job
+        queue_service.enqueue(
+            task_type="process_chat_message",
+            payload={
+                "job_id": job_id,
+                "session_id": session.id,
+                "user_id": self.user_id,
+                "content": content,
+                "user_message_id": user_message_id,
+                "assistant_message_id": placeholder_msg.id
             },
-            "assistant_message": {
-                "id": assistant_msg.id,
-                "role": assistant_msg.role,
-                "content": assistant_msg.content,
-                "created_at": assistant_msg.created_at.isoformat()
-            },
-            "pending_actions": [
+            db=self.db
+        )
+
+        logger.info(f"Enqueued chat job {job_id} for session {session.id}")
+
+        return ChatResponse(
+            status=ProcessingStatus.PROCESSING,
+            job_id=job_id,
+            message_id=placeholder_msg.id
+        )
+
+    def get_job_status(self, job_id: str) -> ChatResponse:
+        """
+        Check the status of an async chat job.
+
+        Returns:
+            ChatResponse with current status and response if complete
+        """
+        from sqlalchemy import cast, String
+
+        # Find the message with this job_id
+        # Use text search since JSON queries vary by database
+        messages = self.db.query(ChatMessage).join(
+            ChatSession, ChatMessage.session_id == ChatSession.id
+        ).filter(
+            ChatSession.user_id == self.user_id
+        ).all()
+
+        # Find message with matching job_id in metadata
+        message = None
+        for msg in messages:
+            metadata = msg.message_metadata or {}
+            if metadata.get("job_id") == job_id:
+                message = msg
+                break
+
+        if not message:
+            return ChatResponse(
+                status=ProcessingStatus.FAILED,
+                error="Job not found"
+            )
+
+        metadata = message.message_metadata or {}
+
+        # Check if still processing
+        if metadata.get("status") == "processing":
+            return ChatResponse(
+                status=ProcessingStatus.PROCESSING,
+                job_id=job_id,
+                message_id=message.id
+            )
+
+        # Check if failed
+        if metadata.get("status") == "failed":
+            return ChatResponse(
+                status=ProcessingStatus.FAILED,
+                job_id=job_id,
+                error=metadata.get("error", "Processing failed")
+            )
+
+        # Complete - return the response
+        pending_actions = self.get_pending_actions_for_message(message.id)
+
+        return ChatResponse(
+            status=ProcessingStatus.COMPLETE,
+            message_id=message.id,
+            response=message.content,
+            pending_actions=[
                 {
                     "id": pa.id,
                     "action_type": pa.action_type,
@@ -520,5 +761,65 @@ class ChatService:
                     "message_id": pa.message_id
                 }
                 for pa in pending_actions
-            ]
+            ] if pending_actions else None
+        )
+
+    def get_pending_actions_for_message(self, message_id: int) -> List[ChatPendingAction]:
+        """Get pending actions for a specific message."""
+        return self.db.query(ChatPendingAction).filter(
+            ChatPendingAction.message_id == message_id,
+            ChatPendingAction.status == "pending"
+        ).all()
+
+    # =========================================================================
+    # Legacy method for backwards compatibility
+    # =========================================================================
+
+    async def send_message_legacy(
+        self,
+        session_id: str,
+        content: str
+    ) -> Dict[str, Any]:
+        """
+        Legacy send_message method for backwards compatibility.
+
+        Returns dict format expected by older clients.
+        """
+        response = await self.send_message(session_id, content)
+
+        if response.status == ProcessingStatus.FAILED:
+            return {"success": False, "error": response.error}
+
+        if response.status == ProcessingStatus.PROCESSING:
+            return {
+                "success": True,
+                "status": "processing",
+                "job_id": response.job_id,
+                "message_id": response.message_id
+            }
+
+        # Complete
+        session = self.get_session(session_id)
+        user_msg = self.db.query(ChatMessage).filter(
+            ChatMessage.session_id == session_id,
+            ChatMessage.role == "user"
+        ).order_by(ChatMessage.created_at.desc()).first()
+
+        assistant_msg = self.db.query(ChatMessage).get(response.message_id)
+
+        return {
+            "success": True,
+            "user_message": {
+                "id": user_msg.id if user_msg else None,
+                "role": "user",
+                "content": content,
+                "created_at": user_msg.created_at.isoformat() if user_msg else None
+            },
+            "assistant_message": {
+                "id": response.message_id,
+                "role": "assistant",
+                "content": response.response,
+                "created_at": assistant_msg.created_at.isoformat() if assistant_msg else None
+            },
+            "pending_actions": response.pending_actions or []
         }

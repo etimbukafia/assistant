@@ -1,33 +1,107 @@
-import React, { useMemo, useState } from 'react';
-import { StyleSheet, View, ScrollView, SafeAreaView, TouchableOpacity, Alert } from 'react-native';
+import React from 'react';
+import { StyleSheet, View, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Colors, Spacing, Radius } from '@/src/theme/Theme';
 import { DonnaText } from '@/src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import demoData from '@/src/data/demo_state.json';
-import { Task } from '@/src/types/api';
 import { formatDistanceToNow, parseISO, format } from 'date-fns';
 import { useChat } from '@/src/context/ChatContext';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+    fetchTask,
+    approveTask,
+    dismissTask,
+    completeTask,
+    snoozeTask,
+    Task
+} from '@/src/services/tasks';
 
 export default function TaskDetailScreen() {
-    const { id } = useLocalSearchParams();
+    const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
     const { openChat } = useChat();
+    const queryClient = useQueryClient();
 
-    // Mock Data Fetch
-    const task = useMemo(() => {
-        const tasks = demoData.tasks as unknown as Task[];
-        return tasks.find(t => t.id.toString() === id);
-    }, [id]);
+    // Fetch task from API
+    const { data: task, isLoading, error } = useQuery({
+        queryKey: ['task', id],
+        queryFn: () => fetchTask(parseInt(id as string)),
+        enabled: !!id,
+    });
 
-    const [currentStatus, setCurrentStatus] = useState(task?.status || 'pending');
+    // Mutations
+    const approveMutation = useMutation({
+        mutationFn: () => approveTask(parseInt(id as string)),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['task', id] });
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+            Alert.alert('Task Approved', 'This task has been added to your active list.');
+        },
+        onError: () => Alert.alert('Error', 'Failed to approve task'),
+    });
 
-    if (!task) {
+    const dismissMutation = useMutation({
+        mutationFn: () => dismissTask(parseInt(id as string)),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+            Alert.alert('Task Dismissed', 'This task has been removed.');
+            router.back();
+        },
+        onError: () => Alert.alert('Error', 'Failed to dismiss task'),
+    });
+
+    const completeMutation = useMutation({
+        mutationFn: () => completeTask(parseInt(id as string)),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['task', id] });
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+            Alert.alert('Task Completed', 'Great job!');
+        },
+        onError: () => Alert.alert('Error', 'Failed to complete task'),
+    });
+
+    const snoozeMutation = useMutation({
+        mutationFn: () => {
+            // Snooze for 24 hours
+            const snoozeUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+            return snoozeTask(parseInt(id as string), snoozeUntil);
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['task', id] });
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+            Alert.alert('Task Snoozed', "We'll remind you in 24 hours.");
+        },
+        onError: () => Alert.alert('Error', 'Failed to snooze task'),
+    });
+
+    const isActionLoading = approveMutation.isPending || dismissMutation.isPending ||
+        completeMutation.isPending || snoozeMutation.isPending;
+
+    // Loading state
+    if (isLoading) {
         return (
             <SafeAreaView style={styles.container}>
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color={Colors.accentSecondary} />
+                </View>
+            </SafeAreaView>
+        );
+    }
+
+    // Error/Not found state
+    if (error || !task) {
+        return (
+            <SafeAreaView style={styles.container}>
+                <View style={styles.header}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                        <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+                    </TouchableOpacity>
+                </View>
                 <View style={styles.errorContainer}>
-                    <DonnaText>Task not found</DonnaText>
+                    <Ionicons name="alert-circle-outline" size={48} color={Colors.textMuted} />
+                    <DonnaText style={styles.errorText}>Task not found</DonnaText>
                 </View>
             </SafeAreaView>
         );
@@ -48,35 +122,13 @@ export default function TaskDetailScreen() {
             case 'completed': return { label: 'Completed', color: Colors.success, icon: 'checkmark-circle' };
             case 'pending_approval': return { label: 'Pending Approval', color: Colors.accentSecondary, icon: 'sparkles' };
             case 'waiting_for': return { label: 'Waiting For Response', color: Colors.accentPrecision, icon: 'hourglass' };
-            case 'snoozed': return { label: 'Snoozed', color: Colors.textMuted, icon: 'moon' };
+            case 'dismissed': return { label: 'Dismissed', color: Colors.textMuted, icon: 'close-circle' };
             default: return { label: 'Active', color: Colors.textPrimary, icon: 'ellipse-outline' };
         }
     };
 
-    const statusInfo = getStatusInfo(currentStatus);
+    const statusInfo = getStatusInfo(task.status);
     const priorityColor = getPriorityColor(task.priority);
-
-    const handleAction = (action: 'approve' | 'dismiss' | 'complete' | 'snooze') => {
-        // Mock actions
-        switch (action) {
-            case 'approve':
-                setCurrentStatus('pending');
-                Alert.alert('Task Approved', 'This task has been added to your active list.');
-                break;
-            case 'dismiss':
-                Alert.alert('Task Dismissed', 'This task has been removed.');
-                router.back();
-                break;
-            case 'complete':
-                setCurrentStatus('completed');
-                Alert.alert('Task Completed', 'Great job!');
-                break;
-            case 'snooze':
-                setCurrentStatus('snoozed');
-                Alert.alert('Task Snoozed', 'We\'ll remind you later.');
-                break;
-        }
-    };
 
     return (
         <SafeAreaView style={styles.container}>
@@ -90,9 +142,6 @@ export default function TaskDetailScreen() {
                 <View style={styles.headerActions}>
                     <TouchableOpacity style={styles.actionButton} onPress={openChat}>
                         <Ionicons name="sparkles" size={22} color={Colors.accentSecondary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.actionButton}>
-                        <Ionicons name="pencil-outline" size={22} color={Colors.textPrimary} />
                     </TouchableOpacity>
                 </View>
             </View>
@@ -126,17 +175,17 @@ export default function TaskDetailScreen() {
                 )}
 
                 {/* Deadline */}
-                {task.deadline && (
+                {task.deadline_at && (
                     <View style={styles.section}>
                         <DonnaText style={styles.sectionLabel}>DEADLINE</DonnaText>
                         <View style={styles.deadlineRow}>
                             <Ionicons name="calendar-outline" size={18} color={Colors.textSecondary} />
                             <DonnaText style={styles.deadlineText}>
-                                {format(parseISO(task.deadline), 'EEEE, MMMM d, yyyy')}
+                                {format(parseISO(task.deadline_at), 'EEEE, MMMM d, yyyy')}
                             </DonnaText>
                         </View>
                         <DonnaText style={styles.deadlineRelative}>
-                            {formatDistanceToNow(parseISO(task.deadline), { addSuffix: true })}
+                            {formatDistanceToNow(parseISO(task.deadline_at), { addSuffix: true })}
                         </DonnaText>
                     </View>
                 )}
@@ -160,7 +209,7 @@ export default function TaskDetailScreen() {
                 )}
 
                 {/* AI Suggested Indicator */}
-                {currentStatus === 'pending_approval' && (
+                {task.status === 'pending_approval' && (
                     <View style={styles.aiSuggestionCard}>
                         <Ionicons name="sparkles" size={20} color={Colors.accentSecondary} />
                         <View style={styles.aiSuggestionText}>
@@ -175,44 +224,62 @@ export default function TaskDetailScreen() {
 
             {/* Action Bar */}
             <View style={styles.actionBar}>
-                {currentStatus === 'pending_approval' ? (
+                {task.status === 'pending_approval' ? (
                     <>
                         <TouchableOpacity
                             style={[styles.actionBtn, styles.dismissBtn]}
-                            onPress={() => handleAction('dismiss')}
+                            onPress={() => dismissMutation.mutate()}
+                            disabled={isActionLoading}
                         >
                             <Ionicons name="close" size={20} color={Colors.textSecondary} />
                             <DonnaText style={styles.dismissText}>Dismiss</DonnaText>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={[styles.actionBtn, styles.approveBtn]}
-                            onPress={() => handleAction('approve')}
+                            onPress={() => approveMutation.mutate()}
+                            disabled={isActionLoading}
                         >
-                            <Ionicons name="checkmark" size={20} color="#FFF" />
-                            <DonnaText style={styles.approveText}>Approve</DonnaText>
+                            {approveMutation.isPending ? (
+                                <ActivityIndicator size="small" color="#FFF" />
+                            ) : (
+                                <>
+                                    <Ionicons name="checkmark" size={20} color="#FFF" />
+                                    <DonnaText style={styles.approveText}>Approve</DonnaText>
+                                </>
+                            )}
                         </TouchableOpacity>
                     </>
-                ) : currentStatus !== 'completed' ? (
+                ) : task.status !== 'completed' && task.status !== 'dismissed' ? (
                     <>
                         <TouchableOpacity
                             style={[styles.actionBtn, styles.snoozeBtn]}
-                            onPress={() => handleAction('snooze')}
+                            onPress={() => snoozeMutation.mutate()}
+                            disabled={isActionLoading}
                         >
                             <Ionicons name="moon-outline" size={18} color={Colors.textSecondary} />
                             <DonnaText style={styles.snoozeText}>Snooze</DonnaText>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={[styles.actionBtn, styles.completeBtn]}
-                            onPress={() => handleAction('complete')}
+                            onPress={() => completeMutation.mutate()}
+                            disabled={isActionLoading}
                         >
-                            <Ionicons name="checkmark-circle" size={20} color="#FFF" />
-                            <DonnaText style={styles.completeText}>Complete</DonnaText>
+                            {completeMutation.isPending ? (
+                                <ActivityIndicator size="small" color="#FFF" />
+                            ) : (
+                                <>
+                                    <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+                                    <DonnaText style={styles.completeText}>Complete</DonnaText>
+                                </>
+                            )}
                         </TouchableOpacity>
                     </>
                 ) : (
                     <View style={styles.completedBanner}>
-                        <Ionicons name="checkmark-circle" size={24} color={Colors.success} />
-                        <DonnaText style={styles.completedText}>Task Completed</DonnaText>
+                        <Ionicons name={task.status === 'completed' ? 'checkmark-circle' : 'close-circle'} size={24} color={task.status === 'completed' ? Colors.success : Colors.textMuted} />
+                        <DonnaText style={[styles.completedText, { color: task.status === 'completed' ? Colors.success : Colors.textMuted }]}>
+                            {task.status === 'completed' ? 'Task Completed' : 'Task Dismissed'}
+                        </DonnaText>
                     </View>
                 )}
             </View>
@@ -225,10 +292,20 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: Colors.bgBase,
     },
+    loadingContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
     errorContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
+        gap: Spacing.md,
+    },
+    errorText: {
+        fontSize: 16,
+        color: Colors.textMuted,
     },
     header: {
         flexDirection: 'row',
@@ -431,7 +508,6 @@ const styles = StyleSheet.create({
         paddingVertical: 14,
     },
     completedText: {
-        color: Colors.success,
         fontSize: 16,
         fontWeight: '600',
     },

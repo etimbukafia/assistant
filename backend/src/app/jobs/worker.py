@@ -629,18 +629,21 @@ async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[s
 async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
     """
     Handler for 'email_backfill' tasks.
-    
-    Fetches emails from the specified time window (default 24h) and queues them for processing.
+
+    Fetches emails from the specified time window (default 24h), saves to DB,
+    applies email filters, and queues for AI processing.
     Marks initial_sync_completed = True on success.
     """
-    from app.data.models import GmailAccount
+    from app.data.models import GmailAccount, Message
     from app.infra.database import SessionLocal
     from app.integrations.gmail import GmailClient
+    from app.security.encryption import encrypt_body
+    from app.services.email_filter import EmailFilterService, FilterAction
     from app.jobs.queue import enqueue_task
 
     user_id = payload.get("user_id")
     hours_back = payload.get("hours_back", 24)
-    
+
     if not user_id:
         raise ValueError(f"Task {task_id}: user_id is required")
 
@@ -649,43 +652,103 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
 
     try:
         logger.info(f"Starting email backfill for user {user_id} (last {hours_back}h)")
-        
+
         client = GmailClient(db=db, user_id=user_id)
         if not client.load_credentials():
             logger.error(f"Failed to load credentials for user {user_id}")
             return
 
         # Fetch messages
-        # Note: Gmail API "newer_than" supports d, h, m
         query = f"newer_than:{hours_back}h"
-        # We fetch up to 500 messages for initial sync
         messages = client.get_messages(max_results=500, query=query)
-        
+
         logger.info(f"Fetched {len(messages)} messages for backfill")
 
-        # Queue processing tasks
-        for msg in messages:
+        # Initialize filter service
+        filter_service = EmailFilterService(db=db, user_id=user_id)
+
+        synced_count = 0
+        filtered_count = 0
+        message_ids = []  # Messages to process with AI
+
+        for msg_data in messages:
+            # Check if message already exists
+            existing = db.query(Message).filter(
+                Message.message_id == msg_data['message_id']
+            ).first()
+
+            if existing:
+                continue
+
+            # Apply email filters
+            gmail_labels = msg_data.get('gmail_labels', [])
+            headers = msg_data.get('headers', {})
+            body_preview = msg_data.get('body', '')[:200] if msg_data.get('body') else None
+            filter_result = filter_service.apply_filters(
+                gmail_labels=gmail_labels,
+                sender_email=msg_data['sender'],
+                subject=msg_data['subject'],
+                headers=headers,
+                body_preview=body_preview,
+                thread_id=msg_data.get('thread_id'),
+            )
+
+            # Skip entirely if filter says so
+            if filter_result.action == FilterAction.SKIP:
+                continue
+
+            # Save message to database
+            attachments = msg_data.get('attachments') or []
+            message = Message(
+                message_id=msg_data['message_id'],
+                thread_id=msg_data['thread_id'],
+                user_id=user_id,
+                subject=msg_data['subject'],
+                sender=msg_data['sender'],
+                recipient=msg_data['recipient'],
+                body=encrypt_body(msg_data['body']),
+                body_encrypted=True,
+                received_at=msg_data['received_at'],
+                processed=filter_result.action == FilterAction.METADATA_ONLY,
+                has_attachments=bool(attachments),
+                attachments=attachments,
+            )
+
+            db.add(message)
+            db.flush()
+            synced_count += 1
+
+            # Only queue for AI processing if filter allows
+            if filter_result.action == FilterAction.PROCESS:
+                message_ids.append(message.id)
+            else:
+                filtered_count += 1
+
+        db.commit()
+
+        # Queue processing tasks for messages that passed the filter
+        for msg_id in message_ids:
             enqueue_task(
                 task_type="process_email",
-                payload={"message_id": msg["message_id"], "user_id": user_id},
+                payload={"message_id": msg_id, "user_id": user_id},
                 correlation_id=correlation_id,
                 db=db
             )
-            
+
         # Mark sync as completed
         gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
         if gmail_account:
             gmail_account.initial_sync_completed = True
-            # Update last_sync to avoid immediate re-sync overlap
             gmail_account.last_sync = datetime.now(timezone.utc)
             db.commit()
-            
-        logger.info(f"Email backfill complete for user {user_id}")
-        
+
+        logger.info(
+            f"Email backfill complete for user {user_id}: "
+            f"{synced_count} synced, {len(message_ids)} to process, {filtered_count} filtered"
+        )
+
     except Exception as e:
         logger.error(f"Email backfill failed: {e}", exc_info=True)
-        # Don't re-raise to avoid infinite retries on fatal errors? 
-        # For now, let it fail and maybe retry later manually or via logic
         raise
     finally:
         db.close()
@@ -1000,6 +1063,110 @@ def schedule_digest_jobs_if_needed(db):
                 logger.info(f"Scheduled {digest_type} for {settings.user_email} at {next_time}")
 
 
+async def handle_process_chat_message(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'process_chat_message' tasks.
+
+    Processes a chat message asynchronously when:
+    - Tool intent was detected (likely needs tools)
+    - Sync processing timed out
+
+    Updates the placeholder message with the actual response.
+    """
+    from app.data.models import ChatSession, ChatMessage, ChatPendingAction
+    from app.chat.orchestrator import ChatOrchestrator
+    from app.infra.database import SessionLocal
+    import uuid
+
+    job_id = payload.get("job_id")
+    session_id = payload.get("session_id")
+    user_id = payload.get("user_id")
+    content = payload.get("content")
+    assistant_message_id = payload.get("assistant_message_id")
+
+    if not all([job_id, session_id, user_id, content, assistant_message_id]):
+        logger.error(f"process_chat_message task (id={task_id}) missing required fields")
+        return
+
+    logger.info(f"Processing async chat message: job_id={job_id}, session_id={session_id}")
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
+    try:
+        # Get session
+        session = db.query(ChatSession).filter(
+            ChatSession.id == session_id,
+            ChatSession.user_id == user_id
+        ).first()
+
+        if not session:
+            logger.error(f"Session {session_id} not found")
+            _update_message_failed(db, assistant_message_id, "Session not found")
+            return
+
+        # Process through orchestrator
+        orchestrator = ChatOrchestrator(db, user_id)
+        result = await orchestrator.process_message(session, content)
+
+        # Get the placeholder message
+        assistant_msg = db.query(ChatMessage).filter(
+            ChatMessage.id == assistant_message_id
+        ).first()
+
+        if not assistant_msg:
+            logger.error(f"Assistant message {assistant_message_id} not found")
+            return
+
+        # Update with actual response
+        assistant_msg.content = result.get("response", "")
+        assistant_msg.message_metadata = {
+            "job_id": job_id,
+            "status": "complete",
+            "state": result.get("state", {})
+        }
+
+        # Create pending actions
+        for pa_data in result.get("pending_actions", []):
+            pa = ChatPendingAction(
+                id=str(uuid.uuid4()),
+                session_id=session_id,
+                message_id=assistant_msg.id,
+                action_type=pa_data["action_type"],
+                action_data=pa_data["action_data"],
+                status="pending",
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(pa)
+
+        db.commit()
+        logger.info(f"Async chat message complete: job_id={job_id}")
+
+    except Exception as e:
+        logger.error(f"Error processing async chat message: {e}", exc_info=True)
+        _update_message_failed(db, assistant_message_id, str(e))
+    finally:
+        db.close()
+
+
+def _update_message_failed(db, message_id: int, error: str):
+    """Update a message to failed status."""
+    from app.data.models import ChatMessage
+
+    try:
+        msg = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+        if msg:
+            msg.content = "I apologize, but I encountered an error processing your request. Please try again."
+            msg.message_metadata = {
+                **(msg.message_metadata or {}),
+                "status": "failed",
+                "error": error
+            }
+            db.commit()
+    except Exception as e:
+        logger.error(f"Failed to update message {message_id} as failed: {e}")
+
+
 # Map task types to handlers
 TASK_HANDLERS = {
     "process_email": handle_process_email,
@@ -1013,6 +1180,7 @@ TASK_HANDLERS = {
     "generate_digest": handle_generate_digest,
     "deliver_digest": handle_deliver_digest,
     "email_backfill": handle_email_backfill,
+    "process_chat_message": handle_process_chat_message,
 }
 
 

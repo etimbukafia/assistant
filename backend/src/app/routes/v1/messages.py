@@ -4,10 +4,11 @@ from typing import List
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser
+from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser, require_active_subscription
 from app.security.encryption import encrypt_body
 from app.integrations.gmail import GmailClient, get_gmail_client
 from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion
+from app.services.email_filter import EmailFilterService, FilterAction
 from app.data.schemas import (
     SyncResponse, MessagesListResponse, MessageResponse, 
     DraftReplyRequest, DraftReplyResponse
@@ -28,7 +29,7 @@ async def sync_messages(
     background_tasks: BackgroundTasks,
     max_results: int = 3,
     query: str = "",
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user),
     gmail_client: GmailClient = Depends(get_gmail_client)
 ):
@@ -46,8 +47,12 @@ async def sync_messages(
         # Fetch messages from Gmail
         messages = gmail_client.get_messages(max_results=max_results, query=query)
 
+        # Initialize filter service
+        filter_service = EmailFilterService(db=db, user_id=user.user_id)
+
         synced_count = 0
-        message_ids = []
+        filtered_count = 0
+        message_ids = []  # Messages to process with AI
 
         for msg_data in messages:
             # Check if message already exists
@@ -58,7 +63,24 @@ async def sync_messages(
             if existing:
                 continue
 
-            # Save message to database
+            # Apply email filters
+            gmail_labels = msg_data.get('gmail_labels', [])
+            headers = msg_data.get('headers', {})
+            body_preview = msg_data.get('body', '')[:200] if msg_data.get('body') else None
+            filter_result = filter_service.apply_filters(
+                gmail_labels=gmail_labels,
+                sender_email=msg_data['sender'],
+                subject=msg_data['subject'],
+                headers=headers,
+                body_preview=body_preview,
+                thread_id=msg_data.get('thread_id'),
+            )
+
+            # Skip entirely if filter says so
+            if filter_result.action == FilterAction.SKIP:
+                continue
+
+            # Save message to database (for both PROCESS and METADATA_ONLY)
             attachments = msg_data.get('attachments') or []
             message = Message(
                 message_id=msg_data['message_id'],
@@ -70,15 +92,20 @@ async def sync_messages(
                 body=encrypt_body(msg_data['body']),
                 body_encrypted=True,
                 received_at=msg_data['received_at'],
-                processed=False,
+                processed=filter_result.action == FilterAction.METADATA_ONLY,  # Mark as processed if skipping AI
                 has_attachments=bool(attachments),
                 attachments=attachments,
             )
 
             db.add(message)
             db.flush()
-            message_ids.append(message.id)
             synced_count += 1
+
+            # Only queue for AI processing if filter allows
+            if filter_result.action == FilterAction.PROCESS:
+                message_ids.append(message.id)
+            else:
+                filtered_count += 1
 
         # Store history ID for deletion tracking - Scoped to user
         account = db.query(GmailAccount).filter(GmailAccount.user_id == user.user_id).first()
@@ -123,8 +150,8 @@ async def sync_messages(
 
         return SyncResponse(
             synced_count=synced_count,
-            processed_count=synced_count,
-            message=f"Successfully synced and processed {synced_count} messages."
+            processed_count=len(message_ids),
+            message=f"Synced {synced_count} messages ({len(message_ids)} processed, {filtered_count} filtered)."
         )
 
     except Exception as e:
@@ -135,7 +162,7 @@ async def sync_messages(
 @router.post("/sync/deletions")
 def sync_deletions(
     db: Session = Depends(get_db_for_user),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_active_subscription),
     gmail_client: GmailClient = Depends(get_gmail_client)
 ):
     """
@@ -190,7 +217,7 @@ def sync_deletions(
 @router.post("/sync/sent")
 def sync_sent_messages(
     db: Session = Depends(get_db_for_user),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_active_subscription),
     gmail_client: GmailClient = Depends(get_gmail_client)
 ):
     """
@@ -222,21 +249,33 @@ def sync_sent_messages(
     for sent_msg in sent_messages:
         thread_id = sent_msg['thread_id']
         sent_at = sent_msg['sent_at']
-        
+
         # Find the thread state
         thread_state = db.query(ThreadState).filter(
             ThreadState.thread_id == thread_id
         ).first()
-        
+
         if thread_state and thread_state.needs_reply:
             # User replied - clear needs_reply
             thread_state.needs_reply = False
             thread_state.last_outbound_at = sent_at
             updated_count += 1
             thread_ids_updated.append(thread_id)
-    
+
     db.commit()
-    
+
+    # Update contact reply rates for threads where user replied
+    # This powers Layer 3 relationship-based filtering
+    if thread_ids_updated:
+        from app.services.contact_stats import update_contact_on_reply
+        for thread_id in thread_ids_updated:
+            try:
+                update_contact_on_reply(db, user.user_id, thread_id)
+            except Exception as e:
+                # Non-critical - log and continue
+                import logging
+                logging.warning(f"Failed to update contact stats for thread {thread_id}: {e}")
+
     return {
         "sent_messages_checked": len(sent_messages),
         "threads_updated": updated_count,
@@ -656,20 +695,20 @@ def trigger_initial_sync(
     - Returning subscriber after lapsed subscription
     """
     gmail_account = db.query(GmailAccount).filter(
-        GmailAccount.user_id == user.id
+        GmailAccount.user_id == user.user_id
     ).first()
-    
+
     if not gmail_account:
         raise HTTPException(404, "No Gmail account connected")
-    
+
     if gmail_account.initial_sync_completed:
         # Already synced, use incremental
         return {"status": "already_completed", "sync_type": "incremental"}
-    
+
     # Queue 24-hour backfill job
     # We use 'email_backfill' task name which should be handled by the worker
     enqueue_task("email_backfill", {
-        "user_id": user.id,
+        "user_id": user.user_id,
         "hours_back": 24,
         "gmail_account_id": gmail_account.id
     })

@@ -7,21 +7,40 @@ from app.data.schemas import UserSettingsResponse, UserSettingsUpdateRequest
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
+def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettingsResponse:
+    """Build enriched settings response with computed fields."""
+    from app.data.models import GmailAccount
+    gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == settings.user_id).first()
+
+    return UserSettingsResponse(
+        id=settings.id,
+        user_email=settings.user_email,
+        auto_approve_tasks=settings.auto_approve_tasks,
+        task_detection_instructions=settings.task_detection_instructions,
+        reminder_preferences=settings.reminder_preferences,
+        enable_quick_reply_from_task=settings.enable_quick_reply_from_task,
+        # Subscription fields (from model properties)
+        subscription_tier=settings.subscription_tier,
+        subscription_status=settings.subscription_status,
+        trial_ends_at=settings.trial_ends_at,
+        is_active=settings.is_active,
+        days_remaining=settings.days_remaining,
+        # Integration status (computed)
+        initial_sync_completed=gmail_account.initial_sync_completed if gmail_account else False,
+        gmail_connected=gmail_account is not None,
+        calendar_connected=bool(settings.calendar_ids),
+        created_at=settings.created_at,
+        updated_at=settings.updated_at,
+    )
+
+
 @router.get("/", response_model=UserSettingsResponse)
 def get_settings(
     settings: UserSettings = Depends(get_user_settings),
     db: Session = Depends(get_db_for_user)
 ):
     """Get current user settings. Auto-creates on first access."""
-    # Enriched response with Gmail account status
-    from app.data.models import GmailAccount
-    gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == settings.user_id).first()
-    
-    # We attach it to the settings object (schema will pick it up via from_attributes)
-    # Note: simple assignment works because Pydantic getter will look for attributes
-    settings.initial_sync_completed = gmail_account.initial_sync_completed if gmail_account else False
-    
-    return settings
+    return _enrich_settings_response(settings, db)
 
 
 @router.put("/", response_model=UserSettingsResponse)
@@ -44,4 +63,4 @@ def update_existing_settings(
 
     db.commit()
     db.refresh(settings)
-    return settings
+    return _enrich_settings_response(settings, db)

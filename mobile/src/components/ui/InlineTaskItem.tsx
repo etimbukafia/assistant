@@ -7,13 +7,45 @@ import { Task } from '../../types/api';
 
 interface InlineTaskItemProps {
     task: Task;
-    onUpdate: (task: Task) => void;
+    onApprove?: (taskId: number) => void;
+    onComplete?: (taskId: number) => void;
+    onStart?: (taskId: number) => void;
+    onDismiss?: (taskId: number) => void;
+    onPress?: (task: Task) => void;
 }
 
-export const InlineTaskItem: React.FC<InlineTaskItemProps> = ({ task, onUpdate }) => {
+export const InlineTaskItem: React.FC<InlineTaskItemProps> = ({
+    task,
+    onApprove,
+    onComplete,
+    onStart,
+    onDismiss,
+    onPress,
+}) => {
     const isCompleted = task.status === 'completed';
+    const isDismissed = task.status === 'dismissed';
     const isPendingApproval = task.status === 'pending_approval';
     const isWaitingFor = task.status === 'waiting_for';
+    const isActive = task.status === 'approved' || task.status === 'in_progress';
+
+    const handlePress = () => {
+        if (onPress) {
+            onPress(task);
+            return;
+        }
+
+        // Default behavior based on status
+        if (isPendingApproval && onApprove) {
+            onApprove(task.id);
+        } else if (isWaitingFor && onStart) {
+            // waiting_for → move to in_progress (user received what they were waiting for)
+            onStart(task.id);
+        } else if (isActive && onComplete) {
+            // active tasks → complete
+            onComplete(task.id);
+        }
+        // Completed/dismissed tasks: no action on press
+    };
 
     const getPriorityColor = (priority: string) => {
         switch (priority) {
@@ -27,17 +59,21 @@ export const InlineTaskItem: React.FC<InlineTaskItemProps> = ({ task, onUpdate }
 
     // Container style based on status
     const getContainerStyle = () => {
-        if (isCompleted) return [styles.container, styles.completedContainer];
+        if (isCompleted || isDismissed) return [styles.container, styles.completedContainer];
         if (isPendingApproval) return [styles.container, styles.pendingApprovalContainer];
         if (isWaitingFor) return [styles.container, styles.waitingForContainer];
         return styles.container;
     };
 
+    // Determine if the item is actionable
+    const isActionable = !isCompleted && !isDismissed;
+
     return (
         <TouchableOpacity
             style={getContainerStyle()}
-            onPress={() => onUpdate({ ...task, status: isCompleted ? 'pending_approval' : 'completed' })}
-            activeOpacity={0.7}
+            onPress={handlePress}
+            activeOpacity={isActionable ? 0.7 : 1}
+            disabled={!isActionable && !onPress}
         >
             {/* Waiting For: Purple accent bar on left */}
             {isWaitingFor && <View style={styles.waitingForBar} />}

@@ -22,7 +22,7 @@ import {
     Message,
     SchedulingSuggestion
 } from '@/src/services/messages';
-import { approveTask, dismissTask, completeTask, updateTask, createTask, Task } from '@/src/services/tasks';
+import { approveTask, dismissTask, completeTask, startTask, updateTask, createTask, Task } from '@/src/services/tasks';
 import { createCalendarEvent } from '@/src/services/calendar';
 
 export default function MessageDetailScreen() {
@@ -60,6 +60,13 @@ export default function MessageDetailScreen() {
 
     const completeMutation = useMutation({
         mutationFn: (taskId: number) => completeTask(taskId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['message', id] });
+        },
+    });
+
+    const startMutation = useMutation({
+        mutationFn: (taskId: number) => startTask(taskId),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['message', id] });
         },
@@ -178,14 +185,10 @@ export default function MessageDetailScreen() {
     });
 
     // Task handlers
-    const handleTaskUpdate = (task: Task) => {
-        // Handle different task actions based on status
-        if (task.status === 'pending_approval') {
-            approveMutation.mutate(task.id);
-        } else if (task.status === 'approved' || task.status === 'in_progress') {
-            completeMutation.mutate(task.id);
-        }
-    };
+    const handleApproveTask = (taskId: number) => approveMutation.mutate(taskId);
+    const handleCompleteTask = (taskId: number) => completeMutation.mutate(taskId);
+    const handleStartTask = (taskId: number) => startMutation.mutate(taskId);
+    const handleDismissTask = (taskId: number) => dismissMutation.mutate(taskId);
 
     const handleApproveExtractedTask = (extractedTask: { title: string; priority?: string }) => {
         createTaskMutation.mutate(extractedTask);
@@ -332,7 +335,10 @@ export default function MessageDetailScreen() {
                             <InlineTaskItem
                                 key={task.id}
                                 task={task}
-                                onUpdate={handleTaskUpdate}
+                                onApprove={handleApproveTask}
+                                onComplete={handleCompleteTask}
+                                onStart={handleStartTask}
+                                onDismiss={handleDismissTask}
                             />
                         ))}
                     </View>

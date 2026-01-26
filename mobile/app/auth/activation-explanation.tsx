@@ -6,17 +6,27 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
+import { useBillingActions } from '../../src/hooks/useSubscription';
 
 const { width } = Dimensions.get('window');
 
 export default function ActivationExplanationScreen() {
     const router = useRouter();
-    const { startSync } = useAuth();
+    const { refreshProfile } = useAuth();
+    const { activateTrialAsync, triggerInitialSyncAsync, isActivatingTrial, isTriggering } = useBillingActions();
 
-    const handleStartSync = () => {
-        startSync();
-        router.back(); // Go back to inbox which will now show 'processing'
+    const handleStartSync = async () => {
+        try {
+            await activateTrialAsync();
+            await triggerInitialSyncAsync();
+            await refreshProfile();
+            router.back(); // Go back to inbox which will now show 'processing'
+        } catch (error) {
+            // Error alerts are handled by the hook
+        }
     };
+
+    const isLoading = isActivatingTrial || isTriggering;
 
     return (
         <SafeAreaView style={styles.container}>

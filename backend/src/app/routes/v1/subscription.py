@@ -18,23 +18,31 @@ def activate_trial(
     Called when user explicitly chooses to sync their real data.
     """
     settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user.id
+        UserSettings.user_id == user.user_id
     ).first()
     
     if not settings:
         raise HTTPException(status_code=404, detail="User settings not found")
-        
+
+    # PRO users don't need trial activation
+    if settings.subscription_tier == "pro":
+        return {
+            "status": "already_subscribed",
+            "subscription_tier": "pro",
+            "message": "You have an active Pro subscription"
+        }
+
     # Check if already active or expired
     if settings.trial_ends_at:
-         # If existing trial is in the future, return it
+        # If existing trial is in the future, return it
         if settings.trial_ends_at > datetime.now(timezone.utc):
-             return {
+            return {
                 "status": "active",
                 "trial_ends_at": settings.trial_ends_at.isoformat(),
                 "days_remaining": settings.days_remaining
             }
         else:
-             raise HTTPException(status_code=400, detail="Trial already expired")
+            raise HTTPException(status_code=400, detail="Trial already expired")
 
     # Activate trial
     settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=7)
