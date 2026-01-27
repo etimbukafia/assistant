@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { StyleSheet, View, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -10,6 +10,7 @@ import { formatDistanceToNow, parseISO } from 'date-fns';
 import { InlineTaskItem } from '@/src/components/ui/InlineTaskItem';
 import { SchedulingSuggestionCard, openCalendarToDate } from '@/src/components/ui/SchedulingSuggestionCard';
 import { useChat } from '@/src/context/ChatContext';
+import { useAuth } from '@/src/context/AuthContext';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     fetchMessage,
@@ -24,23 +25,55 @@ import {
 } from '@/src/services/messages';
 import { approveTask, dismissTask, completeTask, startTask, updateTask, createTask, Task } from '@/src/services/tasks';
 import { createCalendarEvent } from '@/src/services/calendar';
+import demoData from '@/src/data/demo_state.json';
 
 export default function MessageDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
     const { openChat } = useChat();
+    const { isSandbox } = useAuth();
     const queryClient = useQueryClient();
 
     // Local state
     const [showDraftModal, setShowDraftModal] = useState(false);
     const [draftText, setDraftText] = useState('');
+    const [loadSchedulingSuggestions, setLoadSchedulingSuggestions] = useState(false);
 
-    // Fetch message from API
-    const { data: message, isLoading, error } = useQuery({
+    // Get demo message for sandbox mode with dynamic dates
+    const demoMessage = useMemo(() => {
+        if (!isSandbox) return null;
+        const allMessages = demoData.messages as unknown as Message[];
+        const msgIndex = allMessages.findIndex(m => m.id === parseInt(id as string));
+        if (msgIndex === -1) return null;
+        const msg = allMessages[msgIndex];
+        // Apply same date transformation as inbox list
+        const now = new Date();
+        const date = new Date(now);
+        if (msgIndex < 2) {
+            date.setHours(now.getHours() - 2 - msgIndex * 2, 0, 0, 0);
+        } else {
+            date.setDate(date.getDate() - 1);
+            date.setHours(14, 0, 0, 0);
+        }
+        return { ...msg, received_at: date.toISOString() };
+    }, [isSandbox, id]);
+
+    // Fetch message from API - disabled in sandbox mode
+    // Use placeholderData from the messages list cache for instant display
+    const { data: apiMessage, isLoading, error } = useQuery({
         queryKey: ['message', id],
         queryFn: () => fetchMessage(parseInt(id as string)),
-        enabled: !!id,
+        enabled: !!id && !isSandbox,
+        placeholderData: () => {
+            // Try to get the message from the messages list cache
+            const cachedMessages = queryClient.getQueryData<{ messages: Message[] }>(['messages']);
+            return cachedMessages?.messages?.find(m => m.id === parseInt(id as string));
+        },
+        staleTime: 1000 * 60 * 5, // 5 minutes
     });
+
+    // Use demo data in sandbox mode, API data otherwise
+    const message = isSandbox ? demoMessage : apiMessage;
 
     // Task mutations
     const approveMutation = useMutation({
@@ -110,11 +143,11 @@ export default function MessageDetailScreen() {
         },
     });
 
-    // Fetch scheduling suggestions for this message
-    const { data: schedulingData } = useQuery({
+    // Fetch scheduling suggestions for this message - only when user requests it
+    const { data: schedulingData, isLoading: isLoadingSuggestions } = useQuery({
         queryKey: ['scheduling-suggestions', id],
         queryFn: () => getSchedulingSuggestions(parseInt(id as string)),
-        enabled: !!id && !!message?.scheduling_intent?.detected,
+        enabled: !!id && loadSchedulingSuggestions && !isSandbox,
     });
 
     const schedulingSuggestion = schedulingData?.suggestions?.[0];
@@ -184,13 +217,41 @@ export default function MessageDetailScreen() {
         },
     });
 
-    // Task handlers
-    const handleApproveTask = (taskId: number) => approveMutation.mutate(taskId);
-    const handleCompleteTask = (taskId: number) => completeMutation.mutate(taskId);
-    const handleStartTask = (taskId: number) => startMutation.mutate(taskId);
-    const handleDismissTask = (taskId: number) => dismissMutation.mutate(taskId);
+    // Task handlers - show demo message in sandbox mode
+    const handleApproveTask = (taskId: number) => {
+        if (isSandbox) {
+            Alert.alert('Demo Mode', 'Task actions are disabled in demo mode. Connect your email to enable.');
+            return;
+        }
+        approveMutation.mutate(taskId);
+    };
+    const handleCompleteTask = (taskId: number) => {
+        if (isSandbox) {
+            Alert.alert('Demo Mode', 'Task actions are disabled in demo mode. Connect your email to enable.');
+            return;
+        }
+        completeMutation.mutate(taskId);
+    };
+    const handleStartTask = (taskId: number) => {
+        if (isSandbox) {
+            Alert.alert('Demo Mode', 'Task actions are disabled in demo mode. Connect your email to enable.');
+            return;
+        }
+        startMutation.mutate(taskId);
+    };
+    const handleDismissTask = (taskId: number) => {
+        if (isSandbox) {
+            Alert.alert('Demo Mode', 'Task actions are disabled in demo mode. Connect your email to enable.');
+            return;
+        }
+        dismissMutation.mutate(taskId);
+    };
 
     const handleApproveExtractedTask = (extractedTask: { title: string; priority?: string }) => {
+        if (isSandbox) {
+            Alert.alert('Demo Mode', 'Task actions are disabled in demo mode. Connect your email to enable.');
+            return;
+        }
         createTaskMutation.mutate(extractedTask);
     };
 
@@ -205,24 +266,8 @@ export default function MessageDetailScreen() {
     const hasStructuredTasks = (message?.tasks || []).length > 0;
     const showExtractedTasks = !hasStructuredTasks && (message?.extracted_tasks || []).length > 0;
 
-    if (isLoading) {
-        return (
-            <SafeAreaView style={styles.container}>
-                <StatusBar style="dark" />
-                <View style={styles.header}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                        <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
-                    </TouchableOpacity>
-                </View>
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color={Colors.accentPrimary} />
-                    <DonnaText variant="caption" style={styles.loadingText}>Loading message...</DonnaText>
-                </View>
-            </SafeAreaView>
-        );
-    }
-
-    if (error || !message) {
+    // Show error state
+    if (error) {
         return (
             <SafeAreaView style={styles.container}>
                 <StatusBar style="dark" />
@@ -234,6 +279,20 @@ export default function MessageDetailScreen() {
                 <View style={styles.errorContainer}>
                     <Ionicons name="alert-circle-outline" size={48} color={Colors.error} />
                     <DonnaText style={styles.errorText}>Message not found</DonnaText>
+                </View>
+            </SafeAreaView>
+        );
+    }
+
+    // Show minimal UI while waiting for data (should be very brief with placeholderData)
+    if (!message) {
+        return (
+            <SafeAreaView style={styles.container}>
+                <StatusBar style="dark" />
+                <View style={styles.header}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                        <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+                    </TouchableOpacity>
                 </View>
             </SafeAreaView>
         );
@@ -254,14 +313,26 @@ export default function MessageDetailScreen() {
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={styles.actionButton}
-                        onPress={() => archiveMutation.mutate()}
+                        onPress={() => {
+                            if (isSandbox) {
+                                Alert.alert('Demo Mode', 'Archive is disabled in demo mode.');
+                                return;
+                            }
+                            archiveMutation.mutate();
+                        }}
                         disabled={archiveMutation.isPending}
                     >
                         <Ionicons name="archive-outline" size={24} color={Colors.textPrimary} />
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={styles.actionButton}
-                        onPress={() => deleteMutation.mutate()}
+                        onPress={() => {
+                            if (isSandbox) {
+                                Alert.alert('Demo Mode', 'Delete is disabled in demo mode.');
+                                return;
+                            }
+                            deleteMutation.mutate();
+                        }}
                         disabled={deleteMutation.isPending}
                     >
                         <Ionicons name="trash-outline" size={24} color={Colors.textPrimary} />
@@ -344,8 +415,24 @@ export default function MessageDetailScreen() {
                     </View>
                 )}
 
-                {/* Scheduling Suggestion Card */}
-                {message.scheduling_intent?.detected && (
+                {/* Scheduling Suggestion Card - only load on user request */}
+                {message.scheduling_intent?.detected && !loadSchedulingSuggestions && (
+                    <TouchableOpacity
+                        style={styles.loadSuggestionsButton}
+                        onPress={() => {
+                            if (isSandbox) {
+                                Alert.alert('Demo Mode', 'Scheduling suggestions are disabled in demo mode.');
+                                return;
+                            }
+                            setLoadSchedulingSuggestions(true);
+                        }}
+                    >
+                        <Ionicons name="calendar-outline" size={20} color={Colors.accentSecondary} />
+                        <DonnaText style={styles.loadSuggestionsText}>Load Suggested Times</DonnaText>
+                        <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                    </TouchableOpacity>
+                )}
+                {message.scheduling_intent?.detected && loadSchedulingSuggestions && (
                     <SchedulingSuggestionCard
                         title={schedulingSuggestion?.suggested_title || 'Meeting'}
                         duration_minutes={schedulingSuggestion?.suggested_duration_minutes || 30}
@@ -359,7 +446,7 @@ export default function MessageDetailScreen() {
                         }}
                         onDismiss={schedulingSuggestion ? () => dismissSchedulingMutation.mutate(schedulingSuggestion.id) : undefined}
                         isLoading={createEventMutation.isPending}
-                        isSlotsLoading={!schedulingSuggestion}
+                        isSlotsLoading={isLoadingSuggestions || !schedulingSuggestion}
                         error={null}
                     />
                 )}
@@ -376,7 +463,13 @@ export default function MessageDetailScreen() {
             <View style={styles.bottomBar}>
                 <TouchableOpacity
                     style={styles.replyButton}
-                    onPress={() => draftReplyMutation.mutate()}
+                    onPress={() => {
+                        if (isSandbox) {
+                            Alert.alert('Demo Mode', 'Reply drafting is disabled in demo mode. Connect your email to enable.');
+                            return;
+                        }
+                        draftReplyMutation.mutate();
+                    }}
                     disabled={draftReplyMutation.isPending}
                 >
                     {draftReplyMutation.isPending ? (
@@ -389,7 +482,14 @@ export default function MessageDetailScreen() {
                     </DonnaText>
                 </TouchableOpacity>
                 {message.scheduling_intent?.detected && (
-                    <TouchableOpacity style={[styles.replyButton, styles.scheduleButton]}>
+                    <TouchableOpacity
+                        style={[styles.replyButton, styles.scheduleButton]}
+                        onPress={() => {
+                            if (isSandbox) {
+                                Alert.alert('Demo Mode', 'Scheduling is disabled in demo mode. Connect your email to enable.');
+                            }
+                        }}
+                    >
                         <Ionicons name="calendar" size={20} color="#FFF" />
                         <DonnaText style={styles.replyButtonText}>Schedule</DonnaText>
                     </TouchableOpacity>
@@ -571,6 +671,23 @@ const styles = StyleSheet.create({
         color: '#FFF',
         fontWeight: '600',
         fontSize: 13,
+    },
+    loadSuggestionsButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: Spacing.md,
+        marginTop: Spacing.md,
+        backgroundColor: Colors.bgElevated,
+        borderRadius: Radius.lg,
+        borderWidth: 1,
+        borderColor: Colors.border,
+        gap: Spacing.sm,
+    },
+    loadSuggestionsText: {
+        flex: 1,
+        fontSize: 15,
+        fontWeight: '500',
+        color: Colors.textPrimary,
     },
     bodyContainer: {
         paddingTop: Spacing.md,

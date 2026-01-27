@@ -1167,6 +1167,30 @@ def _update_message_failed(db, message_id: int, error: str):
         logger.error(f"Failed to update message {message_id} as failed: {e}")
 
 
+async def handle_renew_gmail_watches(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Renew Gmail Pub/Sub watches for all connected accounts.
+
+    Should run daily. Gmail watches expire after 7 days;
+    calling watch() again extends them.
+    """
+    from app.services.gmail_watch import renew_all_watches
+
+    logger.info(f"[{correlation_id}] Renewing Gmail watches")
+    result = renew_all_watches()
+    logger.info(f"[{correlation_id}] Gmail watch renewal: {result}")
+
+    # Re-schedule for tomorrow
+    from datetime import timedelta
+    next_run = datetime.utcnow() + timedelta(days=1)
+    queue_service.enqueue(
+        task_type="renew_gmail_watches",
+        payload={},
+        scheduled_for=next_run,
+    )
+    logger.info(f"[{correlation_id}] Next Gmail watch renewal scheduled for {next_run}")
+
+
 # Map task types to handlers
 TASK_HANDLERS = {
     "process_email": handle_process_email,
@@ -1181,6 +1205,7 @@ TASK_HANDLERS = {
     "deliver_digest": handle_deliver_digest,
     "email_backfill": handle_email_backfill,
     "process_chat_message": handle_process_chat_message,
+    "renew_gmail_watches": handle_renew_gmail_watches,
 }
 
 

@@ -13,7 +13,7 @@
             "summary": "Sarah flagged a conflict between the Q4 strategy session and your deep work block this Friday.",
             "needs_reply": true,
             "processed": true,
-            "scheduling_intent": true,
+            "scheduling_intent": { "detected": true },
             "tasks": [
                 {
                     "id": 101,
@@ -47,16 +47,30 @@
             "id": 3,
             "message_id": "msg_003",
             "thread_id": "thread_003",
-            "sender": "Tech Insider <newsletter@techinsider.io>",
+            "sender": "Rachel Torres <r.torres@meridian-legal.com>",
             "recipient": "me@example.com",
-            "subject": "Weekly Newsletter: AI Trends",
-            "snippet": "Here's what happened in the industry this week...",
-            "body": "Top stories this week: 3 competitors announced AI integrations...",
+            "subject": "Client Contract Review - Signature Needed by Friday",
+            "snippet": "Attached is the revised MSA for the Apex partnership. Legal flagged two clauses that need your sign-off.",
+            "body": "Hi,\n\nAttached is the revised Master Services Agreement for the Apex partnership. Legal flagged two clauses in Section 4 (liability cap) and Section 9 (data handling) that need your sign-off before we can send it back.\n\nThe client is expecting a signed copy by end of day Friday. Let me know if you'd like to schedule a quick call to walk through the changes.\n\nBest,\nRachel",
             "received_at": "2024-01-15T10:00:00Z",
-            "summary": "Weekly newsletter summarizing AI trends. No action needed.",
-            "needs_reply": false,
+            "summary": "Revised Apex partnership contract needs your sign-off on liability and data handling clauses by Friday.",
+            "needs_reply": true,
             "processed": true,
-            "tasks": []
+            "tasks": [
+                {
+                    "id": 102,
+                    "message_id": 3,
+                    "title": "Review and sign Apex MSA",
+                    "status": "pending_approval",
+                    "priority": "high",
+                    "urgency_suggested_by_ai": true
+                }
+            ],
+            "extracted_tasks": [
+                "Review liability cap clause in Section 4",
+                "Review data handling clause in Section 9",
+                "Sign and return MSA by Friday"
+            ]
         }
     ],
     "tasks": [
@@ -73,8 +87,7 @@
             "message_id": 0,
             "title": "Review Sarah's Report",
             "priority": "normal",
-            "status": "approved",
-            "deadline": "2024-01-17T17:00:00Z"
+            "status": "approved"
         },
         {
             "id": 203,

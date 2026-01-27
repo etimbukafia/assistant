@@ -612,6 +612,73 @@ class GmailClient:
             return [], start_history_id
 
 
+    def get_new_message_ids(self, start_history_id: str) -> tuple[list, Optional[str]]:
+        """
+        Get new inbox message IDs since a given history ID using the History API.
+
+        Args:
+            start_history_id: History ID to start checking from
+
+        Returns:
+            tuple: (list of new Gmail message IDs, new history ID for next check)
+        """
+        if not self.service:
+            if not self.load_credentials():
+                return [], start_history_id
+
+        new_ids = []
+        new_history_id = start_history_id
+
+        try:
+            response = self.service.users().history().list(
+                userId='me',
+                startHistoryId=start_history_id,
+                historyTypes=['messageAdded'],
+                labelId='INBOX'
+            ).execute()
+
+            history = response.get('history', [])
+            for record in history:
+                added = record.get('messagesAdded', [])
+                for msg in added:
+                    labels = msg['message'].get('labelIds', [])
+                    if 'INBOX' in labels:
+                        new_ids.append(msg['message']['id'])
+
+            new_history_id = response.get('historyId', start_history_id)
+
+            # Handle pagination
+            while 'nextPageToken' in response:
+                response = self.service.users().history().list(
+                    userId='me',
+                    startHistoryId=start_history_id,
+                    historyTypes=['messageAdded'],
+                    labelId='INBOX',
+                    pageToken=response['nextPageToken']
+                ).execute()
+
+                history = response.get('history', [])
+                for record in history:
+                    added = record.get('messagesAdded', [])
+                    for msg in added:
+                        labels = msg['message'].get('labelIds', [])
+                        if 'INBOX' in labels:
+                            new_ids.append(msg['message']['id'])
+
+                new_history_id = response.get('historyId', new_history_id)
+
+            return new_ids, new_history_id
+
+        except Exception as e:
+            if 'notFound' in str(e) or '404' in str(e):
+                print(f"History ID too old, resetting: {e}")
+                current_id = self.get_current_history_id()
+                return [], current_id or start_history_id
+
+            print(f"Failed to get new messages from history: {e}")
+            return [], start_history_id
+
+
 def get_gmail_client(
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),

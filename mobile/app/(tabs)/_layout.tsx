@@ -1,14 +1,20 @@
 import React, { useState, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs, usePathname, useRouter } from 'expo-router';
-import { Colors } from '../../src/theme/Theme';
+import { Colors, Spacing, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
+import { TrialBadge } from '../../src/components/ui/TrialBadge';
 import { useAuth } from '../../src/context/AuthContext';
 import { useChat } from '../../src/context/ChatContext';
-import { TouchableOpacity, View } from 'react-native';
+import { TouchableOpacity, View, Dimensions, StyleSheet } from 'react-native';
 import { AdaptivePillNav } from '../../src/components/navigation/AdaptivePillNav';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { runOnJS } from 'react-native-reanimated';
 
-const TAB_ROUTES = ['index', 'focus', 'calendar', 'settings'];
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25; // 25% of screen width
+
+const TAB_ROUTES = ['index', 'focus', 'calendar'];
 
 function TabBarIcon(props: {
   name: React.ComponentProps<typeof Ionicons>['name'];
@@ -37,7 +43,7 @@ export default function TabLayout() {
     setCurrentIndex(getCurrentIndex());
   }, [pathname, getCurrentIndex]);
 
-  const handleTabChange = (index: number) => {
+  const handleTabChange = useCallback((index: number) => {
     const route = TAB_ROUTES[index];
 
     // If Chat tab selected (not in routes anymore but just for safety)
@@ -53,100 +59,150 @@ export default function TabLayout() {
     } else {
       router.replace(`/(tabs)/${route}` as any);
     }
-  };
+  }, [openChat, router]);
+
+  // Handle swipe to navigate between tabs
+  const handleSwipe = useCallback((direction: 'left' | 'right') => {
+    if (direction === 'left' && currentIndex < TAB_ROUTES.length - 1) {
+      handleTabChange(currentIndex + 1);
+    } else if (direction === 'right' && currentIndex > 0) {
+      handleTabChange(currentIndex - 1);
+    }
+  }, [currentIndex, handleTabChange]);
+
+  // Screen-level swipe gesture for tab navigation
+  const screenSwipeGesture = Gesture.Pan()
+    .activeOffsetX([-20, 20]) // Minimum horizontal movement to activate
+    .failOffsetY([-20, 20]) // Cancel if vertical movement exceeds this
+    .onEnd((event) => {
+      if (event.translationX < -SWIPE_THRESHOLD) {
+        runOnJS(handleSwipe)('left');
+      } else if (event.translationX > SWIPE_THRESHOLD) {
+        runOnJS(handleSwipe)('right');
+      }
+    });
 
   // Get user initial from Supabase user_metadata (populated by Google OAuth)
   const userName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email;
   const initial = userName?.[0]?.toUpperCase() || '?';
 
   return (
-    <View style={{ flex: 1 }}>
-      <Tabs
-        screenOptions={{
-          tabBarActiveTintColor: Colors.accentSecondary,
-          tabBarInactiveTintColor: Colors.textMuted,
-          // Hide the default tab bar - we use AdaptivePillNav instead
-          tabBarStyle: {
-            display: 'none',
-          },
-          headerStyle: {
-            backgroundColor: Colors.bgBase,
-          },
-          headerTitleStyle: {
-            color: Colors.textPrimary,
-            fontFamily: 'PlayfairDisplay_600SemiBold',
-            fontSize: 20,
-          },
-          headerTitle: '',
-          headerTitleAlign: 'center',
-          headerLeft: () => (
-            <TouchableOpacity
-              onPress={() => router.push('/(tabs)/settings' as any)}
-              style={{ marginLeft: 16 }}
-            >
-              <View style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                backgroundColor: Colors.accentSecondary,
-                justifyContent: 'center',
-                alignItems: 'center'
-              }}>
-                <DonnaText style={{ color: 'white', fontSize: 16, fontFamily: 'PlayfairDisplay_600SemiBold' }}>{initial}</DonnaText>
+    <GestureDetector gesture={screenSwipeGesture}>
+      <Animated.View style={{ flex: 1 }}>
+        <Tabs
+          screenOptions={{
+            tabBarActiveTintColor: Colors.accentSecondary,
+            tabBarInactiveTintColor: Colors.textMuted,
+            // Hide the default tab bar - we use AdaptivePillNav instead
+            tabBarStyle: {
+              display: 'none',
+            },
+            headerStyle: {
+              backgroundColor: Colors.bgBase,
+            },
+            headerTitleStyle: {
+              color: Colors.textPrimary,
+              fontFamily: 'PlayfairDisplay_600SemiBold',
+              fontSize: 20,
+            },
+            headerTitle: '',
+            headerTitleAlign: 'center',
+            headerLeft: () => (
+              <TouchableOpacity
+                onPress={() => router.push('/(tabs)/settings' as any)}
+                style={{ marginLeft: 16 }}
+              >
+                <View style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: Colors.accentSecondary,
+                  justifyContent: 'center',
+                  alignItems: 'center'
+                }}>
+                  <DonnaText style={{ color: 'white', fontSize: 16, fontFamily: 'PlayfairDisplay_600SemiBold' }}>{initial}</DonnaText>
+                </View>
+              </TouchableOpacity>
+            ),
+            headerRight: () => (
+              <View style={{ flexDirection: 'row', marginRight: 16, gap: 12, alignItems: 'center' }}>
+                <TrialBadge />
+                <TouchableOpacity><Ionicons name="search" size={22} color={Colors.textPrimary} /></TouchableOpacity>
+                <TouchableOpacity><Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} /></TouchableOpacity>
               </View>
-            </TouchableOpacity>
-          ),
-          headerRight: () => (
-            <View style={{ flexDirection: 'row', marginRight: 16, gap: 16 }}>
-              <TouchableOpacity><Ionicons name="search" size={22} color={Colors.textPrimary} /></TouchableOpacity>
-              <TouchableOpacity><Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} /></TouchableOpacity>
-            </View>
-          ),
-        }}>
-        <Tabs.Screen
-          name="index"
-          options={{
-            title: 'Inbox',
-            tabBarIcon: ({ color }) => <TabBarIcon name="mail" color={color} />,
-            headerShown: true,
-          }}
-        />
-        <Tabs.Screen
-          name="focus"
-          options={{
-            title: 'Focus',
-            tabBarIcon: ({ color }) => <TabBarIcon name="flash" color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="calendar"
-          options={{
-            title: 'Schedule',
-            tabBarIcon: ({ color }) => <TabBarIcon name="calendar" color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="settings"
-          options={{
-            title: 'Settings',
-            tabBarIcon: ({ color }) => <TabBarIcon name="settings-outline" color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="chat"
-          options={{
-            title: 'Chat',
-            tabBarIcon: ({ color }) => <TabBarIcon name="chatbubbles-outline" color={color} />,
-            href: null, // Hide from tab bar
-          }}
-        />
-      </Tabs>
+            ),
+          }}>
+          <Tabs.Screen
+            name="index"
+            options={{
+              title: 'Inbox',
+              tabBarIcon: ({ color }) => <TabBarIcon name="mail" color={color} />,
+              headerShown: true,
+            }}
+          />
+          <Tabs.Screen
+            name="focus"
+            options={{
+              title: 'Focus',
+              tabBarIcon: ({ color }) => <TabBarIcon name="flash" color={color} />,
+            }}
+          />
+          <Tabs.Screen
+            name="calendar"
+            options={{
+              title: 'Schedule',
+              tabBarIcon: ({ color }) => <TabBarIcon name="calendar" color={color} />,
+            }}
+          />
+          <Tabs.Screen
+            name="settings"
+            options={{
+              title: 'Settings',
+              tabBarIcon: ({ color }) => <TabBarIcon name="settings-outline" color={color} />,
+              href: null, // Hide from tab bar - access via avatar only
+            }}
+          />
+          <Tabs.Screen
+            name="chat"
+            options={{
+              title: 'Chat',
+              tabBarIcon: ({ color }) => <TabBarIcon name="chatbubbles-outline" color={color} />,
+              href: null, // Hide from tab bar
+            }}
+          />
+        </Tabs>
 
-      {/* Adaptive Pill Navigation */}
-      <AdaptivePillNav
-        currentIndex={currentIndex}
-        onTabChange={handleTabChange}
-      />
-    </View>
+        {/* Adaptive Pill Navigation */}
+        <AdaptivePillNav
+          currentIndex={currentIndex}
+          onTabChange={handleTabChange}
+        />
+
+        {/* Chat FAB */}
+        <TouchableOpacity style={styles.chatFab} onPress={openChat}>
+          <Ionicons name="sparkles" size={24} color="#FFF" />
+        </TouchableOpacity>
+      </Animated.View>
+    </GestureDetector>
   );
 }
+
+const styles = StyleSheet.create({
+  chatFab: {
+    position: 'absolute',
+    bottom: 100,
+    right: Spacing.md,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.accentSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 6,
+    zIndex: 50,
+  },
+});

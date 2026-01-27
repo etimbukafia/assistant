@@ -42,9 +42,14 @@ export default function MemoryScreen() {
         isCreating,
         delete: deletePreference,
         isDeleting,
+        isSandbox,
     } = usePreferencesWithMutations();
 
     const handleDelete = (pref: PrincipalMemory) => {
+        if (isSandbox) {
+            Alert.alert('Demo Mode', 'Preference management is disabled in demo mode. Connect your email to enable.');
+            return;
+        }
         Alert.alert(
             'Remove Preference',
             'Are you sure you want to remove this preference?',
@@ -60,6 +65,10 @@ export default function MemoryScreen() {
     };
 
     const handleAddPreference = () => {
+        if (isSandbox) {
+            Alert.alert('Demo Mode', 'Preference management is disabled in demo mode. Connect your email to enable.');
+            return;
+        }
         if (!newPrefValue.trim()) {
             Alert.alert('Error', 'Please enter a preference');
             return;

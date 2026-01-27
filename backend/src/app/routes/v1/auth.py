@@ -32,12 +32,25 @@ def gmail_callback(
     """
     try:
         credentials = gmail_client.exchange_code_for_token(code)
-        
+
         # Verify that credentials are valid
         email_address = gmail_client.get_profile_email()
-        
+
+        # Set up Gmail push notifications via Pub/Sub
+        from app.services.gmail_watch import setup_watch
+        watch_result = setup_watch(gmail_client)
+        if watch_result:
+            # Store initial history ID for webhook processing
+            from app.data.models import GmailAccount
+            account = gmail_client.db.query(GmailAccount).filter(
+                GmailAccount.email == email_address
+            ).first()
+            if account and not account.last_history_id:
+                account.last_history_id = str(watch_result.get('historyId', ''))
+                gmail_client.db.commit()
+
         return {
-            "status": "success", 
+            "status": "success",
             "message": "Gmail authentication successful",
             "email": email_address
         }

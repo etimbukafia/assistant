@@ -18,6 +18,7 @@ import {
 } from '@expo-google-fonts/inter';
 import { AuthProvider } from '../src/context/AuthContext';
 import { ChatProvider, useChat } from '../src/context/ChatContext';
+import { SyncCTAProvider } from '../src/context/SyncCTAContext';
 import { OmniChatOverlay } from '../src/components/chat/OmniChatOverlay';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '../src/utils/queryClient';
@@ -90,30 +91,32 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <ChatProvider>
         <AuthProvider>
-          <ThemeProvider value={DonnaTheme}>
-            <GestureHandlerRootView style={{ flex: 1 }}>
-              <Stack screenOptions={{ headerShown: false }}>
-                <Stack.Screen name="index" />
-                <Stack.Screen name="login" />
-                <Stack.Screen name="auth/welcome" />
-                <Stack.Screen name="auth/google/choose-account" options={{ presentation: 'modal' }} />
-                <Stack.Screen name="auth/google/consent" options={{ presentation: 'modal' }} />
-                <Stack.Screen name="auth/activation-explanation" options={{ presentation: 'modal' }} />
-                <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
-                <Stack.Screen name="settings/profile" options={{ presentation: 'modal' }} />
-                <Stack.Screen name="settings/activate_trial" options={{ presentation: 'modal' }} />
-                <Stack.Screen name="settings/privacy" options={{ presentation: 'modal' }} />
-                <Stack.Screen name="(tabs)" options={{
-                  headerShown: false,
-                  presentation: 'card',
-                  gestureEnabled: false,
-                  animation: 'fade',
-                }} />
-              </Stack>
-              {/* Global OmniChat Overlay - appears on ALL screens */}
-              <GlobalChatOverlay />
-            </GestureHandlerRootView>
-          </ThemeProvider>
+          <SyncCTAProvider>
+            <ThemeProvider value={DonnaTheme}>
+              <GestureHandlerRootView style={{ flex: 1 }}>
+                <Stack screenOptions={{ headerShown: false }}>
+                  <Stack.Screen name="index" />
+                  <Stack.Screen name="login" />
+                  <Stack.Screen name="auth/welcome" />
+                  <Stack.Screen name="auth/google/choose-account" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="auth/google/consent" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="auth/activation-explanation" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="settings/profile" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="settings/activate_trial" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="settings/privacy" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="(tabs)" options={{
+                    headerShown: false,
+                    presentation: 'card',
+                    gestureEnabled: false,
+                    animation: 'fade',
+                  }} />
+                </Stack>
+                {/* Global OmniChat Overlay - appears on ALL screens */}
+                <GlobalChatOverlay />
+              </GestureHandlerRootView>
+            </ThemeProvider>
+          </SyncCTAProvider>
         </AuthProvider>
       </ChatProvider>
     </QueryClientProvider>

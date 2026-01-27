@@ -4,21 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AI-powered executive assistant inbox management system. FastAPI backend + React frontend + React Native (Expo) mobile app. Connects to Gmail, auto-summarizes threads, extracts tasks/dates/people/decisions, classifies emails, and drafts replies using AI.
+AI-powered executive assistant inbox management system. FastAPI backend + React Native (Expo) mobile app. Connects to Gmail, auto-summarizes threads, extracts tasks/dates/people/decisions, classifies emails, and drafts replies using AI.
 
 ## Development Commands
 
 ### Backend (from `backend/` directory)
 ```bash
 uvicorn src.main:app --reload          # Run API server
-python -m src.app.jobs.worker          # Run background worker
+python -m src.app.jobs.worker          # Run background worker (uses BatchWorker for LLM efficiency)
 curl http://localhost:8000/queue/stats # Monitor queue
-```
-
-### Frontend (from `frontend/` directory)
-```bash
-npm run dev      # Development server (Vite)
-npm run build    # Production build
 ```
 
 ### Mobile (from `mobile/` directory)
@@ -51,17 +45,18 @@ backend/src/
 │   └── llm/           # LLM provider abstraction (Gemini, HuggingFace/Outlines)
 ├── app/               # Application-specific code
 │   ├── routes/v1/     # API endpoints
-│   ├── handlers/      # Event handlers
+│   ├── handlers/      # Event handlers (decorated with @register_handler)
 │   ├── services/      # Business logic (thread_state, digest, calendar, polar)
 │   ├── processors/    # AI processing (ai.py, message.py, document.py)
 │   ├── agents/        # Autonomous modules (scheduling, follow-up, communication)
-│   ├── chat/          # Chat/conversation system
+│   ├── chat/          # Chat/conversation system with tool execution
 │   ├── intelligence/  # Context building & pattern tracking
 │   ├── integrations/  # Gmail integration
 │   ├── data/          # Models & schemas
 │   ├── infra/         # Config, database, logging
-│   └── security/      # Encryption, auth, feature gating
-backend/prompts/       # AI prompts as markdown files (cached loading)
+│   ├── security/      # Encryption, auth, feature gating
+│   └── jobs/          # Worker handlers (worker.py defines TASK_HANDLERS)
+backend/prompts/       # AI prompts as markdown files (template vars: {sender}, {subject}, {body})
 
 mobile/
 ├── app/               # Expo Router screens (file-based routing)
@@ -76,19 +71,24 @@ mobile/
 
 ### Key Backend Patterns
 
-**Event-Driven Processing**: Endpoints emit events via `emit_event()`, handlers run in BackgroundTasks. Register handlers with `@register_handler("event_name")`.
+**Event-Driven Processing**: Endpoints emit events via `emit_event()`, handlers run in BackgroundTasks. Register handlers with `@register_handler("event_name")`. Handlers are defined in `app/handlers/`.
 
-**LLM Orchestration**: `LLMOrchestrator` in `core/llm/` abstracts provider selection. Use `hf_outlines` provider for structured JSON output.
+**LLM Orchestration**: `LLMOrchestrator` in `core/llm/` abstracts provider selection. Returns structured JSON (Dict or List[Dict]). Supports `generate()` for single prompts and `generate_batch()` for multiple.
 
-**Thread State Machine**: `ThreadStateService` tracks thread state incrementally (open_tasks, decisions, participants). Avoids re-analyzing full transcripts on each message.
+**Thread State Machine**: `ThreadStateService` tracks thread state incrementally (open_tasks, decisions, participants). First message calls `init_thread_state()`, subsequent messages call `update_thread_state()`. Avoids re-analyzing full transcripts.
 
-**Batch Processing**: Worker batches messages by user for efficient LLM inference. User data never mixed.
+**Batch Processing**: `BatchWorker` groups tasks by `user_id` for efficient LLM inference. User data never mixed. Standard `Worker` processes tasks individually.
 
 **Context Injection**: `ContextBuilder` injects user preferences from `PrincipalMemory`, `DecisionPattern`, and `ContactContext` into prompts.
 
 **Subscription Gating**: Two levels of access control:
 - `require_active_subscription` - FastAPI dependency for endpoints requiring active trial/pro
-- `require_feature(Feature.X)` - Fine-grained feature gating with 3-day grace period
+- `require_feature(Feature.X)` - Fine-grained feature gating with 3-day grace period (features defined in `Feature` enum)
+
+**RLS Context**: All handlers must set PostgreSQL RLS context with:
+```python
+db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+```
 
 ### Key Mobile Patterns
 
@@ -105,9 +105,15 @@ mobile/
 
 ### Data Flow
 1. `/sync` fetches Gmail messages → saved to DB → `emit_event("message_received")`
-2. Handler enqueues `process_email` task
-3. Worker polls queue → `ThreadStateService.process_message()` → AI extraction
-4. Frontend polls `/messages/new` for updates
+2. Handler enqueues `process_email` task with `user_id` in payload
+3. `BatchWorker` groups tasks by user → `process_messages_batch()` → `ThreadStateService` → AI extraction
+4. Mobile app polls `/messages/new` for updates
+
+### Chat System
+- `ChatOrchestrator` routes messages through LLM with tool execution
+- Two session types: `command` (with tools) and `reflection` (no tools)
+- Tools defined in `ChatToolRegistry`, some require user approval (pending actions)
+- Prompts loaded from `backend/prompts/chat_system.md` and `chat_reflection.md`
 
 ## Environment Variables
 
@@ -129,9 +135,19 @@ Optional:
 SQLAlchemy models in `app/data/models.py`. Migrations in `backend/migrations/` as raw SQL files. Key models:
 - `Message`, `ThreadState`, `Task`, `GmailAccount`
 - `PrincipalMemory`, `DecisionPattern`, `ContactContext` (user preferences)
-- `TaskQueue` (persistent job queue)
-- `SchedulingSuggestion`, `CalendarEvent`, `Digest`, `ChatSession`
+- `TaskQueue` (persistent job queue with row-level locking)
+- `SchedulingSuggestion`, `CalendarEvent`, `Digest`, `ChatSession`, `ChatMessage`, `ChatPendingAction`
 - `UserSettings` - has `@property` methods `is_active` and `days_remaining` for computed subscription status
+
+## Task Queue
+
+Tasks are defined in `backend/src/app/jobs/worker.py` in `TASK_HANDLERS` dict. Key task types:
+- `process_email` - AI processing of email messages (batched by user)
+- `emit_event` - Event chaining after handler completes
+- `trigger_agent` - Triggers autonomous agent orchestrator
+- `generate_digest` - Scheduled digest generation (self-reschedules)
+- `email_backfill` - Initial sync of historical emails
+- `data_cleanup` - Nightly cleanup of expired content (runs at 2 AM UTC)
 
 ## Test Markers
 

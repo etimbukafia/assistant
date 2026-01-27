@@ -17,9 +17,11 @@ export default function WelcomeScreen() {
     const handleGoogleAuth = async () => {
         try {
             setIsLoading(true);
-            await signInWithGoogle();
-            // On success, the auth state change will trigger navigation
-            router.replace('/(tabs)' as any);
+            const success = await signInWithGoogle();
+            // Only navigate if sign-in was successful (not cancelled)
+            if (success) {
+                router.replace('/(tabs)' as any);
+            }
         } catch (error: any) {
             console.error('Google auth error:', error);
             Alert.alert(

@@ -25,6 +25,7 @@ from app.routes.v1 import (
     chat,
     subscription,
     billing,
+    webhooks,
 )
 from app.handlers.webhook_handlers import router as billing_router
 from app.security.rate_limiter import RateLimitMiddleware
@@ -57,6 +58,7 @@ def startup_event():
     init_db()
     schedule_cleanup_job_if_needed()
     schedule_chat_cleanup_job_if_needed()
+    schedule_gmail_watch_renewal_if_needed()
     preload_email_classifier()
 
 
@@ -151,6 +153,7 @@ app.include_router(chat.router)
 app.include_router(subscription.router)
 app.include_router(billing.router)
 app.include_router(billing_router)  # Polar webhooks
+app.include_router(webhooks.router)  # Gmail Pub/Sub
 
 
 @app.get("/")

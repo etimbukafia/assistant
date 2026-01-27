@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator } from 'react-native';
+import React, { useState, useMemo, useCallback } from 'react';
+import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
@@ -13,6 +13,7 @@ import { parseISO, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import { useMessages } from '../../src/hooks/useMessages';
+import { useTaskMutations } from '../../src/hooks/useTasks';
 
 type FilterType = 'all' | 'needs_reply' | 'today';
 
@@ -24,11 +25,41 @@ export default function DashboardScreen() {
 
   // Fetch messages - disabled in sandbox mode
   const { data: messagesResponse, isLoading, isRefetching, refetch } = useMessages({ enabled: !isSandbox });
+  const { approve, dismiss } = useTaskMutations();
 
-  // In sandbox mode, use demo data; otherwise use API response
+  const handleApproveTask = useCallback((taskId: number) => {
+    if (isSandbox) {
+      Alert.alert('Demo Mode', 'Task approval is disabled in demo mode. Connect your email to enable.');
+      return;
+    }
+    approve(taskId);
+  }, [isSandbox, approve]);
+
+  const handleDismissTask = useCallback((taskId: number) => {
+    if (isSandbox) {
+      Alert.alert('Demo Mode', 'Task actions are disabled in demo mode. Connect your email to enable.');
+      return;
+    }
+    dismiss(taskId);
+  }, [isSandbox, dismiss]);
+
+  // In sandbox mode, use demo data with dynamic dates; otherwise use API response
   const messages = useMemo(() => {
     if (isSandbox) {
-      return demoData.messages as unknown as Message[];
+      const now = new Date();
+      return (demoData.messages as unknown as Message[]).map((msg, index) => {
+        // Make dates relative to today for realistic demo
+        const date = new Date(now);
+        if (index < 2) {
+          // First two messages: today, spaced apart
+          date.setHours(now.getHours() - 2 - index * 2, 0, 0, 0);
+        } else {
+          // Remaining messages: yesterday
+          date.setDate(date.getDate() - 1);
+          date.setHours(14, 0, 0, 0);
+        }
+        return { ...msg, received_at: date.toISOString() };
+      });
     }
     return messagesResponse?.messages || [];
   }, [isSandbox, messagesResponse]);
@@ -183,20 +214,29 @@ export default function DashboardScreen() {
           <DonnaCard
             title={item.subject}
             sender={item.sender.split('<')[0].trim()}
-            snippet={item.body}
             time={formatDistanceToNow(parseISO(item.received_at), { addSuffix: true })}
             insight={item.summary}
             type={item.needs_reply ? 'urgent' : item.scheduling_intent ? 'insight' : 'fyi'}
-            suggestedAction={item.needs_reply ? 'Draft Reply' : item.scheduling_intent ? 'Schedule' : undefined}
+            tasks={item.tasks}
+            extractedTasks={item.extracted_tasks?.map((t: any) => typeof t === 'string' ? t : t.title)}
+            onApproveTask={handleApproveTask}
+            onDismissTask={handleDismissTask}
             onPress={() => router.push(`/inbox/${item.id}` as any)}
-            onActionPress={() => router.push(`/inbox/${item.id}` as any)}
           />
         )}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Ionicons name="mail-open-outline" size={48} color={Colors.textMuted} />
-            <DonnaText variant="h2" style={styles.emptyTitle}>Inbox Zero!</DonnaText>
-            <DonnaText style={styles.emptyText}>Nothing needs your attention right now.</DonnaText>
+            {activeFilter !== 'today' && (
+              <Ionicons name="mail-open-outline" size={48} color={Colors.textMuted} />
+            )}
+            <DonnaText variant="h2" style={styles.emptyTitle}>
+              {activeFilter === 'today' ? 'Nothing new today' : 'Inbox Zero!'}
+            </DonnaText>
+            <DonnaText style={styles.emptyText}>
+              {activeFilter === 'today'
+                ? 'Check back later for new updates'
+                : 'Nothing needs your attention right now.'}
+            </DonnaText>
           </View>
         }
       />

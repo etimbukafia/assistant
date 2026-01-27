@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, ScrollView, TouchableOpacity, Switch, TextInput, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, ScrollView, TouchableOpacity, Switch, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,7 +10,7 @@ import { useSettings } from '@/src/hooks/useSettings';
 
 export default function GeneralSettingsScreen() {
     const router = useRouter();
-    const { settings, isLoading, updateSetting, isUpdating } = useSettings();
+    const { settings, isLoading, updateSetting, isUpdating, isSandbox } = useSettings();
 
     const [instructions, setInstructions] = useState('');
 
@@ -21,6 +21,7 @@ export default function GeneralSettingsScreen() {
     }, [settings?.task_detection_instructions]);
 
     const handleSaveInstructions = () => {
+        if (isSandbox) return; // Don't save in sandbox mode
         if (instructions !== settings?.task_detection_instructions) {
             updateSetting('task_detection_instructions', instructions || null);
         }
@@ -68,10 +69,16 @@ export default function GeneralSettingsScreen() {
                             </View>
                             <Switch
                                 value={settings?.auto_approve_tasks ?? false}
-                                onValueChange={(value) => updateSetting('auto_approve_tasks', value)}
+                                onValueChange={(value) => {
+                                    if (isSandbox) {
+                                        Alert.alert('Demo Mode', 'Settings changes are disabled in demo mode. Connect your email to enable.');
+                                        return;
+                                    }
+                                    updateSetting('auto_approve_tasks', value);
+                                }}
                                 trackColor={{ true: Colors.success }}
                                 thumbColor="#FFF"
-                                disabled={isUpdating}
+                                disabled={isUpdating || isSandbox}
                             />
                         </View>
 
@@ -84,10 +91,16 @@ export default function GeneralSettingsScreen() {
                             </View>
                             <Switch
                                 value={settings?.enable_quick_reply_from_task ?? false}
-                                onValueChange={(value) => updateSetting('enable_quick_reply_from_task', value)}
+                                onValueChange={(value) => {
+                                    if (isSandbox) {
+                                        Alert.alert('Demo Mode', 'Settings changes are disabled in demo mode. Connect your email to enable.');
+                                        return;
+                                    }
+                                    updateSetting('enable_quick_reply_from_task', value);
+                                }}
                                 trackColor={{ true: Colors.success }}
                                 thumbColor="#FFF"
-                                disabled={isUpdating}
+                                disabled={isUpdating || isSandbox}
                             />
                         </View>
                     </View>
@@ -110,6 +123,7 @@ export default function GeneralSettingsScreen() {
                             onChangeText={setInstructions}
                             onBlur={handleSaveInstructions}
                             textAlignVertical="top"
+                            editable={!isSandbox}
                         />
                         {isUpdating && (
                             <DonnaText style={styles.savingText}>Saving...</DonnaText>

@@ -21,6 +21,27 @@ import {
     DecisionPattern,
     DecisionPatternListResponse,
 } from '@/src/services/memory';
+import { useAuth } from '@/src/context/AuthContext';
+
+// Demo preferences for sandbox mode
+const SANDBOX_PREFERENCES: PrincipalMemory[] = [
+    {
+        id: 1,
+        key: 'communication_style',
+        value: 'I prefer concise, direct communication. Avoid unnecessary pleasantries.',
+        context_type: 'communication',
+        source: 'manual',
+        created_at: '2024-01-15T10:00:00Z',
+    },
+    {
+        id: 2,
+        key: 'scheduling_preference',
+        value: 'Never schedule meetings before 10am or after 4pm.',
+        context_type: 'scheduling',
+        source: 'approved_suggestion',
+        created_at: '2024-01-10T14:30:00Z',
+    },
+];
 
 export const preferencesKeys = {
     all: ['preferences'] as const,
@@ -162,15 +183,16 @@ export function usePatternMutations() {
  * Combined hook for memory/preferences screen
  */
 export function usePreferencesWithMutations(options?: { enabled?: boolean }) {
-    const query = usePreferences(options);
+    const { isSandbox } = useAuth();
+    const query = usePreferences({ ...options, enabled: options?.enabled !== false && !isSandbox });
     const mutations = usePreferenceMutations();
 
     return {
-        // Data
-        preferences: query.data?.preferences || [],
-        total: query.data?.total || 0,
-        isLoading: query.isLoading,
-        error: query.error,
+        // Data - use sandbox data when in sandbox mode
+        preferences: isSandbox ? SANDBOX_PREFERENCES : (query.data?.preferences || []),
+        total: isSandbox ? SANDBOX_PREFERENCES.length : (query.data?.total || 0),
+        isLoading: isSandbox ? false : query.isLoading,
+        error: isSandbox ? null : query.error,
 
         // Mutations
         create: mutations.create,
@@ -180,6 +202,9 @@ export function usePreferencesWithMutations(options?: { enabled?: boolean }) {
         delete: mutations.delete,
         isDeleting: mutations.isDeleting,
         isAnyPending: mutations.isAnyPending,
+
+        // Sandbox indicator
+        isSandbox,
 
         // Refetch
         refetch: query.refetch,

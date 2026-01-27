@@ -31,7 +31,7 @@ interface AuthContextType {
     gmailConnected: boolean;
     calendarConnected: boolean;
     // Actions
-    signInWithGoogle: () => Promise<void>;
+    signInWithGoogle: () => Promise<boolean>;
     signOut: () => Promise<void>;
     refreshProfile: () => Promise<void>;
 }
@@ -127,7 +127,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      * This uses the PKCE flow via expo-auth-session for security.
      * The redirect URI must be configured in Supabase dashboard.
      */
-    const signInWithGoogle = async () => {
+    const signInWithGoogle = async (): Promise<boolean> => {
         try {
             // Create redirect URI for OAuth callback
             const redirectUri = makeRedirectUri({
@@ -157,6 +157,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     redirectUri
                 );
 
+                // User cancelled the auth flow
+                if (result.type === 'cancel' || result.type === 'dismiss') {
+                    return false;
+                }
+
                 if (result.type === 'success' && result.url) {
                     // Extract tokens from URL and set session
                     const url = new URL(result.url);
@@ -172,9 +177,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         });
 
                         if (sessionError) throw sessionError;
+                        return true;
                     }
                 }
             }
+            return false;
         } catch (error) {
             console.error('Google sign-in error:', error);
             throw error;
