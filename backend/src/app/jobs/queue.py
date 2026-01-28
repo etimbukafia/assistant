@@ -323,22 +323,24 @@ def enqueue_task(
     scheduled_for: Optional[datetime] = None,
     max_attempts: int = 3,
     db: Optional[Session] = None,
-    queue_service=None  # Pass QueueService instance
 ):
     """
-    Convenience function - delegates to QueueService
+    Convenience function - delegates to global QueueService instance.
 
-    For new code, use QueueService directly.
+    Extracts user_id from payload if present for RLS tracking.
     """
-    if queue_service is None:
-        raise ValueError("Must provide queue_service parameter")
+    service = get_queue_service()
 
-    return queue_service.enqueue(
+    # Extract user_id from payload for task-level tracking
+    user_id = payload.get("user_id")
+
+    return service.enqueue(
         task_type=task_type,
         payload=payload,
         correlation_id=correlation_id,
         scheduled_for=scheduled_for,
         max_attempts=max_attempts,
+        user_id=user_id,
         db=db
     )
 

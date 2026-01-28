@@ -402,7 +402,8 @@ class ChatService:
             return {"success": False, "error": "Email not found"}
         
         # Use CommunicationModule to generate the draft
-        comm_module = CommunicationModule(db=self.db)
+        from core.llm.config import LLMConfig
+        comm_module = CommunicationModule(llm_config=LLMConfig.for_chat())
         
         result = comm_module.generate_reply(
             message_id=email_id,

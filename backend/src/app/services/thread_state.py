@@ -347,6 +347,7 @@ class ThreadStateService:
         enqueue_task(
             task_type="emit_event",
             payload={
+                "user_id": task.user_id,
                 "event_name": "task_created",
                 "event_payload": {
                     "task_id": task.id,

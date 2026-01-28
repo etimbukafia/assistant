@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 # Grace period after subscription expires (days)
 GRACE_PERIOD_DAYS = 3
 
+# Clock skew tolerance for time comparisons (handles drift between app server and DB)
+# Supabase/AWS has sub-second drift with NTP; 30s is conservative buffer
+CLOCK_SKEW_TOLERANCE = timedelta(seconds=30)
+
 
 class Feature(str, Enum):
     """All gated features in the application."""
@@ -44,20 +48,21 @@ ALL_FEATURES: Set[Feature] = set(Feature)
 
 def _is_in_grace_period(settings) -> bool:
     """Check if user is within the 3-day grace period after expiration."""
-    now = datetime.now(timezone.utc)
-    
+    # Add clock skew tolerance to prevent edge cases at boundaries
+    now = datetime.now(timezone.utc) - CLOCK_SKEW_TOLERANCE
+
     # Check subscription expiration
     if settings.subscription_expires_at:
         grace_end = settings.subscription_expires_at + timedelta(days=GRACE_PERIOD_DAYS)
         if now <= grace_end:
             return True
-    
+
     # Check trial expiration
     if settings.trial_ends_at:
         grace_end = settings.trial_ends_at + timedelta(days=GRACE_PERIOD_DAYS)
         if now <= grace_end:
             return True
-    
+
     return False
 
 

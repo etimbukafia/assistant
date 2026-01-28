@@ -26,6 +26,7 @@ from app.routes.v1 import (
     subscription,
     billing,
     webhooks,
+    notifications,
 )
 from app.handlers.webhook_handlers import router as billing_router
 from app.security.rate_limiter import RateLimitMiddleware
@@ -138,6 +139,36 @@ def schedule_chat_cleanup_job_if_needed():
     finally:
         db.close()
 
+
+def schedule_gmail_watch_renewal_if_needed():
+    """
+    Ensure the daily Gmail watch renewal job is scheduled.
+
+    This job:
+    - Renews Pub/Sub watches for all connected Gmail accounts
+    - Gmail watches expire after 7 days; daily renewal keeps them active
+    """
+
+    db = SessionLocal()
+    try:
+        existing = db.query(TaskQueue).filter(
+            TaskQueue.task_type == "renew_gmail_watches",
+            TaskQueue.status == "pending"
+        ).first()
+
+        if not existing:
+            from datetime import datetime, timedelta
+            next_run = datetime.utcnow() + timedelta(days=1)
+            queue_service.enqueue(
+                task_type="renew_gmail_watches",
+                payload={},
+                scheduled_for=next_run,
+                db=db
+            )
+            print(f"Scheduled Gmail watch renewal for {next_run}")
+    finally:
+        db.close()
+
 # Include Routers
 app.include_router(auth.router)
 app.include_router(messages.router)
@@ -154,6 +185,7 @@ app.include_router(subscription.router)
 app.include_router(billing.router)
 app.include_router(billing_router)  # Polar webhooks
 app.include_router(webhooks.router)  # Gmail Pub/Sub
+app.include_router(notifications.router)
 
 
 @app.get("/")

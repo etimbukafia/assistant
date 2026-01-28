@@ -78,6 +78,7 @@ class UserSettingsResponse(BaseModel):
     auto_approve_tasks: bool
     task_detection_instructions: Optional[str] = None
     reminder_preferences: Dict[str, Any]
+    notification_preferences: Dict[str, Any] = {}
     enable_quick_reply_from_task: bool
     # Subscription fields
     subscription_tier: str = "trial"
@@ -99,6 +100,7 @@ class UserSettingsUpdateRequest(BaseModel):
     auto_approve_tasks: Optional[bool] = None
     task_detection_instructions: Optional[str] = None
     reminder_preferences: Optional[Dict[str, Any]] = None
+    notification_preferences: Optional[Dict[str, Any]] = None
     enable_quick_reply_from_task: Optional[bool] = None
 
 
@@ -472,3 +474,49 @@ class DigestsListResponse(BaseModel):
     """List of digests"""
     digests: List[DigestResponse]
     total: int
+
+
+# ========================================
+# Notification & Device Token Schemas
+# ========================================
+
+class DeviceTokenRegisterRequest(BaseModel):
+    """Register an Expo push token for the authenticated user"""
+    expo_push_token: str
+    device_name: Optional[str] = None
+    platform: Optional[str] = None
+
+class DeviceTokenResponse(BaseModel):
+    id: int
+    expo_push_token: str
+    device_name: Optional[str] = None
+    platform: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class NotificationResponse(BaseModel):
+    id: int
+    title: str
+    body: Optional[str] = None
+    category: str
+    priority: str
+    target_type: Optional[str] = None
+    target_id: Optional[str] = None
+    is_read: bool
+    read_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class NotificationListResponse(BaseModel):
+    notifications: List[NotificationResponse]
+    total: int
+    unread_count: int
+
+class UnreadCountResponse(BaseModel):
+    unread_count: int
+
+class MarkReadRequest(BaseModel):
+    notification_ids: List[int]

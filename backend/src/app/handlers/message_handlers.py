@@ -43,8 +43,7 @@ async def enqueue_message_for_processing(event: Dict[str, Any], payload: Dict[st
         # Require user_id from payload for RLS context
         user_id = payload.get("user_id")
         if not user_id:
-             logger.error("No user_id in payload for message processing - cannot proceed safely", extra={"correlation_id": event["correlation_id"]})
-             return
+            raise ValueError(f"RLS context missing: no user_id in payload for message {message_id}")
 
         # Set RLS context
         db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
@@ -176,8 +175,7 @@ async def process_attachments(event: Dict[str, Any], payload: Dict[str, Any]):
         
     # Require user_id for RLS context
     if not user_id:
-        logger.warning(f"process_attachments skipped for message {message_id}: missing user_id")
-        return
+        raise ValueError(f"RLS context missing: no user_id for attachment processing, message {message_id}")
 
     db = SessionLocal()
     # Set RLS context
@@ -204,12 +202,18 @@ async def process_attachments(event: Dict[str, Any], payload: Dict[str, Any]):
             logger.error("Failed to load Gmail credentials for attachment download")
             return
 
-        # Collect attachment data for processing
+        # Collect attachment data for processing and track skipped
         attachment_data: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, str]] = []
+
         for att in attachments_meta:
+            mime_type = att.get("mime_type", "")
+            filename = att.get("filename", "unknown")
+
             # Skip unsupported types
-            if not document_processor.is_supported(att.get("mime_type", "")):
-                logger.info(f"Skipping unsupported attachment type: {att.get('mime_type')}")
+            if not document_processor.is_supported(mime_type):
+                logger.info(f"Skipping unsupported attachment type: {mime_type}")
+                skipped.append({"filename": filename, "mime_type": mime_type, "reason": "unsupported_type"})
                 continue
 
             # Download attachment bytes
@@ -221,27 +225,35 @@ async def process_attachments(event: Dict[str, Any], payload: Dict[str, Any]):
             if file_bytes:
                 attachment_data.append({
                     "bytes": file_bytes,
-                    "mime_type": att["mime_type"],
-                    "filename": att["filename"]
+                    "mime_type": mime_type,
+                    "filename": filename
                 })
+            else:
+                logger.warning(f"Failed to download attachment: {filename}")
+                skipped.append({"filename": filename, "mime_type": mime_type, "reason": "download_failed"})
 
-        if not attachment_data:
-            logger.info(f"No processable attachments for message {message_id}")
-            return
+        # Process attachments or record skip-only results
+        if attachment_data:
+            insights = document_processor.process_multiple(attachment_data)
+        else:
+            insights = {"processed_count": 0, "error_count": 0}
 
-        # Process all attachments and merge insights
-        insights = document_processor.process_multiple(attachment_data)
+        # Add skipped attachments to insights
+        if skipped:
+            insights["skipped"] = skipped
 
-        # Save insights to message
+        # Always save insights when there are attachments (even if all skipped)
         message.attachment_insights = insights
         db.commit()
 
         logger.info(
-            f"Processed {insights['processed_count']} attachment(s) for message {message_id}",
+            f"Attachment processing complete for message {message_id}: "
+            f"processed={insights.get('processed_count', 0)}, skipped={len(skipped)}",
             extra={
                 "correlation_id": event["correlation_id"],
                 "tasks_found": len(insights.get("tasks", [])),
-                "errors": insights.get("error_count", 0)
+                "errors": insights.get("error_count", 0),
+                "skipped_count": len(skipped)
             }
         )
 

@@ -96,23 +96,37 @@ class CommunicationModule(BaseModule):
                     "error": "Missing required fields: 'to' and 'draft'",
                 }
 
-            # TODO: Implement actual Gmail API integration
-            # For now, just log and return placeholder
+            if not db or not user_id:
+                return {
+                    "sent": False,
+                    "error": "Database session and user_id required to send email",
+                }
 
-            logger.info(
-                f"[PLACEHOLDER] Would send email:\n"
-                f"To: {to}\n"
-                f"Subject: {subject}\n"
-                f"Body: {draft[:100]}...\n"
-                f"Thread: {thread_id}"
+            from app.integrations.gmail import GmailClient
+
+            gmail = GmailClient(db=db, user_id=user_id)
+            if not gmail.load_credentials():
+                return {
+                    "sent": False,
+                    "error": "Gmail not connected. Please connect your Gmail account first.",
+                }
+
+            result = gmail.send_message(
+                to=to,
+                subject=subject or "",
+                body=draft,
+                in_reply_to=in_reply_to,
+                thread_id=thread_id,
             )
+
+            logger.info(f"Email sent to {to}, subject='{subject}', gmail_id={result.get('id')}")
 
             return {
                 "sent": True,
                 "to": to,
                 "subject": subject,
-                "message_id": "placeholder_sent_message_id",
-                "note": "Email sending not yet implemented (placeholder)",
+                "message_id": result.get("id"),
+                "thread_id": result.get("threadId"),
             }
 
         except Exception as e:
@@ -357,22 +371,45 @@ class CommunicationModule(BaseModule):
         if not user_email:
             logger.warning("Cannot send notification email: no user email configured")
             return {"sent": False, "error": "No user email configured"}
-        
-        # TODO: Implement actual email sending via SendGrid/SES/Gmail
-        logger.info(
-            f"[NOTIFICATION EMAIL] Priority: {priority}\n"
-            f"To: {user_email}\n"
-            f"Subject: {subject}\n"
-            f"Body: {body[:200]}..."
-        )
-        
-        return {
-            "sent": True,
-            "to": user_email,
-            "subject": subject,
-            "priority": priority,
-            "note": "Email notification logged (implementation pending)",
-        }
+
+        if not db or not user_id:
+            return {"sent": False, "error": "Database session and user_id required to send notification"}
+
+        from app.integrations.gmail import GmailClient
+
+        gmail = GmailClient(db=db, user_id=user_id)
+        if not gmail.load_credentials():
+            return {
+                "sent": False,
+                "error": "Gmail not connected. Cannot send notification email.",
+            }
+
+        try:
+            result = gmail.send_message(
+                to=user_email,
+                subject=subject,
+                body=body,
+                html=True,
+            )
+
+            logger.info(
+                f"Notification email sent to {user_email}, "
+                f"priority={priority}, gmail_id={result.get('id')}"
+            )
+
+            return {
+                "sent": True,
+                "to": user_email,
+                "subject": subject,
+                "priority": priority,
+                "message_id": result.get("id"),
+            }
+        except Exception as e:
+            logger.error(f"Failed to send notification email: {e}", exc_info=True)
+            return {
+                "sent": False,
+                "error": str(e),
+            }
 
     def notify_user_in_app(
         self,

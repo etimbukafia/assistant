@@ -150,15 +150,67 @@ async def handle_emit_event(task_id: int, task_type: str, payload: Dict[str, Any
 
 async def handle_send_notification(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
     """
-    Handler for 'send_notification' tasks
+    Handler for 'send_notification' tasks.
 
-    Future: Send notifications via WhatsApp, Email, Slack
+    Creates an in-app notification and optionally sends push.
+    Payload should include: user_id, title, body, category, priority, target_type, target_id
     """
-    logger.info(f"Notification task (id={task_id}) - handler not yet implemented")
-    # TODO: Implement notification sending
-    # notification_type = payload.get("type")  # whatsapp, email, slack
-    # message_id = payload.get("message_id")
-    # Send notification...
+    from app.services.notification import NotificationService
+
+    user_id = payload.get("user_id")
+    if not user_id:
+        logger.warning(f"[{correlation_id}] send_notification task missing user_id")
+        return
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
+    try:
+        service = NotificationService(db, user_id)
+        service.create_notification(
+            title=payload.get("title", "Notification"),
+            body=payload.get("body"),
+            category=payload.get("category", "system"),
+            priority=payload.get("priority", "normal"),
+            target_type=payload.get("target_type"),
+            target_id=payload.get("target_id"),
+        )
+        logger.info(f"[{correlation_id}] Notification created for user {user_id}")
+    except Exception as e:
+        logger.error(f"[{correlation_id}] Failed to create notification: {e}", exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
+async def handle_send_push_notification(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'send_push_notification' tasks.
+
+    Sends push notification to user devices via Expo Push API.
+    Raises on failure to trigger retry via task queue.
+    """
+    from app.services.notification import send_push_for_notification
+    from app.infra.database import SessionLocal
+
+    notification_id = payload.get("notification_id")
+    user_id = payload.get("user_id")
+
+    if not notification_id or not user_id:
+        logger.warning(f"[{correlation_id}] send_push_notification missing notification_id or user_id")
+        return
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
+    try:
+        send_push_for_notification(notification_id, user_id, db)
+        logger.info(f"[{correlation_id}] Push notification {notification_id} delivered")
+    except Exception as e:
+        logger.error(f"[{correlation_id}] Push notification {notification_id} failed: {e}", exc_info=True)
+        raise  # Re-raise for retry
+    finally:
+        db.close()
 
 
 async def handle_trigger_agent(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
@@ -371,6 +423,7 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
             enqueue_task(
                 task_type="emit_event",
                 payload={
+                    "user_id": user_id,
                     "event_name": "reminder_due",
                     "event_payload": {
                         "task_id": task_record_id,
@@ -606,13 +659,15 @@ async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[s
         enqueue_task(
             task_type="emit_event",
             payload={
+                "user_id": user_id,
                 "event_name": "briefing_ready",
                 "event_payload": {
                     "event_id": event_id,
                     "title": event.title,
                     "start_time": event.start_time.isoformat(),
                     "message_count": briefing.get("message_count", 0),
-                    "task_count": briefing.get("task_count", 0)
+                    "task_count": briefing.get("task_count", 0),
+                    "user_id": user_id,
                 }
             },
             correlation_id=correlation_id,
@@ -957,6 +1012,7 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
     if not user_id:
         raise ValueError(f"Task {task_id}: user_id is required for RLS context")
 
+    digest = None
     db = SessionLocal()
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
@@ -972,14 +1028,60 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
         
         # Render content for channel
         if channel == "email":
-            # TODO: Render HTML email template and send
-            logger.info(f"Would send email digest to {digest.user_email}")
+            from app.services.digest_templates import render_digest_email
+            from app.integrations.gmail import GmailClient
+            
+            # Render HTML body
+            html_body = render_digest_email(
+                digest_type=digest.digest_type,
+                content=digest.content,
+                user_email=digest.user_email
+            )
+            
+            # Initialize Gmail client
+            gmail_client = GmailClient(db=db, user_id=user_id)
+            if not gmail_client.load_credentials():
+                raise Exception(f"Failed to load Gmail credentials for user {user_id}")
+            
+            # Send email
+            subject = f"Your {digest.digest_type.replace('_', ' ').title()} | Donna"
+            gmail_client.send_message(
+                to=digest.user_email,
+                subject=subject,
+                body=html_body,
+                html=True
+            )
+            
+            logger.info(f"Sent email digest to {digest.user_email}")
+
         elif channel == "telegram":
             # TODO: Send via Telegram bot
             logger.info(f"Would send Telegram digest to {digest.user_email}")
         elif channel == "push":
-            # TODO: Send push notification
-            logger.info(f"Would send push digest to {digest.user_email}")
+            from app.services.notification import NotificationService
+
+            title_map = {
+                "morning_briefing": "Your Morning Briefing is ready",
+                "end_of_day": "Your End of Day Summary is ready",
+                "weekly_review": "Your Weekly Review is ready",
+            }
+            category_map = {
+                "morning_briefing": "briefing_ready",
+                "end_of_day": "digest_ready",
+                "weekly_review": "digest_ready",
+            }
+
+            notif_service = NotificationService(db, user_id)
+            notif_service.create_notification(
+                title=title_map.get(digest.digest_type, "Your digest is ready"),
+                body=f"Tap to view your {digest.digest_type.replace('_', ' ')}.",
+                category=category_map.get(digest.digest_type, "digest_ready"),
+                priority="high",
+                target_type="digest",
+                target_id=str(digest.id),
+            )
+
+            logger.info(f"Push notification sent for {digest.digest_type} to user {user_id}")
         
         # Update delivery status
         digest.delivery_status = "sent"
@@ -990,11 +1092,13 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
         enqueue_task(
             task_type="emit_event",
             payload={
+                "user_id": user_id,
                 "event_name": "digest_delivered",
                 "event_payload": {
                     "digest_id": digest.id,
                     "digest_type": digest.digest_type,
-                    "user_email": digest.user_email
+                    "user_email": digest.user_email,
+                    "user_id": user_id,
                 }
             },
             correlation_id=correlation_id,
@@ -1196,6 +1300,7 @@ TASK_HANDLERS = {
     "process_email": handle_process_email,
     "emit_event": handle_emit_event,
     "send_notification": handle_send_notification,
+    "send_push_notification": handle_send_push_notification,
     "trigger_agent": handle_trigger_agent,
     "evaluate_reminder": handle_evaluate_reminder,
     "data_cleanup": handle_data_cleanup,
@@ -1209,6 +1314,47 @@ TASK_HANDLERS = {
 }
 
 
+def _notify_permanent_failure(task_id: int, task_type: str, payload: dict, error: str, user_id: str):
+    """
+    Callback for permanent task failures - creates a system notification.
+
+    Only called when all retries are exhausted.
+    """
+    if not user_id:
+        return
+
+    from app.infra.database import SessionLocal
+    from app.data.models import Notification
+
+    # Create user-friendly message based on task type
+    task_descriptions = {
+        "process_email": "Email processing",
+        "generate_digest": "Digest generation",
+        "deliver_digest": "Digest delivery",
+        "email_backfill": "Email sync",
+        "process_chat_message": "Chat processing",
+    }
+    task_desc = task_descriptions.get(task_type, f"Background task ({task_type})")
+
+    db = SessionLocal()
+    try:
+        notification = Notification(
+            user_id=user_id,
+            title=f"{task_desc} failed",
+            body="We couldn't complete this operation after multiple attempts. Please try again or contact support if the issue persists.",
+            category="system",
+            priority="normal",
+        )
+        db.add(notification)
+        db.commit()
+        logger.info(f"Created failure notification for user {user_id}, task {task_type}")
+    except Exception as e:
+        logger.error(f"Failed to create failure notification: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_worker(poll_interval: int = 2):
     """
     Run the email assistant worker (single-task processing)
@@ -1219,7 +1365,8 @@ def run_worker(poll_interval: int = 2):
     worker = Worker(
         queue_service=queue_service,
         handlers=TASK_HANDLERS,
-        poll_interval=poll_interval
+        poll_interval=poll_interval,
+        on_permanent_failure=_notify_permanent_failure
     )
 
     worker.run()
@@ -1242,7 +1389,8 @@ def run_email_batch_worker(poll_interval: int = 2, limit_per_user: int = 30, max
         handlers=BATCH_HANDLERS,
         poll_interval=poll_interval,
         limit_per_user=limit_per_user,
-        max_users=max_users
+        max_users=max_users,
+        on_permanent_failure=_notify_permanent_failure
     )
 
     worker.run()

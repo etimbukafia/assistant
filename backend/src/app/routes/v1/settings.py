@@ -18,6 +18,7 @@ def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettin
         auto_approve_tasks=settings.auto_approve_tasks,
         task_detection_instructions=settings.task_detection_instructions,
         reminder_preferences=settings.reminder_preferences,
+        notification_preferences=settings.notification_preferences or {},
         enable_quick_reply_from_task=settings.enable_quick_reply_from_task,
         # Subscription fields (from model properties)
         subscription_tier=settings.subscription_tier,
@@ -58,6 +59,8 @@ def update_existing_settings(
         settings.task_detection_instructions = request.task_detection_instructions
     if request.reminder_preferences is not None:
         settings.reminder_preferences = request.reminder_preferences
+    if request.notification_preferences is not None:
+        settings.notification_preferences = request.notification_preferences
     if request.enable_quick_reply_from_task is not None:
         settings.enable_quick_reply_from_task = request.enable_quick_reply_from_task
 

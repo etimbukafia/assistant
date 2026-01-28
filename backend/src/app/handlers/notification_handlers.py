@@ -96,9 +96,8 @@ async def maybe_send_email_notification(event: Dict[str, Any], payload: Dict[str
         return
         
     if not user_id:
-        logger.warning("reminder_due event missing user_id")
-        return
-    
+        raise ValueError(f"RLS context missing: no user_id for reminder_due event, task {task_id}")
+
     db = SessionLocal()
     # Set RLS context
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
@@ -139,5 +138,134 @@ async def maybe_send_email_notification(event: Dict[str, Any], payload: Dict[str
             
     except Exception as e:
         logger.error(f"Error in email notification handler: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+# =========================================================================
+# In-App + Push Notification Handlers
+# =========================================================================
+
+@register_handler("reminder_due")
+async def create_reminder_notification(event: Dict[str, Any], payload: Dict[str, Any]):
+    """Create in-app + push notification when a task reminder fires."""
+    task_id = payload.get("task_id")
+    user_id = payload.get("user_id")
+    task_title = payload.get("task_title", "Task reminder")
+    message = payload.get("message", "")
+
+    if not task_id or not user_id:
+        return
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+    try:
+        from app.services.notification import NotificationService
+        service = NotificationService(db, user_id)
+        service.create_notification(
+            title=f"Reminder: {task_title}",
+            body=message or f"Task '{task_title}' needs your attention",
+            category="reminder_due",
+            priority="high",
+            target_type="task",
+            target_id=str(task_id),
+        )
+    except Exception as e:
+        logger.error(f"Failed to create reminder notification: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+@register_handler("digest_delivered")
+async def create_digest_notification(event: Dict[str, Any], payload: Dict[str, Any]):
+    """Create in-app + push notification when a digest is delivered."""
+    user_id = payload.get("user_id")
+    digest_type = payload.get("digest_type", "digest")
+    digest_id = payload.get("digest_id")
+
+    if not user_id:
+        raise ValueError(f"RLS context missing: no user_id for digest_ready event, digest {digest_id}")
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+    try:
+        from app.services.notification import NotificationService
+        title_map = {
+            "morning_briefing": "Morning Briefing Ready",
+            "end_of_day": "End of Day Summary",
+            "weekly_review": "Weekly Review Ready",
+        }
+        service = NotificationService(db, user_id)
+        service.create_notification(
+            title=title_map.get(digest_type, "Digest Ready"),
+            body="Your digest is ready to review",
+            category="digest_ready",
+            priority="high",
+            target_type="digest",
+            target_id=str(digest_id) if digest_id else None,
+        )
+    except Exception as e:
+        logger.error(f"Failed to create digest notification: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+@register_handler("briefing_ready")
+async def create_briefing_notification(event: Dict[str, Any], payload: Dict[str, Any]):
+    """Create push notification when a meeting briefing is ready."""
+    user_id = payload.get("user_id")
+    event_id = payload.get("event_id")
+    title = payload.get("title", "Meeting")
+
+    if not user_id:
+        raise ValueError(f"RLS context missing: no user_id for briefing_ready event, event {event_id}")
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+    try:
+        from app.services.notification import NotificationService
+        service = NotificationService(db, user_id)
+        service.create_notification(
+            title=f"Briefing: {title}",
+            body="Your meeting briefing is ready",
+            category="briefing_ready",
+            priority="high",
+            target_type="briefing",
+            target_id=str(event_id) if event_id else None,
+        )
+    except Exception as e:
+        logger.error(f"Failed to create briefing notification: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+@register_handler("task_created")
+async def create_urgent_task_notification(event: Dict[str, Any], payload: Dict[str, Any]):
+    """Create push notification for urgent tasks only."""
+    task_id = payload.get("task_id")
+    user_id = payload.get("user_id")
+
+    if not task_id or not user_id:
+        return
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+    try:
+        task = db.query(Task).filter(Task.id == task_id).first()
+        if not task or task.priority != "urgent":
+            return
+
+        from app.services.notification import NotificationService
+        service = NotificationService(db, user_id)
+        service.create_notification(
+            title=f"Urgent Task: {task.title}",
+            body=task.description or "An urgent task was detected in your email",
+            category="task_urgent",
+            priority="high",
+            target_type="task",
+            target_id=str(task_id),
+        )
+    except Exception as e:
+        logger.error(f"Failed to create urgent task notification: {e}", exc_info=True)
     finally:
         db.close()

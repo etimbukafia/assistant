@@ -20,6 +20,24 @@ from app.jobs.queue import enqueue_task
 logger = logging.getLogger(__name__)
 
 
+def _append_skipped_attachments_note(summary: str, message: Message) -> str:
+    """Append note about unprocessable attachments to summary if any were skipped."""
+    if not message.attachment_insights:
+        return summary
+
+    skipped = message.attachment_insights.get("skipped", [])
+    if not skipped:
+        return summary
+
+    names = [s.get("filename", "unknown") for s in skipped]
+    if len(names) == 1:
+        note = f"\n\nThis email included an attachment ({names[0]}) that I couldn't analyze."
+    else:
+        note = f"\n\nThis email included {len(names)} attachments that I couldn't analyze."
+
+    return summary + note
+
+
 # def get_user_id(db: Session) -> str:
 #     """Get current user ID from Gmail account (or default) - DEPRECATED/UNSAFE"""
 #     # account = db.query(GmailAccount).first()
@@ -59,7 +77,8 @@ def process_message(
     ai_results = thread_state_service.process_message(message, message_data)
 
     # Update message with results
-    message.summary = ai_results["summary"]
+    summary = _append_skipped_attachments_note(ai_results["summary"], message)
+    message.summary = summary
     message.needs_reply = ai_results["needs_reply"]
     message.extracted_tasks = ai_results["extracted_tasks"]
     message.extracted_dates = ai_results.get("extracted_dates", [])
@@ -68,15 +87,18 @@ def process_message(
     message.scheduling_intent = ai_results.get("scheduling_intent", False)
     message.scheduling_intent_type = ai_results.get("scheduling_intent_type")
     message.scheduling_intent_confidence = ai_results.get("scheduling_intent_confidence")
+    message.ai_fallback = ai_results.get("_fallback", False)
     message.processed = True
 
     # Enqueue completion event
     enqueue_task(
         task_type="emit_event",
         payload={
+            "user_id": message.user_id,
             "event_name": "message_processed",
             "event_payload": {
                 "message_id": message.id,
+                "user_id": message.user_id,
                 "needs_reply": ai_results["needs_reply"],
                 "task_count": len(ai_results["extracted_tasks"]),
                 "date_count": len(ai_results["extracted_dates"]),
@@ -174,7 +196,8 @@ def process_messages_batch(
                     continue
                     
                 # Update message with results
-                message.summary = ai_results["summary"]
+                summary = _append_skipped_attachments_note(ai_results["summary"], message)
+                message.summary = summary
                 message.needs_reply = ai_results["needs_reply"]
                 message.extracted_tasks = ai_results["extracted_tasks"]
                 message.extracted_dates = ai_results.get("extracted_dates", [])
@@ -183,6 +206,7 @@ def process_messages_batch(
                 message.scheduling_intent = ai_results.get("scheduling_intent", False)
                 message.scheduling_intent_type = ai_results.get("scheduling_intent_type")
                 message.scheduling_intent_confidence = ai_results.get("scheduling_intent_confidence")
+                message.ai_fallback = ai_results.get("_fallback", False)
                 message.processed = True
                 
                 # Emit scheduling_intent_detected event if intent found

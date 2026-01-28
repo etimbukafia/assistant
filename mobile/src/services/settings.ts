@@ -17,12 +17,22 @@ export interface ReminderPreferences {
     [key: string]: any;
 }
 
+export interface NotificationPreferences {
+    push_enabled: boolean;
+    push_urgent_tasks: boolean;
+    push_deadlines: boolean;
+    push_digests: boolean;
+    push_briefings: boolean;
+    [key: string]: any;
+}
+
 export interface UserSettings {
     id: number;
     user_email: string;
     auto_approve_tasks: boolean;
     task_detection_instructions: string | null;
     reminder_preferences: ReminderPreferences;
+    notification_preferences: NotificationPreferences;
     enable_quick_reply_from_task: boolean;
     // Subscription fields
     subscription_tier: 'trial' | 'pro';
@@ -42,6 +52,7 @@ export interface UpdateSettingsRequest {
     auto_approve_tasks?: boolean;
     task_detection_instructions?: string | null;
     reminder_preferences?: ReminderPreferences;
+    notification_preferences?: NotificationPreferences;
     enable_quick_reply_from_task?: boolean;
 }
 

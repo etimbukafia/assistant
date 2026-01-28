@@ -158,3 +158,6 @@ Tests use pytest markers defined in `backend/pytest.ini`:
 - `@pytest.mark.api` - API endpoint tests
 - `@pytest.mark.slow` - LLM inference, API calls
 - `@pytest.mark.live` - Real API calls (costs money)
+
+## Instruction
+- Avoid Over-engineering: Implementations should have factor for the best balance of simplicity, efficiency, effectiveness, scalability, and performance.

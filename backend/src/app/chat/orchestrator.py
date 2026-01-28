@@ -193,8 +193,9 @@ class ChatOrchestrator:
         Uses LLMOrchestrator with structured JSON prompting for tool calls.
         """
         from core.llm.orchestrator import LLMOrchestrator
-        
-        orchestrator = LLMOrchestrator()
+        from core.llm.config import LLMConfig
+
+        orchestrator = LLMOrchestrator(config=LLMConfig.for_chat())
         
         # Build prompt from messages
         prompt_parts = []

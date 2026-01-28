@@ -12,6 +12,10 @@ from app.infra.database import Base
 from app.infra.config import get_settings
 from core.queue.models import create_task_queue_model
 
+# Clock skew tolerance for time comparisons (handles drift between app server and DB)
+# Supabase/AWS has sub-second drift with NTP; 30s is conservative buffer
+CLOCK_SKEW_TOLERANCE = timedelta(seconds=30)
+
 TaskQueue = create_task_queue_model(Base)
 
 
@@ -42,6 +46,7 @@ class Message(Base):
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
     processed = Column(Boolean, default=False)
+    ai_fallback = Column(Boolean, default=False)  # True if AI processing failed and used fallback
     status = Column(String, default="inbox", index=True)  # inbox | done | archived
 
     # Data Lifecycle fields
@@ -120,6 +125,15 @@ class UserSettings(Base):
         "default_reminder_offset_hours": 24
     })
 
+    # Notification Preferences (JSON)
+    notification_preferences = Column(JSON, default=lambda: {
+        "push_enabled": True,
+        "push_urgent_tasks": True,
+        "push_deadlines": True,
+        "push_digests": True,
+        "push_briefings": True,
+    })
+
     # Quick Reply Feature
     enable_quick_reply_from_task = Column(Boolean, default=False)
 
@@ -178,10 +192,16 @@ class UserSettings(Base):
         now = datetime.now(timezone.utc)
 
         if self.subscription_tier == "pro":
-            return self.subscription_status in ["active", "trialing"]
+            if self.subscription_status not in ["active", "trialing"]:
+                return False
+            # Also verify subscription hasn't expired (handles webhook delays)
+            if self.subscription_expires_at:
+                return self.subscription_expires_at > (now - CLOCK_SKEW_TOLERANCE)
+            # No expiry date set - trust status (edge case during initial setup)
+            return True
 
-        # Trial user
-        if self.trial_ends_at and self.trial_ends_at > now:
+        # Trial user - add clock skew tolerance to prevent edge cases
+        if self.trial_ends_at and self.trial_ends_at > (now - CLOCK_SKEW_TOLERANCE):
             return True
 
         return False
@@ -674,3 +694,47 @@ class ChatPendingAction(Base):
     # Relationships
     session = relationship("ChatSession", back_populates="pending_actions")
     message = relationship("ChatMessage", back_populates="pending_actions")
+
+
+class DeviceToken(Base):
+    """Expo push notification device tokens"""
+    __tablename__ = "device_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    expo_push_token = Column(String, nullable=False, unique=True)
+    device_name = Column(String, nullable=True)
+    platform = Column(String, nullable=True)  # "ios" | "android"
+    is_active = Column(Boolean, default=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class Notification(Base):
+    """In-app notification feed entries with push delivery tracking"""
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+
+    # Content
+    title = Column(String, nullable=False)
+    body = Column(Text, nullable=True)
+    category = Column(String, nullable=False, index=True)
+    # Categories: task_urgent | task_deadline | digest_ready | briefing_ready | reminder_due | system
+    priority = Column(String, default="normal")  # low | normal | high
+
+    # Deep link target
+    target_type = Column(String, nullable=True)  # task | message | digest | briefing | settings
+    target_id = Column(String, nullable=True)
+
+    # Read state
+    is_read = Column(Boolean, default=False, index=True)
+    read_at = Column(DateTime, nullable=True)
+
+    # Push delivery tracking
+    push_sent = Column(Boolean, default=False)
+    push_sent_at = Column(DateTime, nullable=True)
+    push_ticket_id = Column(String, nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

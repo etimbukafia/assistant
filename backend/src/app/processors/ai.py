@@ -23,7 +23,7 @@ class AIProcessor:
     ):
         self.prompts_dir = Path(prompts_dir)
         self._prompts_cache = {}
-        self._orchestrator = LLMOrchestrator(config=llm_config)
+        self._orchestrator = LLMOrchestrator(config=llm_config or LLMConfig.for_email())
 
     def _has_placeholders(self, text: str) -> bool:
         """Check if text contains template placeholders."""
@@ -143,8 +143,9 @@ class AIProcessor:
             return self._empty_process_result()
 
     def _empty_process_result(self) -> Dict[str, Any]:
-        """Return empty result structure for process_message"""
+        """Return fallback result structure when process_message fails"""
         return {
+            '_fallback': True,
             'summary': '',
             'needs_reply': None,
             'extracted_tasks': [],
@@ -342,13 +343,14 @@ class AIProcessor:
     def _fallback_init_thread_state(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Fallback when thread state initialization fails."""
         return {
+            "_fallback": True,
             "summary": message_data.get('subject', 'New conversation'),
             "tasks": [],
             "decisions": [],
             "last_action": "New message received",
             "last_action_by": message_data.get('sender', ''),
-            "needs_reply": True,
-            "needs_reply_reason": "Unable to analyze - defaulting to needs reply",
+            "needs_reply": None,  # Unknown - don't assume either way
+            "needs_reply_reason": "Unable to analyze",
             "scheduling_intent": False,
             "scheduling_intent_type": "none",
             "scheduling_intent_confidence": 0.0
@@ -486,14 +488,15 @@ class AIProcessor:
     def _fallback_update_thread_state(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Fallback when thread state update fails."""
         return {
+            "_fallback": True,
             "summary_update": None,
             "task_updates": [],
             "new_tasks": [],
             "new_decisions": [],
             "last_action": "New message received",
             "last_action_by": message_data.get('sender', ''),
-            "needs_reply": True,
-            "needs_reply_reason": "Unable to analyze - defaulting to needs reply",
+            "needs_reply": None,  # Unknown - don't assume either way
+            "needs_reply_reason": "Unable to analyze",
             "scheduling_intent": False,
             "scheduling_intent_type": "none",
             "scheduling_intent_confidence": 0.0

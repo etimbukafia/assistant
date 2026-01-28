@@ -43,7 +43,7 @@ class LLMConfig:
         import os
         from dotenv import load_dotenv
 
-        load_dotenv()   
+        load_dotenv()
 
         return cls(
             provider=os.getenv("LLM_PROVIDER", "huggingface"),
@@ -52,3 +52,35 @@ class LLMConfig:
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
             cache_dir=os.getenv("HF_HOME"),
         )
+
+    @classmethod
+    def for_email(cls) -> "LLMConfig":
+        """Config for email processing (summarization, extraction, classification)."""
+        import os
+        config = cls.from_env()
+        provider = os.getenv("LLM_EMAIL_PROVIDER")
+        model = os.getenv("LLM_EMAIL_MODEL")
+        if provider:
+            config.provider = provider
+        if model:
+            if config.provider == "gemini":
+                config.gemini_model = model
+            else:
+                config.hf_model_id = model
+        return config
+
+    @classmethod
+    def for_chat(cls) -> "LLMConfig":
+        """Config for chat conversations and reply drafting."""
+        import os
+        config = cls.from_env()
+        provider = os.getenv("LLM_CHAT_PROVIDER")
+        model = os.getenv("LLM_CHAT_MODEL")
+        if provider:
+            config.provider = provider
+        if model:
+            if config.provider == "gemini":
+                config.gemini_model = model
+            else:
+                config.hf_model_id = model
+        return config

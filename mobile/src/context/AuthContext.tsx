@@ -26,6 +26,7 @@ interface AuthContextType {
     isActive: boolean;         // True if trial/pro is currently valid (allow sync)
     subscriptionTier: string;  // "trial" | "pro"
     daysRemaining: number;     // Days left in trial/subscription
+    settingsError: boolean;    // True if failed to fetch settings (connection issue)
     // Integration state
     initialSyncCompleted: boolean;
     gmailConnected: boolean;
@@ -47,6 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [isActive, setIsActive] = useState(false);  // True = trial/pro currently valid
     const [subscriptionTier, setSubscriptionTier] = useState('trial');
     const [daysRemaining, setDaysRemaining] = useState(0);
+    const [settingsError, setSettingsError] = useState(false); // True = failed to fetch settings
     // Integration state
     const [initialSyncCompleted, setInitialSyncCompleted] = useState(false);
     const [gmailConnected, setGmailConnected] = useState(false);
@@ -60,6 +62,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const { api } = require('../services/api');
             const response = await api.get('/settings');
             const settings = response.data;
+
+            // Clear error state on success
+            setSettingsError(false);
 
             // Subscription state
             // Sandbox = never started trial (show demo data)
@@ -75,13 +80,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setCalendarConnected(!!settings.calendar_connected);
         } catch (error) {
             console.error('Failed to fetch settings:', error);
-            // Safe defaults on error
-            setIsSandbox(true);
-            setIsActive(false);
-            setSubscriptionTier('trial');
-            setDaysRemaining(0);
-            setGmailConnected(false);
-            setCalendarConnected(false);
+            // Mark error so UI can show connection issue instead of demo data
+            setSettingsError(true);
+            // Keep previous values if we had them, otherwise safe defaults
+            // Don't reset to sandbox - user might be a paying customer with connection issues
         }
     };
 
@@ -115,6 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setIsActive(false);
             setSubscriptionTier('trial');
             setDaysRemaining(0);
+            setSettingsError(false);
             setInitialSyncCompleted(false);
             setGmailConnected(false);
             setCalendarConnected(false);
@@ -215,6 +218,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 isActive,
                 subscriptionTier,
                 daysRemaining,
+                settingsError,
                 // Integration state
                 initialSyncCompleted,
                 gmailConnected,

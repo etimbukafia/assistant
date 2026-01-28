@@ -22,28 +22,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def validate_webhook_signature(payload: bytes, headers: Dict[str, str]) -> Dict[str, Any]:
+def validate_webhook_signature(payload: bytes, headers: Dict[str, str]) -> Dict[str, Any] | None:
     """
     Validate webhook signature and parse event.
-    
+
     Args:
         payload: Raw request body
         headers: Request headers
-        
+
     Returns:
-        Parsed webhook event
-        
+        Parsed webhook event, or None if secret not configured (webhook should be ignored)
+
     Raises:
         HTTPException if validation fails
     """
     settings = get_settings()
-    
+
     if not settings.POLAR_WEBHOOK_SECRET:
-        logger.error("POLAR_WEBHOOK_SECRET not configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Webhook secret not configured"
+        # Return None to indicate webhook should be ignored (not processed)
+        # Return 200 to Polar to prevent infinite retry storm
+        logger.error(
+            "POLAR_WEBHOOK_SECRET not configured - webhook ignored. "
+            "Configure the secret to process subscription events."
         )
+        return None
     
     try:
         from polar_sdk.webhooks import validate_event
@@ -93,7 +95,7 @@ def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
     
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
-        logger.warning(f"No user found for Polar customer {customer_id}")
+        logger.error(f"REVENUE CRITICAL: No user found for Polar customer {customer_id} - payment received but subscription not activated")
         return
     
     # Update subscription fields
@@ -116,19 +118,20 @@ def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
 def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
     """
     Handle subscription.active event.
-    
+
     Confirms subscription is active (e.g., after renewal).
     """
     subscription = event_data.get("data", {})
     customer_id = subscription.get("customer_id")
-    
+
     if not customer_id:
         return
-    
+
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
+        logger.warning(f"Subscription active event for unknown customer {customer_id}")
         return
-    
+
     user.subscription_status = "active"
     
     # Update expiry date
@@ -146,17 +149,18 @@ def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
 def handle_subscription_updated(event_data: Dict[str, Any], db) -> None:
     """
     Handle subscription.updated event.
-    
+
     Syncs period dates and status.
     """
     subscription = event_data.get("data", {})
     customer_id = subscription.get("customer_id")
-    
+
     if not customer_id:
         return
-    
+
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
+        logger.warning(f"Subscription updated event for unknown customer {customer_id}")
         return
     
     # Update status if present
@@ -178,17 +182,18 @@ def handle_subscription_updated(event_data: Dict[str, Any], db) -> None:
 def handle_subscription_canceled(event_data: Dict[str, Any], db) -> None:
     """
     Handle subscription.canceled event.
-    
+
     Marks subscription as canceled but keeps access until period end.
     """
     subscription = event_data.get("data", {})
     customer_id = subscription.get("customer_id")
-    
+
     if not customer_id:
         return
-    
+
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
+        logger.warning(f"Subscription canceled event for unknown customer {customer_id}")
         return
     
     user.subscription_status = "canceled"
@@ -200,17 +205,18 @@ def handle_subscription_canceled(event_data: Dict[str, Any], db) -> None:
 def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
     """
     Handle subscription.revoked event.
-    
+
     Revokes access immediately - subscription has ended or payment failed.
     """
     subscription = event_data.get("data", {})
     customer_id = subscription.get("customer_id")
-    
+
     if not customer_id:
         return
-    
+
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
+        logger.warning(f"Subscription revoked event for unknown customer {customer_id}")
         return
     
     user.subscription_tier = "trial"
@@ -224,17 +230,18 @@ def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
 def handle_subscription_uncanceled(event_data: Dict[str, Any], db) -> None:
     """
     Handle subscription.uncanceled event.
-    
+
     User reactivated their subscription before the billing period ended.
     """
     subscription = event_data.get("data", {})
     customer_id = subscription.get("customer_id")
-    
+
     if not customer_id:
         return
-    
+
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
+        logger.warning(f"Subscription uncanceled event for unknown customer {customer_id}")
         return
     
     user.subscription_status = "active"
@@ -273,7 +280,11 @@ async def handle_polar_webhook(
     
     # Validate signature (get_settings() called inside)
     event = validate_webhook_signature(payload, headers)
-    
+
+    # If secret not configured, acknowledge receipt but don't process
+    if event is None:
+        return {"received": True, "handled": False, "reason": "webhook_secret_not_configured"}
+
     event_type = event.get("type")
     logger.info(f"Received Polar webhook: {event_type}")
     

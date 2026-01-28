@@ -107,13 +107,12 @@ async def extract_and_create_tasks_DEPRECATED(event: Dict[str, Any], payload: Di
 
     user_id = payload.get("user_id")
     if not user_id:
-       logger.warning("No user_id in payload for task extraction - skipping RLS context")
+        raise ValueError(f"RLS context missing: no user_id for task extraction, message {message_id}")
 
     db = SessionLocal()
     try:
-        # Set RLS context if user_id is available
-        if user_id:
-            db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+        # Set RLS context
+        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
         # Get message from database
         message = db.query(Message).filter(Message.id == message_id).first()
@@ -198,9 +197,11 @@ async def extract_and_create_tasks_DEPRECATED(event: Dict[str, Any], payload: Di
             enqueue_task(
                 task_type="emit_event",
                 payload={
+                    "user_id": user_id,
                     "event_name": "task_created",
                     "event_payload": {
                         "task_id": task_id,
+                        "user_id": user_id,
                         "message_id": message_id,
                         "auto_approved": settings.auto_approve_tasks
                     }
@@ -242,9 +243,8 @@ async def schedule_task_reminders(event: Dict[str, Any], payload: Dict[str, Any]
         return
 
     if not user_id:
-        logger.warning(f"task_created event missing user_id for task {task_id}")
-        return
-    
+        raise ValueError(f"RLS context missing: no user_id for task_created event, task {task_id}")
+
     db = SessionLocal()
     # Set RLS context
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})

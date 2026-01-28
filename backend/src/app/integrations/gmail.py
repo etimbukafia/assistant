@@ -1,8 +1,11 @@
 import base64
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -259,7 +262,7 @@ class GmailClient:
                 # Save updated tokens back to database
                 self._save_to_database(account.email)
             except Exception as e:
-                print(f"Failed to refresh token: {e}")
+                logger.error(f"Gmail token refresh failed for {account.email}: {e}")
                 return False
 
         if self.creds and self.creds.valid:
@@ -510,20 +513,48 @@ class GmailClient:
         except:
             return datetime.now(timezone.utc)
 
-    def send_message(self, to: str, subject: str, body: str):
-        """Send an email"""
-        if not self.service:
-            self.authenticate()
+    def send_message(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        in_reply_to: str = None,
+        thread_id: str = None,
+        html: bool = False,
+    ):
+        """
+        Send an email, optionally as a threaded reply.
 
-        message = MIMEText(body)
+        Args:
+            to: Recipient email address
+            subject: Email subject
+            body: Email body (plain text or HTML)
+            in_reply_to: Message-ID header value for threading
+            thread_id: Gmail thread ID to attach the reply to
+            html: If True, send body as HTML
+        """
+        if not self.service:
+            if not self.load_credentials():
+                raise Exception("Not authenticated. Please authenticate first.")
+
+        subtype = 'html' if html else 'plain'
+        message = MIMEText(body, subtype)
         message['to'] = to
         message['subject'] = subject
 
+        if in_reply_to:
+            message['In-Reply-To'] = in_reply_to
+            message['References'] = in_reply_to
+
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+        send_body = {'raw': raw}
+        if thread_id:
+            send_body['threadId'] = thread_id
 
         sent_message = self.service.users().messages().send(
             userId='me',
-            body={'raw': raw}
+            body=send_body
         ).execute()
 
         return sent_message

@@ -42,9 +42,8 @@ async def handle_scheduling_intent(event: Dict[str, Any], payload: Dict[str, Any
         return
 
     if not user_id:
-        logger.warning(f"scheduling_intent_detected missing user_id for message {message_id}")
-        return
-    
+        raise ValueError(f"RLS context missing: no user_id for scheduling_intent_detected, message {message_id}")
+
     logger.info(
         f"Scheduling intent detected for message {message_id}",
         extra={

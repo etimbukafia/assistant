@@ -42,7 +42,13 @@ def activate_trial(
                 "days_remaining": settings.days_remaining
             }
         else:
-            raise HTTPException(status_code=400, detail="Trial already expired")
+            # Trial expired - guide user to upgrade instead of returning error
+            return {
+                "status": "trial_expired",
+                "message": "Your trial has ended. Upgrade to Pro to continue.",
+                "action": "checkout",
+                "checkout_endpoint": "/billing/checkout"
+            }
 
     # Activate trial
     settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=7)

@@ -6,6 +6,7 @@ import { DonnaText } from '../../src/components/ui/DonnaText';
 import { TrialBadge } from '../../src/components/ui/TrialBadge';
 import { useAuth } from '../../src/context/AuthContext';
 import { useChat } from '../../src/context/ChatContext';
+import { useUnreadCount, usePushNotificationSetup } from '../../src/hooks/useNotifications';
 import { TouchableOpacity, View, Dimensions, StyleSheet } from 'react-native';
 import { AdaptivePillNav } from '../../src/components/navigation/AdaptivePillNav';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -28,6 +29,8 @@ export default function TabLayout() {
   const router = useRouter();
   const { user } = useAuth();
   const { openChat } = useChat(); // Use global context
+  const { unreadCount } = useUnreadCount();
+  usePushNotificationSetup();
 
   // Determine current tab index from pathname
   const getCurrentIndex = useCallback(() => {
@@ -128,7 +131,27 @@ export default function TabLayout() {
               <View style={{ flexDirection: 'row', marginRight: 16, gap: 12, alignItems: 'center' }}>
                 <TrialBadge />
                 <TouchableOpacity><Ionicons name="search" size={22} color={Colors.textPrimary} /></TouchableOpacity>
-                <TouchableOpacity><Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} /></TouchableOpacity>
+                <TouchableOpacity onPress={() => router.push('/notifications' as any)}>
+                  <Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} />
+                  {unreadCount > 0 && (
+                    <View style={{
+                      position: 'absolute',
+                      top: -4,
+                      right: -6,
+                      minWidth: 16,
+                      height: 16,
+                      borderRadius: 8,
+                      backgroundColor: Colors.error,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      paddingHorizontal: 3,
+                    }}>
+                      <DonnaText style={{ color: '#FFF', fontSize: 10, fontWeight: '700' }}>
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </DonnaText>
+                    </View>
+                  )}
+                </TouchableOpacity>
               </View>
             ),
           }}>

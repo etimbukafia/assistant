@@ -38,7 +38,13 @@ class Worker:
         worker.run()
     """
 
-    def __init__(self, queue_service, handlers: Dict[str, TaskHandler], poll_interval: int = 2):
+    def __init__(
+        self,
+        queue_service,
+        handlers: Dict[str, TaskHandler],
+        poll_interval: int = 2,
+        on_permanent_failure: Callable[[int, str, Dict[str, Any], str, str], None] = None
+    ):
         """
         Initialize worker
 
@@ -46,11 +52,14 @@ class Worker:
             queue_service: QueueService instance
             handlers: Dict mapping task_type to handler function
             poll_interval: Seconds between polls (default: 2)
+            on_permanent_failure: Optional callback(task_id, task_type, payload, error, user_id)
+                                  called when a task fails permanently (all retries exhausted)
         """
         self.queue_service = queue_service
         self.handlers = handlers
         self.poll_interval = poll_interval
         self.cleanup_counter = 0
+        self.on_permanent_failure = on_permanent_failure
 
     async def process_task(self, task, db):
         """
@@ -77,9 +86,9 @@ class Worker:
                 handler = self.handlers.get("_default")
 
                 if handler is None:
-                    logger.warning(f"No handler for task type: {task_type} (task_id={task_id})")
-                    # Mark as completed so it doesn't retry forever
-                    self.queue_service.mark_completed(task_id, db=db)
+                    logger.error(f"No handler for task type: {task_type} (task_id={task_id}) - possible typo or missing handler registration")
+                    # Mark as failed (not completed) to surface the issue
+                    self.queue_service.mark_failed(task_id, f"Unknown task type: {task_type}", retry=False, db=db)
                     return
 
             # Call the handler
@@ -90,7 +99,14 @@ class Worker:
 
         except Exception as e:
             logger.error(f"Task processing failed: {task_type} (id={task_id}): {str(e)}", exc_info=True)
-            self.queue_service.mark_failed(task_id, str(e), retry=True, db=db)
+            result = self.queue_service.mark_failed(task_id, str(e), retry=True, db=db)
+
+            # Call callback if task failed permanently (all retries exhausted)
+            if result.get("permanent") and self.on_permanent_failure:
+                try:
+                    self.on_permanent_failure(task_id, task_type, payload, str(e), result.get("user_id"))
+                except Exception as callback_error:
+                    logger.error(f"on_permanent_failure callback failed: {callback_error}")
 
     async def process_batch(self):
         """
@@ -210,17 +226,20 @@ class BatchWorker:
         handlers: Dict[str, BatchHandler],
         poll_interval: int = 2,
         limit_per_user: int = 30,
-        max_users: int = 5
+        max_users: int = 5,
+        on_permanent_failure: Callable[[int, str, Dict[str, Any], str, str], None] = None
     ):
         """
         Initialize batch worker.
-        
+
         Args:
             queue_service: QueueService instance
             handlers: Dict mapping task_type to batch handler function
             poll_interval: Seconds between polls (default: 2)
             limit_per_user: Max tasks per user per batch (default: 30)
             max_users: Max users to process per cycle (default: 5)
+            on_permanent_failure: Optional callback(task_id, task_type, payload, error, user_id)
+                                  called when a task fails permanently (all retries exhausted)
         """
         self.queue_service = queue_service
         self.handlers = handlers
@@ -228,6 +247,7 @@ class BatchWorker:
         self.limit_per_user = limit_per_user
         self.max_users = max_users
         self.cleanup_counter = 0
+        self.on_permanent_failure = on_permanent_failure
     
     async def process_user_batch(self, user_id: str, tasks: list, db):
         """
@@ -277,7 +297,14 @@ class BatchWorker:
             logger.error(f"Batch processing failed for user {user_id}: {str(e)}", exc_info=True)
             # Mark all as failed
             for task in tasks:
-                self.queue_service.mark_failed(task.id, str(e), retry=True, db=db)
+                result = self.queue_service.mark_failed(task.id, str(e), retry=True, db=db)
+
+                # Call callback if task failed permanently
+                if result.get("permanent") and self.on_permanent_failure:
+                    try:
+                        self.on_permanent_failure(task.id, task.task_type, task.payload, str(e), user_id)
+                    except Exception as callback_error:
+                        logger.error(f"on_permanent_failure callback failed: {callback_error}")
     
     async def process_batch_cycle(self):
         """

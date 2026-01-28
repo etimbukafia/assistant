@@ -96,6 +96,13 @@ export default function SettingsHubScreen() {
                             onPress={() => router.push('/settings/contacts' as any)}
                         />
                         <SettingRow
+                            icon="notifications-outline"
+                            iconColor={Colors.accentSecondary}
+                            title="Notifications"
+                            subtitle="Push alerts and categories"
+                            onPress={() => router.push('/settings/notifications' as any)}
+                        />
+                        <SettingRow
                             icon="brain-outline"
                             iconColor="#9B59B6"
                             title="Memory"

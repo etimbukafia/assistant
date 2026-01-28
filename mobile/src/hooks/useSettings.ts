@@ -24,6 +24,13 @@ const SANDBOX_SETTINGS: UserSettings = {
     auto_approve_tasks: false,
     enable_quick_reply_from_task: true,
     task_detection_instructions: '',
+    notification_preferences: {
+        push_enabled: true,
+        push_urgent_tasks: true,
+        push_deadlines: true,
+        push_digests: true,
+        push_briefings: true,
+    },
     digest_preferences: {
         enabled: true,
         morning_briefing: { enabled: true, time: '08:00' },

@@ -478,8 +478,10 @@ def draft_reply(
         from app.agents.modules.scheduling import SchedulingModule
         
         
-        # Instantiate module (lightweight)
-        scheduling_module = SchedulingModule()
+        from core.llm.config import LLMConfig
+
+        # Instantiate module with chat/drafting model
+        scheduling_module = SchedulingModule(llm_config=LLMConfig.for_chat())
         
         # Use message intent type or default
         intent_type = message.scheduling_intent_type or "availability_request"
@@ -533,7 +535,9 @@ def draft_reply(
     else:
         from app.agents.modules.communication import CommunicationModule
         
-        comm_module = CommunicationModule()
+        from core.llm.config import LLMConfig
+
+        comm_module = CommunicationModule(llm_config=LLMConfig.for_chat())
         
         # Use generate_reply
         result = comm_module.generate_reply(

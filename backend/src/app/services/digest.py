@@ -8,8 +8,9 @@ Rule: "Messages trigger signals. Threads own state."
 Digests read from ThreadState, not Message.
 """
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
+from zoneinfo import ZoneInfo
 
 from app.data.models import Task, ThreadState, CalendarEvent, UserSettings
 
@@ -17,19 +18,56 @@ from app.data.models import Task, ThreadState, CalendarEvent, UserSettings
 class DigestService:
     """
     Service for generating digest content.
-    
+
     Follows BriefingService pattern - all methods are database queries.
     No LLM calls, no processing - just state aggregation.
     """
-    
+
     def __init__(self, db: Session, user_email: str):
         self.db = db
         self.user_email = user_email
+        self.user_tz = self._get_user_timezone()
+
+    def _get_user_timezone(self) -> ZoneInfo:
+        """Get user's timezone from settings, default to UTC."""
+        settings = self.db.query(UserSettings).filter(
+            UserSettings.user_email == self.user_email
+        ).first()
+
+        tz_name = settings.default_timezone if settings else "UTC"
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            return ZoneInfo("UTC")
+
+    def _get_day_boundaries(self, offset_days: int = 0) -> Tuple[datetime, datetime]:
+        """
+        Get start and end of a day in user's timezone, converted to UTC.
+
+        Args:
+            offset_days: 0 for today, 1 for tomorrow, -1 for yesterday
+
+        Returns:
+            Tuple of (day_start_utc, day_end_utc)
+        """
+        # Current time in user's timezone
+        now_user_tz = datetime.now(self.user_tz)
+
+        # Start of the target day in user's timezone
+        target_day = now_user_tz.date() + timedelta(days=offset_days)
+        day_start_local = datetime.combine(target_day, datetime.min.time(), tzinfo=self.user_tz)
+        day_end_local = day_start_local + timedelta(days=1)
+
+        # Convert to UTC for database queries
+        day_start_utc = day_start_local.astimezone(timezone.utc)
+        day_end_utc = day_end_local.astimezone(timezone.utc)
+
+        return day_start_utc, day_end_utc
     
     def generate_morning_briefing(self) -> Dict[str, Any]:
         """
         Generate morning briefing digest.
-        
+
         Content:
         - Urgent tasks
         - Tasks due today
@@ -38,9 +76,8 @@ class DigestService:
         - Pending approval tasks
         """
         now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = today_start + timedelta(days=1)
-        
+        today_start, today_end = self._get_day_boundaries(offset_days=0)
+
         sections = {
             "urgent_tasks": self._get_urgent_tasks(),
             "due_today": self._get_tasks_due_today(),
@@ -65,7 +102,7 @@ class DigestService:
     def generate_end_of_day(self) -> Dict[str, Any]:
         """
         Generate end-of-day summary digest.
-        
+
         Content:
         - Tasks completed today
         - Still pending tasks
@@ -73,10 +110,9 @@ class DigestService:
         - Tomorrow's calendar preview
         """
         now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        tomorrow_start = today_start + timedelta(days=1)
-        tomorrow_end = tomorrow_start + timedelta(days=1)
-        
+        today_start, _ = self._get_day_boundaries(offset_days=0)
+        tomorrow_start, tomorrow_end = self._get_day_boundaries(offset_days=1)
+
         sections = {
             "completed_today": self._get_completed_tasks(today_start, now),
             "still_pending": self._get_active_tasks(),
@@ -140,16 +176,15 @@ class DigestService:
         return [self._task_to_dict(t) for t in tasks]
     
     def _get_tasks_due_today(self, limit: int = 20) -> List[Dict]:
-        """Get tasks with deadlines today."""
-        now = datetime.now(timezone.utc)
-        today_end = now.replace(hour=23, minute=59, second=59)
-        
+        """Get tasks with deadlines today (in user's timezone)."""
+        today_start, today_end = self._get_day_boundaries(offset_days=0)
+
         tasks = self.db.query(Task).filter(
-            Task.deadline <= today_end,
-            Task.deadline >= now.replace(hour=0, minute=0, second=0),
+            Task.deadline >= today_start,
+            Task.deadline < today_end,
             Task.status.in_(["approved", "pending_approval"])
         ).order_by(Task.deadline.asc()).limit(limit).all()
-        
+
         return [self._task_to_dict(t) for t in tasks]
     
     def _get_pending_approval_tasks(self, limit: int = 10) -> List[Dict]:
