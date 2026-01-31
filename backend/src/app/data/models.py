@@ -176,6 +176,14 @@ class UserSettings(Base):
     polar_customer_id = Column(String, index=True, nullable=True)
     polar_subscription_id = Column(String, index=True, nullable=True)
 
+    # Trial warning tracking (from migration 022)
+    last_trial_warning_sent = Column(DateTime, nullable=True)  # When last warning was sent
+    last_trial_warning_milestone = Column(String, nullable=True)  # 3_days | 1_day | expired | grace_ending
+
+    # Personalization & Onboarding (from migration 023)
+    assistant_name = Column(String, default="Donna")  # User's chosen name for AI assistant
+    onboarding_completed = Column(Boolean, default=False)  # True after first-time setup
+
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -184,7 +192,12 @@ class UserSettings(Base):
         super().__init__(**kwargs)
         # Trial is NOT auto-started — user must explicitly activate
         # self.trial_ends_at is set by the /subscription/activate-trial endpoint
-        pass
+        
+        # Ensure defaults are set for new instances
+        if self.assistant_name is None:
+            self.assistant_name = "Donna"
+        if self.onboarding_completed is None:
+            self.onboarding_completed = False
 
     @property
     def is_active(self) -> bool:

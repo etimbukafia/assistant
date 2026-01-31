@@ -125,7 +125,7 @@ export default function ProfileScreen() {
                         <Ionicons name="diamond" size={20} color={Colors.accentSecondary} />
                     </View>
                     <View style={styles.subscriptionInfo}>
-                        <DonnaText style={styles.subscriptionTitle}>Corta Pro</DonnaText>
+                        <DonnaText style={styles.subscriptionTitle}>Teeks Pro</DonnaText>
                         <DonnaText style={styles.subscriptionSubtitle}>{getSubscriptionSubtitle()}</DonnaText>
                     </View>
                     <DonnaText style={styles.upgradeText}>
@@ -203,7 +203,7 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
 
                 {/* App Version */}
-                <DonnaText style={styles.versionText}>Corta v1.0.0 (Build 42)</DonnaText>
+                <DonnaText style={styles.versionText}>Teeks v1.0.0 (Build 42)</DonnaText>
             </ScrollView>
         </SafeAreaView>
     );

@@ -7,7 +7,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const STORAGE_KEY = '@corta/cta_dismissed';
+const STORAGE_KEY = '@teeks/cta_dismissed';
 
 interface SyncCTAContextType {
     ctaDismissed: boolean;

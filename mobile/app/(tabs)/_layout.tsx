@@ -12,6 +12,9 @@ import { AdaptivePillNav } from '../../src/components/navigation/AdaptivePillNav
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { runOnJS } from 'react-native-reanimated';
 
+import { OnboardingSheet } from '../../src/components/ui/OnboardingSheet';
+import { useFocusEffect } from 'expo-router';
+
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25; // 25% of screen width
 
@@ -30,6 +33,22 @@ export default function TabLayout() {
   const { user } = useAuth();
   const { openChat } = useChat(); // Use global context
   const { unreadCount } = useUnreadCount();
+  const { subscriptionTier, onboardingCompleted, refreshProfile } = useAuth();
+
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // Check for pending onboarding when screen focuses or auth state changes
+  React.useEffect(() => {
+    if (subscriptionTier === 'pro' && !onboardingCompleted) {
+      setShowOnboarding(true);
+    }
+  }, [subscriptionTier, onboardingCompleted]);
+
+  const handleOnboardingComplete = async () => {
+    await refreshProfile();
+    setShowOnboarding(false);
+  };
+
   usePushNotificationSetup();
 
   // Determine current tab index from pathname
@@ -205,8 +224,13 @@ export default function TabLayout() {
         <TouchableOpacity style={styles.chatFab} onPress={openChat}>
           <Ionicons name="sparkles" size={24} color="#FFF" />
         </TouchableOpacity>
+
+        <OnboardingSheet
+          isOpen={showOnboarding}
+          onComplete={handleOnboardingComplete}
+        />
       </Animated.View>
-    </GestureDetector>
+    </GestureDetector >
   );
 }
 

@@ -54,12 +54,16 @@ export async function getPortalUrl(): Promise<PortalResponse> {
     return response.data;
 }
 
+export interface TrialActivationRequest {
+    assistant_name?: string;
+}
+
 /**
  * Activate the user's 7-day free trial.
  * Called when user explicitly chooses to sync their real data.
  */
-export async function activateTrial(): Promise<TrialActivationResponse> {
-    const response = await api.post<TrialActivationResponse>('/subscription/activate-trial');
+export async function activateTrial(request?: TrialActivationRequest): Promise<TrialActivationResponse> {
+    const response = await api.post<TrialActivationResponse>('/subscription/activate-trial', request || {});
     return response.data;
 }
 

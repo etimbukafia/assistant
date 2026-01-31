@@ -85,6 +85,15 @@ mobile/
 - `require_active_subscription` - FastAPI dependency for endpoints requiring active trial/pro
 - `require_feature(Feature.X)` - Fine-grained feature gating with 3-day grace period (features defined in `Feature` enum)
 
+**Business Model** (Freemium with Polar billing):
+- **Sandbox**: Demo mode, `trial_ends_at = null`, shows mock data
+- **Trial**: 7 days, `trial_ends_at` set, full features
+- **Pro**: Paid via Polar, `subscription_tier = "pro"`, `subscription_status = "active"`
+- **Grace Period**: 3 days after expiration, features still accessible
+- **Expired**: Read-only access, upgrade CTA shown
+
+Revenue-critical paths: Trial activation → Gmail sync → AI value delivery → Upgrade prompt → Polar checkout → Webhook confirms payment. Polar webhooks handled in `app/handlers/webhook_handlers.py`. Always return 200 to prevent retry storms.
+
 **RLS Context**: All handlers must set PostgreSQL RLS context with:
 ```python
 db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
@@ -148,6 +157,9 @@ Tasks are defined in `backend/src/app/jobs/worker.py` in `TASK_HANDLERS` dict. K
 - `generate_digest` - Scheduled digest generation (self-reschedules)
 - `email_backfill` - Initial sync of historical emails
 - `data_cleanup` - Nightly cleanup of expired content (runs at 2 AM UTC)
+- `chat_cleanup` - Hourly cleanup of expired chat sessions
+- `cleanup_stuck_chat_messages` - Every 10 min, expires stuck "processing" chat messages (5-min threshold)
+- `process_chat_message` - Async chat processing when sync times out or tools detected
 
 ## Test Markers
 
@@ -159,5 +171,9 @@ Tests use pytest markers defined in `backend/pytest.ini`:
 - `@pytest.mark.slow` - LLM inference, API calls
 - `@pytest.mark.live` - Real API calls (costs money)
 
-## Instruction
-- Avoid Over-engineering: Implementations should have factor for the best balance of simplicity, efficiency, effectiveness, scalability, and performance.
+## Guidelines
+
+- **Avoid Over-engineering**: Balance simplicity, efficiency, and scalability. Don't add abstractions for one-time operations.
+- **SQLite Compatibility**: Tests use SQLite. Avoid PostgreSQL-specific JSON queries like `column["key"].astext`; filter in Python instead.
+- **Always Set RLS Context**: Every handler touching user data must call `set_config('app.user_id', ...)`.
+- **Self-Rescheduling Jobs**: Cleanup/scheduled tasks must enqueue their next run before completing.

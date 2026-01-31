@@ -12,18 +12,12 @@ const { width } = Dimensions.get('window');
 
 export default function ActivationExplanationScreen() {
     const router = useRouter();
+    const { assistantName } = useAuth(); // Get dynamic name
     const { refreshProfile } = useAuth();
     const { activateTrialAsync, triggerInitialSyncAsync, isActivatingTrial, isTriggering } = useBillingActions();
 
-    const handleStartSync = async () => {
-        try {
-            await activateTrialAsync();
-            await triggerInitialSyncAsync();
-            await refreshProfile();
-            router.back(); // Go back to inbox which will now show 'processing'
-        } catch (error) {
-            // Error alerts are handled by the hook
-        }
+    const handleStartSync = () => {
+        router.push('/settings/activate_trial');
     };
 
     const isLoading = isActivatingTrial || isTriggering;
@@ -57,7 +51,7 @@ export default function ActivationExplanationScreen() {
                         <View style={styles.bulletText}>
                             <DonnaText style={styles.bulletTitle}>24-Hour Lookback</DonnaText>
                             <DonnaText style={styles.bulletDescription}>
-                                Donna will briefly analyze your last 24 hours of emails to understand your current priorities.
+                                {assistantName} will briefly analyze your last 24 hours of emails to understand your current priorities.
                             </DonnaText>
                         </View>
                     </View>
@@ -69,7 +63,7 @@ export default function ActivationExplanationScreen() {
                         <View style={styles.bulletText}>
                             <DonnaText style={styles.bulletTitle}>Real-time Intelligence</DonnaText>
                             <DonnaText style={styles.bulletDescription}>
-                                Going forward, Donna automatically processes new emails as they arrive, keeping your highlights current.
+                                Going forward, {assistantName} automatically processes new emails as they arrive, keeping your highlights current.
                             </DonnaText>
                         </View>
                     </View>
@@ -93,7 +87,7 @@ export default function ActivationExplanationScreen() {
                     style={styles.primaryButton}
                     onPress={handleStartSync}
                 >
-                    <DonnaText style={styles.buttonText}>Use Donna with my inbox</DonnaText>
+                    <DonnaText style={styles.buttonText}>Use {assistantName} with my inbox</DonnaText>
                 </TouchableOpacity>
 
                 <DonnaText style={styles.footerNote}>

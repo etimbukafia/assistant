@@ -1,5 +1,7 @@
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Body
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser
@@ -7,8 +9,14 @@ from app.data.models import UserSettings
 
 router = APIRouter(prefix="/subscription", tags=["Subscription"])
 
+from fastapi import Body
+
+class ActivateTrialRequest(BaseModel):
+    assistant_name: Optional[str] = None
+
 @router.post("/activate-trial")
 def activate_trial(
+    request: ActivateTrialRequest = Body(default=None),
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user)
 ):
@@ -39,7 +47,9 @@ def activate_trial(
             return {
                 "status": "active",
                 "trial_ends_at": settings.trial_ends_at.isoformat(),
-                "days_remaining": settings.days_remaining
+                "days_remaining": settings.days_remaining,
+                "assistant_name": settings.assistant_name or "Donna",
+                "onboarding_completed": settings.onboarding_completed
             }
         else:
             # Trial expired - guide user to upgrade instead of returning error
@@ -53,10 +63,18 @@ def activate_trial(
     # Activate trial
     settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=7)
     settings.subscription_status = "trialing"
+    
+    # Set assistant name and mark onboarding complete
+    if request and request.assistant_name:
+        settings.assistant_name = request.assistant_name.strip()[:50] or "Donna"
+    settings.onboarding_completed = True
+    
     db.commit()
     
     return {
         "status": "activated",
         "trial_ends_at": settings.trial_ends_at.isoformat(),
-        "days_remaining": 7
+        "days_remaining": 7,
+        "assistant_name": settings.assistant_name,
+        "onboarding_completed": True
     }

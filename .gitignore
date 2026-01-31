@@ -8,6 +8,7 @@ env/
 venv/
 ENV/
 .venv
+.pytest_cache/
 
 # Environment variables
 .env
@@ -16,10 +17,21 @@ ENV/
 *.db
 *.db-journal
 
-#Files
-docs/
-!prompts/
-!prompts/*.md
+# Test folders
+tests/
+**/tests/
+**/__tests__/
+
+# Ignore all markdown files
+*.md
+
+# Except markdown files in backend/prompts
+!backend/prompts/
+!backend/prompts/*.md
+
+# Except markdown files in design
+!design/
+!design/*.md
 
 # Google credentials
 credentials.json
@@ -31,6 +43,34 @@ token.json
 *.swp
 *.swo
 *~
+.claude/
+
+# Node.js
+node_modules/
+dist/
+.expo/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build artifacts
+build/
+*.tsbuildinfo
+
+# Temp files
+*.stackdump
+temp_*.json
+test_output.html
+tmpclaude-*
+
+# Coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Docs folder
+docs/
 
 # OS
 .DS_Store

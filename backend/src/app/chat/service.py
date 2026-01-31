@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # Timeout for synchronous processing (seconds)
 SYNC_TIMEOUT_SECONDS = 8.0
 
+# Timeout for async messages stuck in "processing" state (TTL on read)
+PROCESSING_TIMEOUT_MINUTES = 2
+
 
 class ProcessingStatus(str, Enum):
     """Chat message processing status."""
@@ -230,15 +233,44 @@ class ChatService:
         limit: int = 50,
         offset: int = 0
     ) -> List[ChatMessage]:
-        """Get messages for a session (with user_id verification)."""
+        """
+        Get messages for a session (with user_id verification).
+        
+        Also performs TTL-on-read cleanup: auto-expires messages stuck 
+        in 'processing' state for longer than PROCESSING_TIMEOUT_MINUTES.
+        """
         # Verify session ownership first
         session = self.get_session(session_id)
         if not session:
             return []
         
-        return self.db.query(ChatMessage).filter(
+        messages = self.db.query(ChatMessage).filter(
             ChatMessage.session_id == session_id
         ).order_by(ChatMessage.created_at.asc()).offset(offset).limit(limit).all()
+        
+        # TTL-on-read: auto-expire stuck processing messages
+        timeout_cutoff = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_TIMEOUT_MINUTES)
+        updated_any = False
+        
+        for msg in messages:
+            metadata = msg.message_metadata or {}
+            if (metadata.get("status") == "processing" and 
+                msg.created_at < timeout_cutoff):
+                # Expire this stuck message
+                msg.content = "I apologize, my response timed out. Please try again."
+                msg.message_metadata = {
+                    **metadata,
+                    "status": "timeout",
+                    "error": "Processing exceeded time limit",
+                    "timed_out_at": datetime.now(timezone.utc).isoformat()
+                }
+                updated_any = True
+                logger.warning(f"Auto-expired stuck message {msg.id} (created {msg.created_at})")
+        
+        if updated_any:
+            self.db.commit()
+        
+        return messages
     
     # =========================================================================
     # Pending Action Operations
@@ -732,10 +764,40 @@ class ChatService:
 
         # Check if still processing
         if metadata.get("status") == "processing":
+            # TTL check: auto-expire if stuck too long
+            timeout_cutoff = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_TIMEOUT_MINUTES)
+            if message.created_at < timeout_cutoff:
+                # Expire this stuck message
+                message.content = "I apologize, my response timed out. Please try again."
+                message.message_metadata = {
+                    **metadata,
+                    "status": "timeout",
+                    "error": "Processing exceeded time limit",
+                    "timed_out_at": datetime.now(timezone.utc).isoformat()
+                }
+                self.db.commit()
+                logger.warning(f"Auto-expired stuck job {job_id} (message {message.id})")
+                
+                return ChatResponse(
+                    status=ProcessingStatus.FAILED,
+                    job_id=job_id,
+                    message_id=message.id,
+                    error="Processing timed out. Please try again."
+                )
+            
             return ChatResponse(
                 status=ProcessingStatus.PROCESSING,
                 job_id=job_id,
                 message_id=message.id
+            )
+
+        # Check if timed out (already expired by another path)
+        if metadata.get("status") == "timeout":
+            return ChatResponse(
+                status=ProcessingStatus.FAILED,
+                job_id=job_id,
+                message_id=message.id,
+                error=metadata.get("error", "Processing timed out")
             )
 
         # Check if failed

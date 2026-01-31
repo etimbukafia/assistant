@@ -86,6 +86,11 @@ class UserSettingsResponse(BaseModel):
     trial_ends_at: Optional[datetime] = None
     is_active: bool = False  # True if trial/pro is currently valid
     days_remaining: int = 0
+    
+    # Personalization & Onboarding
+    assistant_name: str = "Donna"
+    onboarding_completed: bool = False
+
     # Integration status
     initial_sync_completed: bool = False
     gmail_connected: bool = False
@@ -102,6 +107,7 @@ class UserSettingsUpdateRequest(BaseModel):
     reminder_preferences: Optional[Dict[str, Any]] = None
     notification_preferences: Optional[Dict[str, Any]] = None
     enable_quick_reply_from_task: Optional[bool] = None
+    assistant_name: Optional[str] = None
 
 
 # ========================================

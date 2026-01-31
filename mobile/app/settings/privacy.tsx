@@ -91,7 +91,7 @@ export default function PrivacyScreen() {
         onSuccess: async (data) => {
             try {
                 // Save to file and share using SDK 54 API
-                const fileName = `corta_export_${new Date().toISOString().split('T')[0]}.json`;
+                const fileName = `teeks_export_${new Date().toISOString().split('T')[0]}.json`;
                 const file = new File(Paths.cache, fileName);
                 file.write(JSON.stringify(data, null, 2));
 
@@ -148,7 +148,7 @@ export default function PrivacyScreen() {
     const handleExport = () => {
         Alert.alert(
             'Export Your Data',
-            'This will download a copy of all your data stored by Corta, including messages, tasks, preferences, and more.',
+            'This will download a copy of all your data stored by Teeks, including messages, tasks, preferences, and more.',
             [
                 { text: 'Cancel', style: 'cancel' },
                 { text: 'Export', onPress: () => exportMutation.mutate() },
@@ -207,7 +207,7 @@ export default function PrivacyScreen() {
                         icon="download-outline"
                         iconColor={Colors.accentSecondary}
                         title="Export My Data"
-                        description="Download a complete copy of all your data stored by Corta, including messages, tasks, calendar events, preferences, and more."
+                        description="Download a complete copy of all your data stored by Teeks, including messages, tasks, calendar events, preferences, and more."
                         buttonText="Download Export"
                         buttonColor={Colors.accentSecondary}
                         isLoading={exportMutation.isPending}

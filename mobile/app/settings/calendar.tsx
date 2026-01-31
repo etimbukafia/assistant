@@ -272,7 +272,7 @@ export default function CalendarSettingsScreen() {
                         )}
                     </View>
                     <DonnaText style={styles.calendarHelpText}>
-                        Select which calendars Corta should consider for availability and scheduling
+                        Select which calendars Teeks should consider for availability and scheduling
                     </DonnaText>
                 </View>
 

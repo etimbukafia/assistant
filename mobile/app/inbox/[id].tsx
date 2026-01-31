@@ -362,7 +362,7 @@ export default function MessageDetailScreen() {
                         <View style={styles.summaryHeader}>
                             <Ionicons name="sparkles" size={16} color={Colors.accentPrecision} />
                             <DonnaText variant="labelSmall" color={Colors.accentPrecision} style={styles.summaryLabel}>
-                                CORTA'S SUMMARY
+                                TEEKS' SUMMARY
                             </DonnaText>
                         </View>
                         <DonnaText variant="bodyBase" style={styles.summaryText}>

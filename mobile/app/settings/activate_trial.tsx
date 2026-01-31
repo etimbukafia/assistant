@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { StyleSheet, View, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, TouchableOpacity, ScrollView, Alert, ActivityIndicator, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius } from '../../src/theme/Theme';
@@ -14,6 +14,7 @@ export default function ActivateTrialScreen() {
     const queryClient = useQueryClient();
     const { refreshProfile } = useAuth();
     const [selectedIntegrations, setSelectedIntegrations] = useState(['gmail']);
+    const [assistantName, setAssistantName] = useState('Donna');
 
     const toggleIntegration = (id: string) => {
         if (id === 'gmail') return; // Mandatory
@@ -27,8 +28,8 @@ export default function ActivateTrialScreen() {
     // Combined mutation for trial activation + initial sync
     const activationMutation = useMutation({
         mutationFn: async () => {
-            // 1. Activate Trial
-            await activateTrial();
+            // 1. Activate Trial with Assistant Name
+            await activateTrial({ assistant_name: assistantName.trim() || 'Donna' });
             // 2. Trigger Initial Sync
             await triggerInitialSync();
         },
@@ -74,6 +75,27 @@ export default function ActivateTrialScreen() {
                     </DonnaText>
                 </View>
 
+                {/* Assistant Name Section */}
+                <View style={styles.section}>
+                    <DonnaText variant="overline" style={styles.sectionTitle}>
+                        Name Your Assistant
+                    </DonnaText>
+                    <View style={styles.nameInputContainer}>
+                        <TextInput
+                            style={styles.nameInput}
+                            value={assistantName}
+                            onChangeText={setAssistantName}
+                            placeholder="Donna"
+                            placeholderTextColor={Colors.textMuted}
+                            maxLength={50}
+                            autoCapitalize="words"
+                        />
+                    </View>
+                    <DonnaText style={styles.nameHint}>
+                        This is what your AI assistant will be called
+                    </DonnaText>
+                </View>
+
                 <View style={styles.section}>
                     <DonnaText variant="overline" style={styles.sectionTitle}>Select Integrations</DonnaText>
 
@@ -115,7 +137,7 @@ export default function ActivateTrialScreen() {
                         />
                     </TouchableOpacity>
                 </View>
-            </ScrollView>
+            </ScrollView >
 
             <View style={styles.footer}>
                 <TouchableOpacity
@@ -136,7 +158,7 @@ export default function ActivateTrialScreen() {
                     No credit card required for trial.
                 </DonnaText>
             </View>
-        </View>
+        </View >
     );
 }
 
@@ -253,5 +275,24 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         fontSize: 12,
         color: Colors.textMuted,
+    },
+    nameInputContainer: {
+        backgroundColor: Colors.bgSurface,
+        borderRadius: Radius.lg,
+        borderWidth: 1,
+        borderColor: Colors.border,
+        paddingHorizontal: Spacing.md,
+        paddingVertical: Spacing.sm + 2,
+        marginBottom: Spacing.xs,
+    },
+    nameInput: {
+        fontSize: 16,
+        color: Colors.textPrimary,
+        fontWeight: '500',
+    },
+    nameHint: {
+        fontSize: 12,
+        color: Colors.textMuted,
+        marginLeft: Spacing.xs,
     },
 });

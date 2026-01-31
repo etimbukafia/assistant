@@ -139,7 +139,7 @@ export default function SettingsHubScreen() {
                             icon="diamond-outline"
                             iconColor={Colors.accentSecondary}
                             title="Subscription"
-                            subtitle={subscriptionTier === 'pro' ? 'Corta Pro Active' : 'Trial Version'}
+                            subtitle={subscriptionTier === 'pro' ? 'Teeks Pro Active' : 'Trial Version'}
                             onPress={() => router.push('/settings/subscription' as any)}
                         />
                         <SettingRow
@@ -152,7 +152,7 @@ export default function SettingsHubScreen() {
                     </View>
                 </View>
 
-                <DonnaText style={styles.versionText}>Corta v1.0.0 (Build 42)</DonnaText>
+                <DonnaText style={styles.versionText}>Teeks v1.0.0 (Build 42)</DonnaText>
             </ScrollView>
         </SafeAreaView>
     );

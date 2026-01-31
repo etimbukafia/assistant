@@ -439,11 +439,15 @@ if not user_id:
 
 ---
 
-### SF-12: Chat Processing Stuck in "Processing" State
+### SF-12: Chat Processing Stuck in "Processing" State ✅ FIXED
 
-**Location**: `backend/src/app/jobs/worker.py:1158-1177`
+**Location**: `backend/src/app/jobs/worker.py:1158-1177`, `backend/src/app/chat/service.py`
 
 **Problem**: Missing fields or session-not-found leaves message in processing state forever.
+
+**Resolution**: Implemented hybrid timeout solution:
+1. **TTL-on-read (2 min)**: `ChatService.get_messages()` and `get_job_status()` auto-expire stuck messages when accessed. User sees "Response timed out. Please try again."
+2. **Background cleanup (5 min)**: `handle_cleanup_stuck_chat_messages` job catches orphaned messages (worker crashes). Runs every 10 minutes.
 
 **Revenue Impact**: MEDIUM
 - Chat appears to hang

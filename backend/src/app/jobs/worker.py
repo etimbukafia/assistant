@@ -16,6 +16,7 @@ from fastapi import BackgroundTasks
 from core.events import emit_event
 from core.queue import Worker, BatchWorker
 from app.jobs.queue import queue_service
+from app.jobs.trial_warnings import handle_check_trial_expirations, get_next_trial_check_time
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -1271,6 +1272,76 @@ def _update_message_failed(db, message_id: int, error: str):
         logger.error(f"Failed to update message {message_id} as failed: {e}")
 
 
+def get_next_stuck_chat_cleanup_time() -> datetime:
+    """Calculate next cleanup time (every 10 minutes)."""
+    now = datetime.now(timezone.utc)
+    return now + timedelta(minutes=10)
+
+
+async def handle_cleanup_stuck_chat_messages(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'cleanup_stuck_chat_messages' tasks.
+
+    Periodically cleans up chat messages stuck in 'processing' state.
+    This is a background safety net for messages orphaned by worker crashes.
+
+    Run frequency: every 10 minutes (self-rescheduling)
+    Timeout threshold: 5 minutes (longer than TTL-on-read to avoid race conditions)
+    """
+    from app.data.models import ChatMessage
+    from app.infra.database import SessionLocal
+    from app.jobs.queue import enqueue_task
+
+    # 5 minutes timeout for background cleanup (longer than 2-min TTL-on-read)
+    BACKGROUND_TIMEOUT_MINUTES = 5
+
+    db = SessionLocal()
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=BACKGROUND_TIMEOUT_MINUTES)
+
+        # Find all assistant messages with role='assistant'
+        # Filter status in Python for SQLite compatibility (used in tests)
+        assistant_messages = db.query(ChatMessage).filter(
+            ChatMessage.role == "assistant"
+        ).all()
+
+        # Filter for stuck processing messages older than cutoff
+        expired_count = 0
+        for msg in assistant_messages:
+            metadata = msg.message_metadata or {}
+            if (metadata.get("status") == "processing" and msg.created_at < cutoff):
+                msg.content = "I apologize, my response timed out. Please try again."
+                msg.message_metadata = {
+                    **metadata,
+                    "status": "timeout",
+                    "error": "Processing exceeded time limit (background cleanup)",
+                    "timed_out_at": datetime.now(timezone.utc).isoformat()
+                }
+                expired_count += 1
+
+        if expired_count > 0:
+            db.commit()
+            logger.info(f"[{correlation_id}] Cleaned up {expired_count} stuck chat messages")
+        else:
+            logger.debug(f"[{correlation_id}] No stuck chat messages found")
+
+        # Self-reschedule for next run
+        next_run = get_next_stuck_chat_cleanup_time()
+        enqueue_task(
+            task_type="cleanup_stuck_chat_messages",
+            payload={},
+            scheduled_for=next_run,
+            db=db
+        )
+        logger.debug(f"[{correlation_id}] Next stuck chat cleanup scheduled for {next_run}")
+
+    except Exception as e:
+        logger.error(f"[{correlation_id}] Error cleaning stuck chat messages: {e}", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
+
 async def handle_renew_gmail_watches(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
     """
     Renew Gmail Pub/Sub watches for all connected accounts.
@@ -1304,6 +1375,7 @@ TASK_HANDLERS = {
     "trigger_agent": handle_trigger_agent,
     "evaluate_reminder": handle_evaluate_reminder,
     "data_cleanup": handle_data_cleanup,
+    "cleanup_stuck_chat_messages": handle_cleanup_stuck_chat_messages,
     "chat_cleanup": handle_chat_cleanup,
     "generate_briefing": handle_generate_briefing,
     "generate_digest": handle_generate_digest,
@@ -1311,6 +1383,7 @@ TASK_HANDLERS = {
     "email_backfill": handle_email_backfill,
     "process_chat_message": handle_process_chat_message,
     "renew_gmail_watches": handle_renew_gmail_watches,
+    "check_trial_expirations": handle_check_trial_expirations,
 }
 
 
@@ -1355,6 +1428,44 @@ def _notify_permanent_failure(task_id: int, task_type: str, payload: dict, error
         db.close()
 
 
+def schedule_cleanup_jobs_if_needed(db):
+    """
+    Schedule cleanup jobs if not already pending.
+
+    Called on worker startup to ensure cleanup jobs are running.
+    """
+    from app.data.models import TaskQueue
+    from app.jobs.queue import enqueue_task
+
+    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations"]
+
+    for task_type in cleanup_jobs:
+        existing = db.query(TaskQueue).filter(
+            TaskQueue.task_type == task_type,
+            TaskQueue.status == "pending"
+        ).first()
+
+        if not existing:
+            if task_type == "cleanup_stuck_chat_messages":
+                next_run = get_next_stuck_chat_cleanup_time()
+            elif task_type == "chat_cleanup":
+                next_run = get_next_chat_cleanup_time()
+            elif task_type == "data_cleanup":
+                next_run = get_next_cleanup_time()
+            elif task_type == "check_trial_expirations":
+                next_run = get_next_trial_check_time()
+            else:
+                continue
+
+            enqueue_task(
+                task_type=task_type,
+                payload={},
+                scheduled_for=next_run,
+                db=db
+            )
+            logger.info(f"Scheduled {task_type} for {next_run}")
+
+
 def run_worker(poll_interval: int = 2):
     """
     Run the email assistant worker (single-task processing)
@@ -1362,6 +1473,16 @@ def run_worker(poll_interval: int = 2):
     Args:
         poll_interval: Seconds between polls (default: 2)
     """
+    from app.infra.database import SessionLocal
+
+    # Ensure cleanup jobs are scheduled on startup
+    db = SessionLocal()
+    try:
+        schedule_cleanup_jobs_if_needed(db)
+        db.commit()
+    finally:
+        db.close()
+
     worker = Worker(
         queue_service=queue_service,
         handlers=TASK_HANDLERS,
@@ -1384,6 +1505,16 @@ def run_email_batch_worker(poll_interval: int = 2, limit_per_user: int = 30, max
         limit_per_user: Max emails per user per batch (default: 30)
         max_users: Max users to process per cycle (default: 5)
     """
+    from app.infra.database import SessionLocal
+
+    # Ensure cleanup jobs are scheduled on startup
+    db = SessionLocal()
+    try:
+        schedule_cleanup_jobs_if_needed(db)
+        db.commit()
+    finally:
+        db.close()
+
     worker = BatchWorker(
         queue_service=queue_service,
         handlers=BATCH_HANDLERS,

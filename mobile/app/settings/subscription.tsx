@@ -38,8 +38,8 @@ export default function SubscriptionScreen() {
     const handleCheckout = async () => {
         try {
             const data = await createCheckoutAsync({
-                success_url: 'corta://billing/success',
-                cancel_url: 'corta://billing/cancel',
+                success_url: 'teeks://billing/success',
+                cancel_url: 'teeks://billing/cancel',
             });
             if (data?.checkout_url) {
                 await WebBrowser.openBrowserAsync(data.checkout_url);
@@ -152,11 +152,11 @@ export default function SubscriptionScreen() {
                     <View style={[styles.statusCard, isExpired && styles.statusCardExpired]}>
                         <View style={styles.statusHeader}>
                             <DonnaText style={styles.statusTitle}>
-                                {isTrial ? 'Corta Pro — Free Trial' :
-                                    isGracePeriod ? 'Corta Pro — Grace Period' :
+                                {isTrial ? 'Teeks Pro — Free Trial' :
+                                    isGracePeriod ? 'Teeks Pro — Grace Period' :
                                         isExpired ? 'Your access is paused' :
-                                            isCanceled ? 'Corta Pro — Canceled' :
-                                                'Corta Pro — Active'}
+                                            isCanceled ? 'Teeks Pro — Canceled' :
+                                                'Teeks Pro — Active'}
                             </DonnaText>
                             <View style={[styles.statusBadge, {
                                 backgroundColor: isActive ? Colors.success :
@@ -170,11 +170,11 @@ export default function SubscriptionScreen() {
                         </View>
 
                         <DonnaText style={styles.statusDescription}>
-                            {isTrial && isActive ? `You're currently using Corta with full access.\nYour free trial ends on ${formatDate(settings?.trial_ends_at)}.` :
-                                isGracePeriod ? 'Your trial has ended, but Corta is still available.\nAdd a payment method within 3 days to continue uninterrupted.' :
-                                    isExpired ? 'Corta is currently in read-only mode.\nResume your subscription to continue inbox processing and suggestions.' :
+                            {isTrial && isActive ? `You're currently using Teeks with full access.\nYour free trial ends on ${formatDate(settings?.trial_ends_at)}.` :
+                                isGracePeriod ? 'Your trial has ended, but Teeks is still available.\nAdd a payment method within 3 days to continue uninterrupted.' :
+                                    isExpired ? 'Teeks is currently in read-only mode.\nResume your subscription to continue inbox processing and suggestions.' :
                                         isCanceled ? 'Your subscription is canceled but you still have access for the remaining period.' :
-                                            isPro && isActive ? 'You have full access to all Corta Pro features.' :
+                                            isPro && isActive ? 'You have full access to all Teeks Pro features.' :
                                                 'Checking your subscription status...'}
                         </DonnaText>
 
@@ -200,7 +200,7 @@ export default function SubscriptionScreen() {
                         <View style={styles.planCard}>
                             <View style={styles.planHeader}>
                                 <View>
-                                    <DonnaText style={styles.planName}>Corta Pro</DonnaText>
+                                    <DonnaText style={styles.planName}>Teeks Pro</DonnaText>
                                     <DonnaText style={styles.planPrice}>
                                         $9.99 <DonnaText style={styles.planPeriod}>/ month</DonnaText>
                                     </DonnaText>
@@ -234,7 +234,7 @@ export default function SubscriptionScreen() {
                                 <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
                                 <DonnaText style={styles.upgradeButtonText}>
-                                    {isExpired ? 'Resume Corta Pro' : 'Continue with Corta Pro'}
+                                    {isExpired ? 'Resume Teeks Pro' : 'Continue with Teeks Pro'}
                                 </DonnaText>
                             )}
                         </TouchableOpacity>

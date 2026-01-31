@@ -40,6 +40,9 @@ export interface UserSettings {
     trial_ends_at: string | null;
     is_active: boolean;
     days_remaining: number;
+    // Personalization & Onboarding
+    assistant_name: string;
+    onboarding_completed: boolean;
     // Integration status
     initial_sync_completed: boolean;
     gmail_connected: boolean;

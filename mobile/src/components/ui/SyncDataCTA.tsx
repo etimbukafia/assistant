@@ -28,7 +28,7 @@ export function SyncDataCTA() {
                     <Ionicons name="sync" size={24} color="#FFFFFF" />
                 </View>
                 <View style={styles.textContainer}>
-                    <DonnaText variant="h2" style={styles.title}>Let Corta lend you a hand</DonnaText>
+                    <DonnaText variant="h2" style={styles.title}>Let Teeks lend you a hand</DonnaText>
                     <DonnaText style={styles.description}>
                         Sync Gmail and Calendar to draft replies, pull out tasks, and keep your world organized.
                     </DonnaText>

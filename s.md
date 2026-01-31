@@ -2,3 +2,7 @@ I want you to analyze the codebase and create a .md that connects the code, feat
   that could impact revenue and recommend money optimized alternatives or solutions with the pros and cons, find
   silent failures and fallbacks that could cause customers to leave the app or be dissatisfied, find bugs that
   could lead to lost of money and customers, draft a Critical Path Testing plan
+
+
+
+

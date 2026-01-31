@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Corta",
-    "slug": "corta",
+    "name": "Teeks",
+    "slug": "teeks",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "corta",
+    "scheme": "teeks",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -27,7 +27,18 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "Teeks",
+      "shortName": "Teeks",
+      "display": "standalone",
+      "startUrl": "/",
+      "backgroundColor": "#ffffff",
+      "themeColor": "#D97745",
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#ffffff"
+      }
     },
     "plugins": [
       "expo-router",

@@ -27,6 +27,9 @@ interface AuthContextType {
     subscriptionTier: string;  // "trial" | "pro"
     daysRemaining: number;     // Days left in trial/subscription
     settingsError: boolean;    // True if failed to fetch settings (connection issue)
+    // Personalization & Onboarding
+    assistantName: string;
+    onboardingCompleted: boolean;
     // Integration state
     initialSyncCompleted: boolean;
     gmailConnected: boolean;
@@ -49,6 +52,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [subscriptionTier, setSubscriptionTier] = useState('trial');
     const [daysRemaining, setDaysRemaining] = useState(0);
     const [settingsError, setSettingsError] = useState(false); // True = failed to fetch settings
+    // Personalization & Onboarding
+    const [assistantName, setAssistantName] = useState('Donna');
+    const [onboardingCompleted, setOnboardingCompleted] = useState(false);
     // Integration state
     const [initialSyncCompleted, setInitialSyncCompleted] = useState(false);
     const [gmailConnected, setGmailConnected] = useState(false);
@@ -73,6 +79,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setIsActive(!!settings.is_active);
             setSubscriptionTier(settings.subscription_tier || 'trial');
             setDaysRemaining(settings.days_remaining || 0);
+
+            setDaysRemaining(settings.days_remaining || 0);
+
+            // Personalization & Onboarding
+            setAssistantName(settings.assistant_name || 'Donna');
+            setOnboardingCompleted(!!settings.onboarding_completed);
 
             // Integration state
             setInitialSyncCompleted(!!settings.initial_sync_completed);
@@ -118,6 +130,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setSubscriptionTier('trial');
             setDaysRemaining(0);
             setSettingsError(false);
+            setAssistantName('Donna');
+            setOnboardingCompleted(false);
             setInitialSyncCompleted(false);
             setGmailConnected(false);
             setCalendarConnected(false);
@@ -134,7 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
             // Create redirect URI for OAuth callback
             const redirectUri = makeRedirectUri({
-                scheme: 'corta',
+                scheme: 'teeks',
                 path: 'auth/callback',
             });
 
@@ -219,6 +233,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 subscriptionTier,
                 daysRemaining,
                 settingsError,
+                // Personalization & Onboarding
+                assistantName,
+                onboardingCompleted,
                 // Integration state
                 initialSyncCompleted,
                 gmailConnected,
