@@ -147,10 +147,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const signInWithGoogle = async (): Promise<boolean> => {
         try {
             // Create redirect URI for OAuth callback
+            // NOTE: In Expo Go, this generates exp://... which Expo Go can intercept.
+            // For production builds, it uses teeks://...  
+            // BOTH must be whitelisted in Supabase dashboard -> Authentication -> URL Configuration
             const redirectUri = makeRedirectUri({
-                scheme: 'teeks',
+                // Don't specify scheme in dev - let Expo pick the right one
+                // scheme: 'teeks',  // Uncomment for production build
                 path: 'auth/callback',
             });
+            console.log('=== IMPORTANT: Add this redirect URI to Supabase Dashboard ===');
+            console.log('Redirect URI:', redirectUri);
+            console.log('============================================================');
 
             // Initiate OAuth flow
             const { data, error } = await supabase.auth.signInWithOAuth({

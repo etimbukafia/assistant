@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius, Spacing } from '../../theme/Theme';
 import { DonnaText } from './DonnaText';
 import { Task } from '../../services/messages';
+import { GlassCard } from './GlassCard';
 
 interface DonnaCardProps {
     title: string;
@@ -46,106 +47,111 @@ export const DonnaCard: React.FC<DonnaCardProps> = ({
     const showExtracted = inlineTasks.length === 0 && (extractedTasks || []).length > 0;
 
     return (
-        <Pressable onPress={onPress} style={styles.container}>
-            <View style={[styles.card, { borderLeftColor: getBorderColor(), borderLeftWidth: type === 'fyi' ? 0 : 4 }]}>
-                <View style={styles.header}>
-                    <DonnaText variant="labelSmall" color={Colors.textMuted}>{sender} • {time}</DonnaText>
-                    {type === 'urgent' && (
-                        <View style={styles.badge}>
-                            <DonnaText variant="caption" color={Colors.accentPrimary}>URGENT</DonnaText>
+        <Pressable onPress={onPress}>
+            <GlassCard
+                variant={type === 'urgent' ? 'warm' : 'default'}
+                style={[styles.container, styles.card, { borderLeftColor: getBorderColor(), borderLeftWidth: type === 'fyi' ? 0 : 4 }]}
+            >
+                <View style={styles.content}>
+                    <View style={styles.header}>
+                        <DonnaText variant="labelSmall" color={Colors.textMuted}>{sender} • {time}</DonnaText>
+                        {type === 'urgent' && (
+                            <View style={styles.badge}>
+                                <DonnaText variant="caption" color={Colors.accentPrimary}>URGENT</DonnaText>
+                            </View>
+                        )}
+                    </View>
+
+                    <DonnaText variant="h2" style={styles.title} numberOfLines={1}>{title}</DonnaText>
+
+                    {insight && (
+                        <View style={styles.insightBox}>
+                            <DonnaText variant="caption" color={Colors.accentPrecision} style={styles.insightLabel}>
+                                DONNA'S SUMMARY
+                            </DonnaText>
+                            <DonnaText variant="bodyBase" style={styles.insightText}>
+                                {insight}
+                            </DonnaText>
+                        </View>
+                    )}
+
+                    {/* Structured tasks with approve/dismiss */}
+                    {inlineTasks.length > 0 && (
+                        <View style={styles.tasksSection}>
+                            {inlineTasks.map(task => (
+                                <View key={task.id} style={[
+                                    styles.taskItem,
+                                    task.status === 'pending_approval' && styles.taskItemPending,
+                                ]}>
+                                    <View style={[
+                                        styles.taskCheckbox,
+                                        task.status === 'pending_approval' && styles.taskCheckboxPending,
+                                        task.status === 'approved' && styles.taskCheckboxApproved,
+                                    ]}>
+                                        {task.status === 'pending_approval' && (
+                                            <Ionicons name="sparkles" size={10} color={Colors.accentSecondary} />
+                                        )}
+                                        {(task.status === 'approved' || task.status === 'in_progress') && (
+                                            <Ionicons name="checkmark" size={12} color={Colors.success} />
+                                        )}
+                                    </View>
+                                    <View style={styles.taskTextContainer}>
+                                        {task.status === 'pending_approval' && (
+                                            <DonnaText style={styles.taskAiLabel}>SUGGESTED BY AI</DonnaText>
+                                        )}
+                                        <DonnaText variant="bodyBase" numberOfLines={1} style={styles.taskTitle}>
+                                            {task.title}
+                                        </DonnaText>
+                                    </View>
+                                    {task.status === 'pending_approval' && (
+                                        <View style={styles.taskActions}>
+                                            <TouchableOpacity
+                                                style={styles.taskApproveBtn}
+                                                onPress={(e) => { e.stopPropagation(); onApproveTask?.(task.id); }}
+                                            >
+                                                <Ionicons name="checkmark" size={14} color={Colors.success} />
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={styles.taskDismissBtn}
+                                                onPress={(e) => { e.stopPropagation(); onDismissTask?.(task.id); }}
+                                            >
+                                                <Ionicons name="close" size={14} color={Colors.textMuted} />
+                                            </TouchableOpacity>
+                                        </View>
+                                    )}
+                                    {task.priority === 'urgent' || task.priority === 'high' ? (
+                                        <View style={[styles.taskPriority, {
+                                            backgroundColor: (task.priority === 'urgent' ? Colors.error : Colors.accentPrimary) + '15'
+                                        }]}>
+                                            <DonnaText style={{
+                                                fontSize: 9,
+                                                fontWeight: '700',
+                                                color: task.priority === 'urgent' ? Colors.error : Colors.accentPrimary,
+                                            }}>
+                                                {task.priority.toUpperCase()}
+                                            </DonnaText>
+                                        </View>
+                                    ) : null}
+                                </View>
+                            ))}
+                        </View>
+                    )}
+
+                    {/* Extracted tasks (shown only when no structured tasks) */}
+                    {showExtracted && (
+                        <View style={styles.tasksSection}>
+                            {(extractedTasks || []).map((taskText, idx) => (
+                                <View key={idx} style={[styles.taskItem, styles.taskItemExtracted]}>
+                                    <Ionicons name="sparkles" size={12} color={Colors.textMuted} />
+                                    <DonnaText variant="bodyBase" numberOfLines={1} style={styles.extractedTaskText}>
+                                        {taskText}
+                                    </DonnaText>
+                                </View>
+                            ))}
                         </View>
                     )}
                 </View>
-
-                <DonnaText variant="h2" style={styles.title} numberOfLines={1}>{title}</DonnaText>
-
-                {insight && (
-                    <View style={styles.insightBox}>
-                        <DonnaText variant="caption" color={Colors.accentPrecision} style={styles.insightLabel}>
-                            DONNA'S SUMMARY
-                        </DonnaText>
-                        <DonnaText variant="bodyBase" style={styles.insightText}>
-                            {insight}
-                        </DonnaText>
-                    </View>
-                )}
-
-                {/* Structured tasks with approve/dismiss */}
-                {inlineTasks.length > 0 && (
-                    <View style={styles.tasksSection}>
-                        {inlineTasks.map(task => (
-                            <View key={task.id} style={[
-                                styles.taskItem,
-                                task.status === 'pending_approval' && styles.taskItemPending,
-                            ]}>
-                                <View style={[
-                                    styles.taskCheckbox,
-                                    task.status === 'pending_approval' && styles.taskCheckboxPending,
-                                    task.status === 'approved' && styles.taskCheckboxApproved,
-                                ]}>
-                                    {task.status === 'pending_approval' && (
-                                        <Ionicons name="sparkles" size={10} color={Colors.accentSecondary} />
-                                    )}
-                                    {(task.status === 'approved' || task.status === 'in_progress') && (
-                                        <Ionicons name="checkmark" size={12} color={Colors.success} />
-                                    )}
-                                </View>
-                                <View style={styles.taskTextContainer}>
-                                    {task.status === 'pending_approval' && (
-                                        <DonnaText style={styles.taskAiLabel}>SUGGESTED BY AI</DonnaText>
-                                    )}
-                                    <DonnaText variant="bodyBase" numberOfLines={1} style={styles.taskTitle}>
-                                        {task.title}
-                                    </DonnaText>
-                                </View>
-                                {task.status === 'pending_approval' && (
-                                    <View style={styles.taskActions}>
-                                        <TouchableOpacity
-                                            style={styles.taskApproveBtn}
-                                            onPress={(e) => { e.stopPropagation(); onApproveTask?.(task.id); }}
-                                        >
-                                            <Ionicons name="checkmark" size={14} color={Colors.success} />
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            style={styles.taskDismissBtn}
-                                            onPress={(e) => { e.stopPropagation(); onDismissTask?.(task.id); }}
-                                        >
-                                            <Ionicons name="close" size={14} color={Colors.textMuted} />
-                                        </TouchableOpacity>
-                                    </View>
-                                )}
-                                {task.priority === 'urgent' || task.priority === 'high' ? (
-                                    <View style={[styles.taskPriority, {
-                                        backgroundColor: (task.priority === 'urgent' ? Colors.error : Colors.accentPrimary) + '15'
-                                    }]}>
-                                        <DonnaText style={{
-                                            fontSize: 9,
-                                            fontWeight: '700',
-                                            color: task.priority === 'urgent' ? Colors.error : Colors.accentPrimary,
-                                        }}>
-                                            {task.priority.toUpperCase()}
-                                        </DonnaText>
-                                    </View>
-                                ) : null}
-                            </View>
-                        ))}
-                    </View>
-                )}
-
-                {/* Extracted tasks (shown only when no structured tasks) */}
-                {showExtracted && (
-                    <View style={styles.tasksSection}>
-                        {(extractedTasks || []).map((taskText, idx) => (
-                            <View key={idx} style={[styles.taskItem, styles.taskItemExtracted]}>
-                                <Ionicons name="sparkles" size={12} color={Colors.textMuted} />
-                                <DonnaText variant="bodyBase" numberOfLines={1} style={styles.extractedTaskText}>
-                                    {taskText}
-                                </DonnaText>
-                            </View>
-                        ))}
-                    </View>
-                )}
-            </View>
+            </GlassCard>
         </Pressable>
     );
 };
@@ -156,11 +162,10 @@ const styles = StyleSheet.create({
         marginHorizontal: Spacing.md,
     },
     card: {
-        backgroundColor: Colors.bgElevated,
-        borderRadius: Radius.surface,
+        // GlassCard handles background and borders now
+    },
+    content: {
         padding: Spacing.md,
-        borderWidth: 0.5,
-        borderColor: Colors.border,
     },
     header: {
         flexDirection: 'row',

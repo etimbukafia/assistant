@@ -1,27 +1,28 @@
 export const Colors = {
-    // Base - Linen/Paper
-    bgBase: '#F9F6F2',
-    bgSurface: '#FFFFFF', // Added for cards/chips
-    bgElevated: '#FFFFFF',
+    // Base - Luxury Glass (Dark Mode)
+    bgBase: '#050B14', // Deep Executive Navy (almost black)
+    bgSurface: 'rgba(255, 255, 255, 0.08)', // Glass Surface fallback
+    bgElevated: 'rgba(22, 33, 62, 0.6)',
 
-    // Accents - Boutique Stationery
-    accentPrimary: '#7E2E2E', // Rich Auburn - Headlines & Primary CTAs
-    accentSecondary: '#D97745', // Natural Copper - Icons & Interactive accents
-    accentPrecision: '#1E3A8A', // Navy - Structure & Grounding
+    // Accents - Boutique Stationery preserved in Dark Mode
+    accentPrimary: '#7E2E2E', // Rich Auburn - Headlines & Primary CTAs (Glows)
+    accentSecondary: '#D97745', // Natural Copper - Icons & Interactive accents (Highlights)
+    accentPrecision: '#1A5F7A', // Teal - Precision/Insight (Replaces Navy for contrast)
+    accentMint: '#A0E8AF', // Soft Mint - Success/Growth (New)
 
     // Text
-    textPrimary: '#050505', // Obsidian Black - Maximum legibility
-    textSecondary: '#6B7280', // Grey for secondary text
-    textMuted: '#6B7280',   // Old value for consistency
+    textPrimary: '#FFFFFF', // White - Maximum legibility on dark
+    textSecondary: '#A0AEC0', // Cool Grey
+    textMuted: '#64748B',   // Slate
 
     // Borders
-    border: '#E5E7EB',
-    borderLight: '#E5E7EB', // Mapping to existing border for now to avoid regression
-    borderStrong: '#1E3A8A', // Navy for grounding dividers
+    border: 'rgba(255, 255, 255, 0.1)',
+    borderLight: 'rgba(255, 255, 255, 0.05)',
+    borderStrong: 'rgba(255, 255, 255, 0.2)',
 
     // Status
     success: '#8A9A5B', // Sage Green
-    error: '#800020', // Burgundy
+    error: '#FF6B6B', // Softer Red for dark mode readability
 };
 
 export const Spacing = {

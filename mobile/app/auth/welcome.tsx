@@ -6,6 +6,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
+import { ImmersiveBackground } from '../../src/components/ui/ImmersiveBackground';
+import { Glass } from '../../src/theme/Glass';
 
 const { width } = Dimensions.get('window');
 
@@ -35,55 +37,59 @@ export default function WelcomeScreen() {
     };
 
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar style="dark" />
+        <ImmersiveBackground style={styles.container}>
+            <StatusBar style="light" />
 
-            {/* Header / Nav */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                    <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.content}>
-                {/* Title Section */}
-                <View style={styles.titleContainer}>
-                    <DonnaText style={styles.title}>
-                        Welcome!
-                    </DonnaText>
-                </View>
-
-                {/* Auth Actions */}
-                <View style={styles.actionsContainer}>
-                    {/* Google Button */}
-                    <TouchableOpacity
-                        style={[styles.googleButton, isLoading && styles.googleButtonDisabled]}
-                        activeOpacity={0.9}
-                        onPress={handleGoogleAuth}
-                        disabled={isLoading}
-                    >
-                        {isLoading ? (
-                            <ActivityIndicator size="small" color="#4285F4" />
-                        ) : (
-                            <>
-                                {/* Visual G icon placeholder or text */}
-                                <View style={styles.googleIconPlaceholder}>
-                                    <DonnaText style={styles.googleIconText}>G</DonnaText>
-                                </View>
-                                <DonnaText style={styles.googleButtonText}>Continue with Google</DonnaText>
-                            </>
-                        )}
+            <SafeAreaView style={styles.safeArea}>
+                {/* Header / Nav */}
+                <View style={styles.header}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                        <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
                     </TouchableOpacity>
                 </View>
-            </View>
-        </SafeAreaView>
+
+                <View style={styles.content}>
+                    {/* Title Section */}
+                    <View style={styles.titleContainer}>
+                        <DonnaText style={styles.title}>
+                            Welcome!
+                        </DonnaText>
+                    </View>
+
+                    {/* Auth Actions */}
+                    <View style={styles.actionsContainer}>
+                        {/* Google Button */}
+                        <TouchableOpacity
+                            style={[styles.googleButton, isLoading && styles.googleButtonDisabled]}
+                            activeOpacity={0.9}
+                            onPress={handleGoogleAuth}
+                            disabled={isLoading}
+                        >
+                            {isLoading ? (
+                                <ActivityIndicator size="small" color={Colors.bgBase} />
+                            ) : (
+                                <>
+                                    {/* Visual G icon placeholder or text */}
+                                    <View style={styles.googleIconPlaceholder}>
+                                        <DonnaText style={styles.googleIconText}>G</DonnaText>
+                                    </View>
+                                    <DonnaText style={styles.googleButtonText}>Continue with Google</DonnaText>
+                                </>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </SafeAreaView>
+        </ImmersiveBackground>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: Colors.bgBase, // Linen
+    },
+    safeArea: {
+        flex: 1,
     },
     header: {
         paddingHorizontal: Spacing.lg,
@@ -91,6 +97,14 @@ const styles = StyleSheet.create({
     },
     backButton: {
         padding: Spacing.xs,
+        width: 40,
+        height: 40,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderRadius: Radius.full,
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
     },
     content: {
         flex: 1,
@@ -104,10 +118,18 @@ const styles = StyleSheet.create({
     },
     title: {
         fontFamily: 'PlayfairDisplay_600SemiBold',
-        fontSize: 32,
-        lineHeight: 40, // Prevent clipping
-        color: Colors.accentPrimary, // Rich Auburn
+        fontSize: 36,
+        lineHeight: 44,
+        color: '#FFFFFF',
         textAlign: 'center',
+        marginBottom: Spacing.sm,
+    },
+    subtitle: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 16,
+        color: Colors.textSecondary,
+        textAlign: 'center',
+        opacity: 0.8,
     },
     actionsContainer: {
         width: '100%',
@@ -122,10 +144,10 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 4,
-        elevation: 3,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 5,
         marginBottom: Spacing.sm,
     },
     googleButtonDisabled: {
@@ -137,61 +159,12 @@ const styles = StyleSheet.create({
     googleIconText: {
         fontSize: 20,
         fontWeight: 'bold',
-        color: '#4285F4', // Google Blue
+        color: Colors.bgBase, // Dark text
     },
     googleButtonText: {
         fontFamily: 'Inter_400Regular',
         fontSize: 16,
-        color: '#3C4043', // Dark grey text
-        fontWeight: '500',
-    },
-    socialButton: {
-        width: '100%',
-        height: 56,
-        borderRadius: Radius.full,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        opacity: 0.5, // Dimmed to show it's disabled/placeholder
-    },
-    socialButtonText: {
-        fontFamily: 'Inter_400Regular',
-        fontSize: 16,
-        color: '#FFFFFF',
-        fontWeight: '500',
-    },
-    dividerContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginVertical: Spacing.lg,
-        opacity: 0.6,
-    },
-    dividerLine: {
-        flex: 1,
-        height: 1,
-        backgroundColor: Colors.border,
-    },
-    dividerText: {
-        marginHorizontal: Spacing.md,
-        color: Colors.textMuted,
-        fontFamily: 'Inter_400Regular',
-        fontSize: 14,
-    },
-    footerContainer: {
-        flexDirection: 'row',
-        justifyContent: 'center',
-        width: '100%',
-        marginTop: Spacing.sm,
-    },
-    footerText: {
-        fontFamily: 'Inter_400Regular',
-        fontSize: 15,
-        color: Colors.textMuted,
-    },
-    linkText: {
-        fontFamily: 'Inter_400Regular',
-        fontSize: 15,
-        color: '#4ADE80', // Lighter green for visibility
+        color: Colors.bgBase, // Dark text
         fontWeight: '600',
     },
 });

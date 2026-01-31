@@ -55,7 +55,11 @@ function GlobalChatOverlay() {
   return <OmniChatOverlay isVisible={isChatOpen} onClose={closeChat} />;
 }
 
+import { CustomSplashScreen } from '../src/components/ui/CustomSplashScreen';
+import { useState } from 'react';
+
 export default function RootLayout() {
+  const [appReady, setAppReady] = useState(false);
   const [loaded, error] = useFonts({
     PlayfairDisplay_600SemiBold,
     PlayfairDisplay_400Regular,
@@ -69,22 +73,25 @@ export default function RootLayout() {
   }, [error]);
 
   useEffect(() => {
-    const hideSplash = async () => {
+    const prepare = async () => {
       if (loaded) {
-        // Small delay to ensure native splash screen is registered
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Enforce minimum splash duration for branding impact
+        await new Promise(resolve => setTimeout(resolve, 2500));
+
         try {
           await SplashScreen.hideAsync();
         } catch (e) {
-          // Ignore - splash screen may already be hidden or not registered
+          // Ignore
+        } finally {
+          setAppReady(true);
         }
       }
     };
-    hideSplash();
+    prepare();
   }, [loaded]);
 
-  if (!loaded) {
-    return null;
+  if (!appReady) {
+    return <CustomSplashScreen />;
   }
 
   return (

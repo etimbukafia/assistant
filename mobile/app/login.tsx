@@ -5,6 +5,9 @@ import { useRouter } from 'expo-router';
 import { Colors, Spacing, Typography, Radius } from '../src/theme/Theme';
 import { DonnaText } from '../src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
+import { ImmersiveBackground } from '../src/components/ui/ImmersiveBackground';
+import { Glass } from '../src/theme/Glass';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width } = Dimensions.get('window');
 
@@ -15,56 +18,58 @@ export default function LoginScreen() {
         router.push('/auth/welcome' as any);
     };
 
-
-
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar style="dark" />
+        <ImmersiveBackground style={styles.container}>
+            <StatusBar style="light" />
 
-            <View style={styles.content}>
-                {/* Brand Section */}
-                <View style={styles.brandContainer}>
-                    <View style={styles.logoRow}>
-                        <DonnaText style={styles.logoText}>CORT</DonnaText>
-                        <DonnaText style={[styles.logoText, { color: Colors.accentPrimary }]}>A</DonnaText>
+            <SafeAreaView style={styles.safeArea}>
+                <View style={styles.content}>
+                    {/* Brand Section */}
+                    <View style={styles.brandContainer}>
+                        <View style={styles.logoRow}>
+                            <DonnaText style={styles.logoText}>TEEKS</DonnaText>
+                        </View>
+
+                        <DonnaText style={styles.slogan}>
+                            AI personal assistant for assistants
+                        </DonnaText>
+
+                        <View style={styles.divider} />
                     </View>
 
-                    <DonnaText style={styles.slogan}>
-                        AI personal assistant for assistants
-                    </DonnaText>
-
-                    <View style={styles.divider} />
+                    {/* Actions Section */}
+                    <View style={styles.actionsContainer}>
+                        <TouchableOpacity
+                            style={styles.primaryButton}
+                            activeOpacity={0.9}
+                            onPress={handleLogin}
+                        >
+                            <DonnaText style={styles.primaryButtonText}>Log in</DonnaText>
+                            <Ionicons name="arrow-forward" size={20} color="#FFFFFF" style={{ marginLeft: 8 }} />
+                        </TouchableOpacity>
+                    </View>
                 </View>
-
-                {/* Actions Section */}
-                <View style={styles.actionsContainer}>
-                    <TouchableOpacity
-                        style={styles.primaryButton}
-                        activeOpacity={0.9}
-                        onPress={handleLogin}
-                    >
-                        <DonnaText style={styles.primaryButtonText}>Log in</DonnaText>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </SafeAreaView>
+            </SafeAreaView>
+        </ImmersiveBackground>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: Colors.bgBase,
+    },
+    safeArea: {
+        flex: 1,
     },
     content: {
         flex: 1,
         justifyContent: 'center',
         paddingHorizontal: Spacing.xl,
-        paddingBottom: Spacing.xxl, // visual balance
+        paddingBottom: Spacing.xxl,
     },
     brandContainer: {
         alignItems: 'center',
-        marginBottom: Spacing.xxl * 1.5,
+        marginBottom: Spacing.xxl * 2,
     },
     logoRow: {
         flexDirection: 'row',
@@ -73,24 +78,28 @@ const styles = StyleSheet.create({
     },
     logoText: {
         ...Typography.logo,
-        color: Colors.textPrimary,
-        lineHeight: 60,
+        color: Colors.textPrimary, // White text on dark glass background
+        fontSize: 48,
+        lineHeight: 68, // Fix clipping
+        letterSpacing: 6,
+        paddingVertical: 10, // Extra safety for custom font rendering
     },
     slogan: {
         ...Typography.bodyBase,
-        letterSpacing: 1.5,
-        color: Colors.textPrimary,
-        opacity: 0.9,
+        letterSpacing: 2,
+        color: Colors.textSecondary,
+        opacity: 0.8,
         marginBottom: Spacing.lg,
         textAlign: 'center',
-        fontFamily: 'Inter_400Regular',
+        fontSize: 14,
+        textTransform: 'uppercase',
     },
     divider: {
         width: 40,
         height: 1,
-        backgroundColor: Colors.accentPrimary,
-        opacity: 0.5,
-        marginBottom: Spacing.lg,
+        backgroundColor: Colors.accentSecondary, // Copper divider
+        opacity: 0.8,
+        marginTop: Spacing.md,
     },
 
     actionsContainer: {
@@ -101,15 +110,18 @@ const styles = StyleSheet.create({
     primaryButton: {
         width: '100%',
         height: 56,
-        backgroundColor: Colors.accentPrimary,
-        borderRadius: Radius.full, // Pill shape
+        backgroundColor: Colors.accentPrimary, // Auburn
+        borderRadius: Radius.full,
+        flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'center',
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
-        shadowRadius: 8,
+        shadowRadius: 12,
         elevation: 5,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
     },
     primaryButtonText: {
         fontFamily: 'Inter_400Regular',
@@ -119,5 +131,4 @@ const styles = StyleSheet.create({
         color: '#FFFFFF',
         textTransform: 'uppercase',
     },
-
 });

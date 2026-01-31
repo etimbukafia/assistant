@@ -14,6 +14,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
 import { useMessages } from '../../src/hooks/useMessages';
 import { useTaskMutations } from '../../src/hooks/useTasks';
+import { ImmersiveBackground } from '../../src/components/ui/ImmersiveBackground';
+import { Glass } from '../../src/theme/Glass';
 
 type FilterType = 'all' | 'needs_reply' | 'today';
 
@@ -107,7 +109,7 @@ export default function DashboardScreen() {
     <View style={styles.header}>
       {/* Title Row with Actions */}
       <View style={styles.titleRow}>
-        <DonnaText variant="h1" style={styles.greeting}>Inbox</DonnaText>
+        <DonnaText variant="h1" style={styles.greeting}>Good Afternoon, J.</DonnaText>
         <View style={styles.headerActions}>
           {/* Focus Mode Toggle */}
           <TouchableOpacity
@@ -195,8 +197,8 @@ export default function DashboardScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <StatusBar style="dark" />
+    <ImmersiveBackground style={styles.container}>
+      <StatusBar style="light" />
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id.toString()}
@@ -240,14 +242,14 @@ export default function DashboardScreen() {
           </View>
         }
       />
-    </View>
+    </ImmersiveBackground>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.bgBase,
+    // Background handled by ImmersiveBackground
   },
   center: {
     justifyContent: 'center',
@@ -255,7 +257,6 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingTop: Spacing.xl,
-    backgroundColor: Colors.bgBase,
     paddingBottom: Spacing.sm,
   },
   titleRow: {
@@ -267,6 +268,7 @@ const styles = StyleSheet.create({
   },
   greeting: {
     // No margin needed
+    color: Colors.textPrimary, // Ensure text is white
   },
   headerActions: {
     flexDirection: 'row',
@@ -274,10 +276,10 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     padding: Spacing.sm,
-    backgroundColor: Colors.bgSurface,
+    backgroundColor: Glass.default.backgroundColor,
     borderRadius: Radius.full,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Glass.default.borderColor,
   },
   actionButtonActive: {
     backgroundColor: Colors.accentSecondary,
@@ -298,10 +300,10 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
     paddingHorizontal: Spacing.sm,
     paddingVertical: Spacing.xs,
-    backgroundColor: 'rgba(217, 119, 69, 0.1)', // Natural Copper at 10%
+    backgroundColor: Glass.warm.backgroundColor,
     borderRadius: Radius.component,
     borderWidth: 1,
-    borderColor: 'rgba(217, 119, 69, 0.2)', // Natural Copper at 20%
+    borderColor: Glass.warm.borderColor,
   },
   focusBannerText: {
     fontSize: 12,
@@ -311,13 +313,13 @@ const styles = StyleSheet.create({
   syncBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.bgSurface,
+    backgroundColor: Glass.default.backgroundColor,
     marginHorizontal: Spacing.md,
     marginBottom: Spacing.sm,
     padding: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Glass.default.borderColor,
     gap: Spacing.md,
   },
   syncContent: {
@@ -339,9 +341,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
     borderRadius: Radius.full,
-    backgroundColor: Colors.bgSurface,
+    backgroundColor: Glass.default.backgroundColor,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Glass.default.borderColor,
     marginRight: Spacing.sm,
   },
   filterChipActive: {
@@ -358,7 +360,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filterTextActive: {
-    color: '#FFFFFF',
+    color: Colors.bgBase, // Dark Text on Light Chip
   },
   listContent: {
     paddingBottom: Spacing.xl,
@@ -375,6 +377,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     marginTop: Spacing.md,
     marginBottom: Spacing.xs,
+    color: Colors.textPrimary,
   },
   emptyText: {
     color: Colors.textMuted,
