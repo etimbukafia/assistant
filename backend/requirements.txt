@@ -1,33 +1,41 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-sqlalchemy==2.0.25
-google-api-python-client==2.115.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.0
-google-genai>=1.0.0
-python-dotenv==1.0.0
-pydantic==2.5.3
-pydantic-settings==2.1.0
-apscheduler==3.10.4
-cryptography==41.0.7
+# Web Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+starlette>=0.35.0
 
-# Local LLM inference (Qwen2.5-0.5B-Instruct)
+# Database
+sqlalchemy>=2.0.25
+psycopg2-binary>=2.9.9
+
+# Google APIs & AI
+google-api-python-client>=2.115.0
+google-auth>=2.0.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+google-genai>=1.0.0
+
+# Core
+python-dotenv>=1.0.0
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+cryptography>=41.0.7
+
+# Auth
+PyJWT>=2.8.0
+
+# AI/ML (for local inference)
 transformers>=4.37.0
 torch>=2.0.0
-outlines>=0.1.14  # Structured JSON generation via constrained decoding
-sentence-transformers>=2.2.0  # Email classification (MiniLM embeddings)
+sentence-transformers>=2.2.0
+
+# Payments
+polar-sdk>=0.28.0
+
+# HTTP Client
+httpx>=0.26.0
 
 # Testing
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 pytest-cov>=4.1.0
 pytest-mock>=3.12.0
-httpx>=0.26.0  # For FastAPI TestClient async support
-resend>=2.0.0  # For sending test emails
-
-# Database
-psycopg2-binary>=2.9.9  # PostgreSQL adapter
-
-# Auth
-supabase>=2.0.0
-python-jose[cryptography]>=3.3.0
