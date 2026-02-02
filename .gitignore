@@ -32,6 +32,7 @@ tests/
 # Except markdown files in design
 !design/
 !design/*.md
+!claude.md
 
 # Google credentials
 credentials.json

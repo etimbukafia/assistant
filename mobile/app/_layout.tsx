@@ -76,7 +76,7 @@ export default function RootLayout() {
     const prepare = async () => {
       if (loaded) {
         // Enforce minimum splash duration for branding impact
-        await new Promise(resolve => setTimeout(resolve, 2500));
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
         try {
           await SplashScreen.hideAsync();

@@ -40,6 +40,7 @@ class Settings:
     POLAR_PRODUCT_ID: str = os.getenv("POLAR_PRODUCT_ID", "")
     
     # Application
+    ENV: str = os.getenv("ENV", "development")  # development | staging | production
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 
@@ -55,6 +56,12 @@ class Settings:
     
     # Trial
     TRIAL_DURATION_DAYS: int = int(os.getenv("TRIAL_DURATION_DAYS", "7"))
+
+    # Cloudflare Zero Trust Service Token
+    # When set, all requests must include matching CF-Access-Client-Id/Secret headers.
+    # Leave empty to disable (e.g. in production behind Cloudflare tunnel).
+    CF_ACCESS_CLIENT_ID: str = os.getenv("CF_ACCESS_CLIENT_ID", "")
+    CF_ACCESS_CLIENT_SECRET: str = os.getenv("CF_ACCESS_CLIENT_SECRET", "")
 
     def validate(self) -> list[str]:
         """

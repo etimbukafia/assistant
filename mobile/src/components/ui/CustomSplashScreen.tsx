@@ -3,55 +3,40 @@ import { StyleSheet, View, Image } from 'react-native';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
-    withSpring,
-    withRepeat,
-    withSequence,
     withTiming,
     Easing
 } from 'react-native-reanimated';
 import { ImmersiveBackground } from './ImmersiveBackground';
 import { DonnaText } from './DonnaText';
-import { Colors, Spacing } from '../../theme/Theme';
+import { Colors, Typography } from '../../theme/Theme';
 
 export const CustomSplashScreen = () => {
-    const scale = useSharedValue(0.9);
     const opacity = useSharedValue(0);
 
     useEffect(() => {
-        // Fade in
-        opacity.value = withTiming(1, { duration: 800 });
-
-        // Gentle breathing animation
-        scale.value = withRepeat(
-            withSequence(
-                withTiming(1, { duration: 1500, easing: Easing.inOut(Easing.ease) }),
-                withTiming(0.95, { duration: 1500, easing: Easing.inOut(Easing.ease) })
-            ),
-            -1,
-            true
-        );
+        // Simple, elegant fade in
+        opacity.value = withTiming(1, {
+            duration: 800,
+            easing: Easing.out(Easing.ease)
+        });
     }, []);
 
     const animatedStyle = useAnimatedStyle(() => ({
-        transform: [{ scale: scale.value }],
         opacity: opacity.value,
     }));
 
     return (
         <ImmersiveBackground style={styles.container}>
             <View style={styles.content}>
-                <Animated.View style={[styles.logoContainer, animatedStyle]}>
+                <Animated.View style={[styles.logoRow, animatedStyle]}>
+                    {/* "T" Logo Icon */}
                     <Image
-                        source={require('../../../assets/images/teeks-brand-logo.png')}
-                        style={styles.logo}
+                        source={require('../../../assets/teeks_logo_cleaned_1769863142071.png')}
+                        style={styles.logoIcon}
                         resizeMode="contain"
                     />
-                </Animated.View>
-
-                <Animated.View style={{ opacity: opacity }}>
-                    <DonnaText style={styles.tagline}>
-                        AI personal assistant for assistants
-                    </DonnaText>
+                    {/* "eeks" Text */}
+                    <DonnaText style={styles.logoText}>eeks</DonnaText>
                 </Animated.View>
             </View>
         </ImmersiveBackground>
@@ -67,23 +52,19 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    logoContainer: {
-        marginBottom: Spacing.xl,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.3,
-        shadowRadius: 20,
+    logoRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
-    logo: {
-        width: 180,
-        height: 180,
+    logoIcon: {
+        width: 48,
+        height: 48,
+        marginRight: 4,
     },
-    tagline: {
-        fontFamily: 'Inter_400Regular',
-        fontSize: 14,
-        color: Colors.textSecondary,
+    logoText: {
+        ...Typography.logo,
+        color: Colors.textPrimary,
+        fontSize: 42,
         letterSpacing: 2,
-        textTransform: 'uppercase',
-        opacity: 0.8,
     },
 });

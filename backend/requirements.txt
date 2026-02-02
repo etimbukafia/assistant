@@ -12,7 +12,7 @@ google-api-python-client>=2.115.0
 google-auth>=2.0.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
-google-genai>=1.0.0
+google-genai>=1.61.0
 
 # Core
 python-dotenv>=1.0.0
@@ -23,10 +23,11 @@ cryptography>=41.0.7
 # Auth
 PyJWT>=2.8.0
 
-# AI/ML (for local inference)
-transformers>=4.37.0
-torch>=2.0.0
-sentence-transformers>=2.2.0
+# AI/ML (ONNX-based email classification)
+onnxruntime>=1.17.0
+tokenizers>=0.15.0
+huggingface-hub>=0.20.0
+numpy>=1.24.0
 
 # Payments
 polar-sdk>=0.28.0

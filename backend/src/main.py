@@ -31,6 +31,7 @@ from app.routes.v1 import (
 )
 from app.handlers.webhook_handlers import router as billing_router
 from app.security.rate_limiter import RateLimitMiddleware
+from app.security.cloudflare_gate import CloudflareGateMiddleware
 
 app = FastAPI(
     title="AI Assistant for Assistants",
@@ -52,6 +53,9 @@ app.add_middleware(
 
 # Rate limiting middleware (applied to chat and sync endpoints)
 app.add_middleware(RateLimitMiddleware)
+
+# Cloudflare Zero Trust gate — enforced in dev/staging, no-op in production
+app.add_middleware(CloudflareGateMiddleware)
 
 # Initialize database and logging on startup
 @app.on_event("startup")
