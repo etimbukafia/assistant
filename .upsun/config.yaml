@@ -1,0 +1,58 @@
+# https://docs.upsun.com/app/reference/
+applications:
+  backend:
+    source:
+      root: "backend"
+
+    type: "python:3.13"
+
+    relationships:
+      postgresql:
+
+    # Writable directories after build
+    mounts:
+      "/var/hf-cache":
+        source: "storage"
+        source_path: "hf-cache"
+
+    web:
+      commands:
+        start: "uvicorn src.main:app --host 0.0.0.0 --uds $SOCKET"
+      upstream:
+        socket_family: unix
+      locations:
+        "/":
+          passthru: true
+
+    workers:
+      queue-worker:
+        commands:
+          start: "python -m src.app.jobs.worker"
+
+    variables:
+      env:
+        HF_HOME: "/app/var/hf-cache"
+        LLM_PROVIDER: "gemini"
+
+    build:
+      flavor: none
+
+    hooks:
+      build: |
+        set -eux
+        pip install -r requirements.txt
+
+      deploy: |
+        set -eux
+
+services:
+  postgresql:
+    type: postgresql:16
+
+routes:
+  "https://{default}/":
+    type: upstream
+    upstream: "backend:http"
+  "https://www.{default}":
+    type: redirect
+    to: "https://{default}/"
