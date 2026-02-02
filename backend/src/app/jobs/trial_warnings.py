@@ -196,7 +196,7 @@ async def handle_check_trial_expirations(
     warning notifications. Self-reschedules for the next day.
     """
     from app.infra.database import SessionLocal
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
     
     db = SessionLocal()
     now = datetime.now(timezone.utc)

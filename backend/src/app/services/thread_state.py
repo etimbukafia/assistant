@@ -343,7 +343,7 @@ class ThreadStateService:
         self.db.flush()  # Get task.id for event emission
         
         # Emit task_created event for reminder scheduling
-        from app.jobs.queue import enqueue_task
+        from app.jobs.task_queue import enqueue_task
         enqueue_task(
             task_type="emit_event",
             payload={

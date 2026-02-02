@@ -23,7 +23,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory, TaskQueue
-from app.jobs.queue import queue_service
+from app.jobs.task_queue import queue_service
 from .orchestrator import ChatOrchestrator
 
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ from app.infra.database import init_db, SessionLocal
 from app.infra.logging_config import setup_logging
 import app.handlers # Register event handlers
 from app.data.models import TaskQueue
-from app.jobs.queue import queue_service
+from app.jobs.task_queue import queue_service
 from app.jobs.worker import get_next_cleanup_time, get_next_chat_cleanup_time
 
 # Router imports

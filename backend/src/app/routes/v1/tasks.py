@@ -11,7 +11,7 @@ from app.data.schemas import (
     ManualTaskCreateRequest, TaskUpdateRequest, TaskSnoozeRequest
 )
 from app.intelligence.pattern_tracker import track_task_action
-from app.jobs.queue import enqueue_task
+from app.jobs.task_queue import enqueue_task
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 

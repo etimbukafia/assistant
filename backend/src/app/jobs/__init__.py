@@ -1,4 +1,4 @@
-from .queue import enqueue_task, queue_service, QueueService
+from .task_queue import enqueue_task, queue_service, QueueService
 from .worker import BATCH_HANDLERS
 
 __all__ = [

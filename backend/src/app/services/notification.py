@@ -119,7 +119,7 @@ class NotificationService:
 
     def _send_push(self, notification: Notification):
         """Enqueue push notification for async delivery with retry support."""
-        from app.jobs.queue import enqueue_task
+        from app.jobs.task_queue import enqueue_task
 
         # Check preferences before enqueueing
         settings = self.db.query(UserSettings).filter(

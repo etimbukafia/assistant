@@ -5,7 +5,7 @@ from app.security.auth import get_user_settings, get_db_for_user, get_current_us
 from app.data.models import UserSettings, Digest
 from app.data.schemas import DigestPreferences, DigestsListResponse, DigestResponse
 from app.jobs.worker import schedule_digest_jobs_if_needed
-from app.jobs.queue import enqueue_task
+from app.jobs.task_queue import enqueue_task
 
 router = APIRouter(prefix="/digests", tags=["Digests"])
 

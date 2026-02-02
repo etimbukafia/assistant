@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from core.events import register_handler
 from app.infra.database import SessionLocal
 from app.data.models import Message
-from app.jobs.queue import enqueue_task
+from app.jobs.task_queue import enqueue_task
 from app.processors.document import document_processor
 from app.integrations.gmail import GmailClient
 from sqlalchemy import text

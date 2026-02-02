@@ -568,7 +568,7 @@ class CalendarService:
             Dict with created, updated, unchanged counts
         """
         from app.data.models import CalendarEvent
-        from app.jobs.queue import enqueue_task
+        from app.jobs.task_queue import enqueue_task
 
         events = await self.get_upcoming_events(days_ahead=days_ahead)
         now = datetime.now(timezone.utc)

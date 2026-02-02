@@ -15,7 +15,7 @@ from fastapi import BackgroundTasks
 
 from core.events import emit_event
 from core.queue import Worker, BatchWorker
-from app.jobs.queue import queue_service
+from app.jobs.task_queue import queue_service
 from app.jobs.trial_warnings import handle_check_trial_expirations, get_next_trial_check_time
 from sqlalchemy import text
 
@@ -313,7 +313,7 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
     from app.data.models import Task, Message, UserSettings, TaskReminder
     from app.infra.database import SessionLocal
     from app.processors.ai import AIProcessor
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -482,7 +482,7 @@ async def handle_data_cleanup(task_id: int, task_type: str, payload: Dict[str, A
     """
     from app.data.models import Message, Task
     from app.infra.database import SessionLocal
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     RETENTION_DAYS = 30
 
@@ -572,7 +572,7 @@ async def handle_chat_cleanup(task_id: int, task_type: str, payload: Dict[str, A
     """
     from app.chat import ChatService
     from app.infra.database import SessionLocal
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     db = SessionLocal()
     try:
@@ -656,7 +656,7 @@ async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[s
         )
 
         # Emit event for UI notification
-        from app.jobs.queue import enqueue_task
+        from app.jobs.task_queue import enqueue_task
         enqueue_task(
             task_type="emit_event",
             payload={
@@ -695,7 +695,7 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
     from app.integrations.gmail import GmailClient
     from app.security.encryption import encrypt_body
     from app.services.email_filter import EmailFilterService, FilterAction
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     user_id = payload.get("user_id")
     hours_back = payload.get("hours_back", 24)
@@ -880,7 +880,7 @@ async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str
     from app.data.models import UserSettings, Digest
     from app.infra.database import SessionLocal
     from app.services.digest import DigestService
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -1004,7 +1004,7 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
     """
     from app.data.models import Digest
     from app.infra.database import SessionLocal
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -1127,7 +1127,7 @@ def schedule_digest_jobs_if_needed(db):
     Ensures exactly one pending job per (user, digest_type) combination.
     """
     from app.data.models import UserSettings, TaskQueue
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     # Query all pending digest jobs once (O(1) queries, not O(users * types))
     pending_jobs = db.query(TaskQueue).filter(
@@ -1290,7 +1290,7 @@ async def handle_cleanup_stuck_chat_messages(task_id: int, task_type: str, paylo
     """
     from app.data.models import ChatMessage
     from app.infra.database import SessionLocal
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     # 5 minutes timeout for background cleanup (longer than 2-min TTL-on-read)
     BACKGROUND_TIMEOUT_MINUTES = 5
@@ -1435,7 +1435,7 @@ def schedule_cleanup_jobs_if_needed(db):
     Called on worker startup to ensure cleanup jobs are running.
     """
     from app.data.models import TaskQueue
-    from app.jobs.queue import enqueue_task
+    from app.jobs.task_queue import enqueue_task
 
     cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations"]
 

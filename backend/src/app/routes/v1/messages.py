@@ -14,7 +14,7 @@ from app.data.schemas import (
     DraftReplyRequest, DraftReplyResponse
 )
 from app.jobs.worker import handle_process_email_batch
-from app.jobs.queue import queue_service
+from app.jobs.task_queue import queue_service
 from core.events import emit_event
 from app.processors.ai import AIProcessor
 from app.services.thread_state import ThreadStateService
@@ -684,7 +684,7 @@ def delete_message(message_id: int, db: Session = Depends(get_db_for_user)):
 # ========================================
 
 from app.security.feature_gating import require_feature, Feature
-from app.jobs.queue import enqueue_task
+from app.jobs.task_queue import enqueue_task
 
 @router.post("/gmail/sync/initial")
 def trigger_initial_sync(

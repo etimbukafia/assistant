@@ -17,7 +17,7 @@ from app.data.models import Message, GmailAccount
 from app.integrations.gmail import GmailClient
 from app.services.email_filter import EmailFilterService, FilterAction
 from app.security.encryption import encrypt_body
-from app.jobs.queue import queue_service
+from app.jobs.task_queue import queue_service
 from app.jobs.worker import handle_process_email_batch
 
 logger = logging.getLogger(__name__)
