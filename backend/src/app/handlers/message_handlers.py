@@ -246,6 +246,27 @@ async def process_attachments(event: Dict[str, Any], payload: Dict[str, Any]):
         message.attachment_insights = insights
         db.commit()
 
+        # Notify user about skipped attachments
+        if skipped:
+            try:
+                from app.services.notification import NotificationService
+                svc = NotificationService(db, user_id)
+
+                skipped_names = ", ".join(s["filename"] for s in skipped[:3])
+                suffix = f" and {len(skipped) - 3} more" if len(skipped) > 3 else ""
+
+                svc.create_notification(
+                    title=f"{len(skipped)} attachment(s) couldn't be processed",
+                    body=f"{skipped_names}{suffix}",
+                    category="system",
+                    priority="normal",
+                    target_type="message",
+                    target_id=str(message_id),
+                    send_push=False,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create attachment skip notification: {e}")
+
         logger.info(
             f"Attachment processing complete for message {message_id}: "
             f"processed={insights.get('processed_count', 0)}, skipped={len(skipped)}",

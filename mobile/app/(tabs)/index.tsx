@@ -12,7 +12,7 @@ import { Message } from '../../src/services/messages';
 import { parseISO, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
-import { useMessages } from '../../src/hooks/useMessages';
+import { useMessages, useProcessingStatus } from '../../src/hooks/useMessages';
 import { useTaskMutations } from '../../src/hooks/useTasks';
 import { ImmersiveBackground } from '../../src/components/ui/ImmersiveBackground';
 import { Glass } from '../../src/theme/Glass';
@@ -24,9 +24,20 @@ export default function DashboardScreen() {
   const { isSandbox, isActive, subscriptionTier, initialSyncCompleted } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
   const [focusMode, setFocusMode] = useState(false);
+  const [processingActive, setProcessingActive] = useState(false);
 
   // Fetch messages - disabled in sandbox mode
   const { data: messagesResponse, isLoading, isRefetching, refetch } = useMessages({ enabled: !isSandbox });
+
+  // Processing status polling - starts on pull-to-refresh
+  const { data: processingData } = useProcessingStatus(!isSandbox && isActive && processingActive);
+  const processingCount = processingData?.processing_count ?? 0;
+
+  React.useEffect(() => {
+    if (processingActive && processingCount === 0 && processingData !== undefined) {
+      setProcessingActive(false);
+    }
+  }, [processingActive, processingCount, processingData]);
   const { approve, dismiss } = useTaskMutations();
 
   const handleApproveTask = useCallback((taskId: number) => {
@@ -68,7 +79,10 @@ export default function DashboardScreen() {
 
   const onRefresh = React.useCallback(() => {
     refetch();
-  }, [refetch]);
+    if (!isSandbox && isActive) {
+      setProcessingActive(true);
+    }
+  }, [refetch, isSandbox, isActive]);
 
   const filteredMessages = useMemo(() => {
     let filtered = messages;
@@ -146,6 +160,19 @@ export default function DashboardScreen() {
           <View style={styles.syncContent}>
             <DonnaText style={styles.syncTitle}>Syncing your world...</DonnaText>
             <DonnaText style={styles.syncDesc}>Processing emails from the last 24 hours.</DonnaText>
+          </View>
+        </View>
+      )}
+
+      {/* Processing Status Banner */}
+      {processingActive && processingCount > 0 && (
+        <View style={styles.syncBanner}>
+          <ActivityIndicator size="small" color={Colors.accentSecondary} />
+          <View style={styles.syncContent}>
+            <DonnaText style={styles.syncTitle}>
+              Processing {processingCount} email{processingCount !== 1 ? 's' : ''}...
+            </DonnaText>
+            <DonnaText style={styles.syncDesc}>AI is analyzing your messages</DonnaText>
           </View>
         </View>
       )}

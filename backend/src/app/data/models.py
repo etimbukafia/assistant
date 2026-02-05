@@ -749,5 +749,19 @@ class Notification(Base):
     push_sent = Column(Boolean, default=False)
     push_sent_at = Column(DateTime, nullable=True)
     push_ticket_id = Column(String, nullable=True)
+    push_error = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class WebhookLog(Base):
+    """Append-only log of incoming webhooks for health monitoring and audit."""
+    __tablename__ = "webhook_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String, nullable=False, index=True)        # "polar" | "gmail"
+    event_type = Column(String, nullable=False, index=True)    # e.g. "subscription.created", "gmail_push"
+    processed = Column(Boolean, default=False)
+    error = Column(Text, nullable=True)
+    customer_id = Column(String, nullable=True)                # Polar customer_id or email address
+    received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

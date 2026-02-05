@@ -1,0 +1,21 @@
+<svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad_ashlar" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7E2E2E;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#D97745;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Ashlar Stone / Grid Concept -->
+  <!-- Top Bar Blocks -->
+  <rect x="80" y="100" width="70" height="45" rx="4" fill="url(#grad_ashlar)" />
+  <rect x="155" y="100" width="90" height="45" rx="4" fill="#D97745" />
+  <rect x="250" y="100" width="70" height="45" rx="4" fill="url(#grad_ashlar)" />
+  
+  <!-- Stem Blocks -->
+  <rect x="175" y="150" width="50" height="50" rx="4" fill="url(#grad_ashlar)" />
+  <rect x="175" y="205" width="50" height="60" rx="4" fill="url(#grad_ashlar)" />
+  <rect x="175" y="270" width="50" height="30" rx="4" fill="#1E3A8A" />
+  
+  <!-- Side accent block representing that 'Masterpiece piece' -->
+  <rect x="230" y="160" width="20" height="20" rx="4" fill="#D97745" />
+</svg>

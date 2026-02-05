@@ -3,7 +3,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 
 from app.security.auth import get_db_for_user, get_db
-from app.data.models import Message, TaskQueue
+from datetime import datetime, timedelta, timezone
+
+from app.data.models import Message, TaskQueue, WebhookLog
 from core.events import get_registered_handlers
 
 router = APIRouter(prefix="", tags=["System"])
@@ -86,3 +88,63 @@ def get_queue_stats(db: Session = Depends(get_db)):
             "message": "Using SQLite or queue table not created. Use Supabase for Phase 2 queue.",
             "detail": str(e)
         }
+
+
+@router.get("/webhook-health")
+def get_webhook_health(db: Session = Depends(get_db)):
+    """Webhook delivery health summary for ops monitoring."""
+    now = datetime.now(timezone.utc)
+    since_24h = now - timedelta(hours=24)
+
+    result = {}
+    for source in ("polar", "gmail"):
+        # Last received
+        last = db.query(WebhookLog).filter(
+            WebhookLog.source == source,
+        ).order_by(WebhookLog.received_at.desc()).first()
+
+        # Counts in last 24h
+        total = db.query(func.count(WebhookLog.id)).filter(
+            WebhookLog.source == source,
+            WebhookLog.received_at >= since_24h,
+        ).scalar() or 0
+
+        errors = db.query(func.count(WebhookLog.id)).filter(
+            WebhookLog.source == source,
+            WebhookLog.received_at >= since_24h,
+            WebhookLog.processed == False,
+        ).scalar() or 0
+
+        result[source] = {
+            "last_received": last.received_at.isoformat() if last else None,
+            "last_24h": {"total": total, "processed": total - errors, "errors": errors},
+        }
+
+    return result
+
+
+@router.get("/ai-health")
+def get_ai_health(db: Session = Depends(get_db)):
+    """AI processing health: fallback rates over 1h and 24h windows."""
+    now = datetime.now(timezone.utc)
+
+    result = {}
+    for label, since in [("1h", now - timedelta(hours=1)), ("24h", now - timedelta(hours=24))]:
+        total = db.query(func.count(Message.id)).filter(
+            Message.processed == True,
+            Message.received_at >= since,
+        ).scalar() or 0
+
+        fallbacks = db.query(func.count(Message.id)).filter(
+            Message.processed == True,
+            Message.ai_fallback == True,
+            Message.received_at >= since,
+        ).scalar() or 0
+
+        result[label] = {
+            "total_processed": total,
+            "fallbacks": fallbacks,
+            "fallback_rate": round(fallbacks / total, 3) if total > 0 else 0.0,
+        }
+
+    return result

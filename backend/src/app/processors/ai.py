@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -9,9 +10,50 @@ from core.llm import LLMOrchestrator, LLMConfig
 logger = logging.getLogger(__name__)
 
 
+def _strip_quoted_replies(body: str) -> str:
+    """Strip quoted reply blocks from email body to reduce redundant content."""
+    # Remove "On <date>, <person> wrote:" blocks and everything after
+    pattern = r'\n\s*On .{10,80} wrote:\s*\n'
+    match = re.search(pattern, body)
+    if match:
+        body = body[:match.start()].rstrip()
+
+    # Remove lines starting with ">" (quoted text)
+    lines = body.split('\n')
+    cleaned = []
+    consecutive_quotes = 0
+    for line in lines:
+        if line.strip().startswith('>'):
+            consecutive_quotes += 1
+            if consecutive_quotes <= 2:
+                # Keep first couple of quoted lines for context
+                cleaned.append(line)
+        else:
+            consecutive_quotes = 0
+            cleaned.append(line)
+
+    return '\n'.join(cleaned).strip()
+
+
+def _prepare_body(body: str, max_length: int) -> str:
+    """Strip quoted replies and apply smart truncation (head + tail) if needed."""
+    body = _strip_quoted_replies(body)
+
+    if len(body) <= max_length:
+        return body
+
+    # Smart truncation: keep head and tail where action items often live
+    head_size = int(max_length * 0.7)
+    tail_size = max_length - head_size - 30  # 30 chars for marker
+    truncated = body[:head_size] + "\n\n[... content truncated ...]\n\n" + body[-tail_size:]
+
+    logger.info(f"Email body truncated from {len(body)} to {max_length} chars")
+    return truncated
+
+
 class AIProcessor:
-    MAX_BODY_LENGTH = 3000
-    MAX_SCHEDULING_BODY = 1500
+    MAX_BODY_LENGTH = 12000
+    MAX_SCHEDULING_BODY = 4000
     
     # Placeholder patterns for detection
     PLACEHOLDER_PATTERNS = ["[", "]", "{", "}", "INSERT", "TIME HERE", "NAME HERE", "YOUR", "THEIR"]
@@ -325,7 +367,7 @@ class AIProcessor:
             current_date=datetime.now(timezone.utc).strftime('%Y-%m-%d (%A)'),
             sender=message_data.get('sender', ''),
             subject=message_data.get('subject', ''),
-            body=message_data.get('body', '')[:3000]  # Limit body size
+            body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
         )
 
         try:
@@ -385,7 +427,7 @@ class AIProcessor:
                 current_date=current_date,
                 sender=msg.get('sender', ''),
                 subject=msg.get('subject', ''),
-                body=msg.get('body', '')[:self.MAX_BODY_LENGTH]
+                body=_prepare_body(msg.get('body', ''), self.MAX_BODY_LENGTH)
             )
             prompts.append(prompt)
         
@@ -470,7 +512,7 @@ class AIProcessor:
             message_count=thread_state.get('message_count', 0),
             sender=message_data.get('sender', ''),
             subject=message_data.get('subject', ''),
-            body=message_data.get('body', '')[:self.MAX_BODY_LENGTH]  # Limit body size
+            body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
         )
 
         try:
@@ -568,10 +610,10 @@ class AIProcessor:
                 message_count=thread_state.get('message_count', 0),
                 sender=message_data.get('sender', ''),
                 subject=message_data.get('subject', ''),
-                body=message_data.get('body', '')[:self.MAX_BODY_LENGTH]
+                body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
             )
             prompts.append(prompt)
-        
+
         try:
             # Single batch API call
             results = self._orchestrator.generate_batch(prompts)

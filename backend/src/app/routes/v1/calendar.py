@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.security.auth import get_db_for_user, get_user_settings, require_active_subscription, AuthenticatedUser
+from app.security.feature_gating import require_feature, Feature
 from app.data.models import CalendarEvent, UserSettings
 from app.data.schemas import (
     CalendarEventCreateRequest, CalendarEventResponse, 
@@ -208,7 +209,8 @@ def update_calendar_settings(
 @router.post("/events/{event_id}/generate-followups")
 def generate_meeting_followups(
     event_id: int,
-    db: Session = Depends(get_db_for_user)
+    db: Session = Depends(get_db_for_user),
+    _gate=Depends(require_feature(Feature.CALENDAR_SYNC)),
 ):
     """
     Generate follow-up items for a completed meeting.

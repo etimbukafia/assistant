@@ -1,0 +1,16 @@
+<svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- The Flow Link 'T' -->
+  <defs>
+    <linearGradient id="link_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7E2E2E" />
+      <stop offset="100%" stop-color="#D97745" />
+    </linearGradient>
+  </defs>
+  
+  <path d="M100 120C100 108.954 108.954 100 120 100H280C291.046 100 300 108.954 300 120V140H100V120Z" fill="url(#link_grad)"/>
+  <path d="M180 140H220V280C220 291.046 211.046 300 200 300C188.954 300 180 291.046 180 280V140Z" fill="url(#link_grad)"/>
+  
+  <!-- Infinite Loop detail -->
+  <path d="M220 120C220 108.954 228.954 100 240 100H280C291.046 100 300 108.954 300 120C300 131.046 291.046 140 280 140H240C228.954 140 220 131.046 220 120Z" fill="#D97745"/>
+  <path d="M100 120C100 108.954 108.954 100 120 100H160C171.046 100 180 108.954 180 120C180 131.046 171.046 140 160 140H120C108.954 140 100 131.046 100 120Z" fill="#D97745"/>
+</svg>

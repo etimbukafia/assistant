@@ -4,10 +4,10 @@ from typing import List
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser, require_active_subscription
+from app.security.auth import get_current_user, get_db, get_db_for_user, AuthenticatedUser, require_active_subscription
 from app.security.encryption import encrypt_body
 from app.integrations.gmail import GmailClient, get_gmail_client
-from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion
+from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion, TaskQueue
 from app.services.email_filter import EmailFilterService, FilterAction
 from app.data.schemas import (
     SyncResponse, MessagesListResponse, MessageResponse, 
@@ -399,6 +399,21 @@ def get_new_messages(
     messages_response = [MessageResponse(**msg_dict) for msg_dict in message_dicts]
     
     return {"messages": messages_response, "count": len(messages_response)}
+
+
+@router.get("/processing-status")
+def get_processing_status(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get count of emails currently being processed for this user."""
+    count = db.query(TaskQueue).filter(
+        TaskQueue.task_type == "process_email",
+        TaskQueue.user_id == user.user_id,
+        TaskQueue.status.in_(["pending", "in_progress"]),
+    ).count()
+
+    return {"processing_count": count}
 
 
 @router.get("/{message_id}", response_model=MessageResponse)

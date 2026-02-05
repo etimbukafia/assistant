@@ -17,6 +17,7 @@ from core.events import emit_event
 from core.queue import Worker, BatchWorker
 from app.jobs.queue import queue_service
 from app.jobs.trial_warnings import handle_check_trial_expirations, get_next_trial_check_time
+from app.jobs.webhook_health import handle_check_webhook_health, get_next_webhook_health_check_time
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,17 @@ async def handle_send_push_notification(task_id: int, task_type: str, payload: D
         logger.info(f"[{correlation_id}] Push notification {notification_id} delivered")
     except Exception as e:
         logger.error(f"[{correlation_id}] Push notification {notification_id} failed: {e}", exc_info=True)
+        # Record error on notification so it's visible beyond logs
+        try:
+            from app.data.models import Notification
+            notification = db.query(Notification).filter(
+                Notification.id == notification_id
+            ).first()
+            if notification:
+                notification.push_error = str(e)
+                db.commit()
+        except Exception:
+            db.rollback()
         raise  # Re-raise for retry
     finally:
         db.close()
@@ -1384,6 +1396,7 @@ TASK_HANDLERS = {
     "process_chat_message": handle_process_chat_message,
     "renew_gmail_watches": handle_renew_gmail_watches,
     "check_trial_expirations": handle_check_trial_expirations,
+    "check_webhook_health": handle_check_webhook_health,
 }
 
 
@@ -1437,7 +1450,7 @@ def schedule_cleanup_jobs_if_needed(db):
     from app.data.models import TaskQueue
     from app.jobs.queue import enqueue_task
 
-    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations"]
+    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations", "check_webhook_health"]
 
     for task_type in cleanup_jobs:
         existing = db.query(TaskQueue).filter(
@@ -1454,6 +1467,8 @@ def schedule_cleanup_jobs_if_needed(db):
                 next_run = get_next_cleanup_time()
             elif task_type == "check_trial_expirations":
                 next_run = get_next_trial_check_time()
+            elif task_type == "check_webhook_health":
+                next_run = get_next_webhook_health_check_time()
             else:
                 continue
 

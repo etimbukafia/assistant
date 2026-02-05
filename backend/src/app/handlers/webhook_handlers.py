@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.infra.config import get_settings, Settings
 from app.infra.database import SessionLocal, get_db
-from app.data.models import UserSettings
+from app.data.models import UserSettings, WebhookLog
 from app.services import get_polar_service, PolarService
 from app.security.auth import get_user_settings, get_db_for_user
 
@@ -283,25 +283,36 @@ async def handle_polar_webhook(
 
     # If secret not configured, acknowledge receipt but don't process
     if event is None:
+        db.add(WebhookLog(source="polar", event_type="unknown", processed=False, error="webhook_secret_not_configured"))
+        db.commit()
         return {"received": True, "handled": False, "reason": "webhook_secret_not_configured"}
 
-    event_type = event.get("type")
+    event_type = event.get("type", "unknown")
+    customer_id = event.get("data", {}).get("subscription", {}).get("customer_id")
     logger.info(f"Received Polar webhook: {event_type}")
-    
+
     # Route to handler
     handler = EVENT_HANDLERS.get(event_type)
     if not handler:
+        db.add(WebhookLog(source="polar", event_type=event_type, processed=False, error="no_handler", customer_id=customer_id))
+        db.commit()
         logger.debug(f"No handler for event type: {event_type}")
         return {"received": True, "handled": False}
-    
-    # Process event
+
     # Process event
     try:
         handler(event, db)
+        db.add(WebhookLog(source="polar", event_type=event_type, processed=True, customer_id=customer_id))
         db.commit()
         return {"received": True, "handled": True}
     except Exception as e:
         db.rollback()
+        # Log in a fresh transaction since we rolled back
+        try:
+            db.add(WebhookLog(source="polar", event_type=event_type, processed=False, error=str(e)[:500], customer_id=customer_id))
+            db.commit()
+        except Exception:
+            pass
         logger.error(f"Error handling webhook {event_type}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -122,6 +122,8 @@ export function usePushNotificationSetup() {
                     router.push('/(tabs)' as any);
                 } else if (data?.target_type === 'briefing') {
                     router.push('/(tabs)/calendar' as any);
+                } else if (data?.target_type === 'settings') {
+                    router.push('/settings/subscription' as any);
                 }
             }
         );

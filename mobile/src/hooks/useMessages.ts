@@ -22,6 +22,7 @@ import {
     getSchedulingSuggestion,
     sendSchedulingReply,
     dismissSchedulingSuggestion,
+    fetchProcessingStatus,
     Message,
     MessagesResponse,
     SchedulingSuggestion,
@@ -259,4 +260,18 @@ export function useSchedulingMutations() {
 
         isAnyPending: sendMutation.isPending || dismissMutation.isPending,
     };
+}
+
+/**
+ * Hook for polling email processing status after sync.
+ * Only polls when enabled. Caller disables when count hits 0.
+ */
+export function useProcessingStatus(enabled: boolean = false) {
+    return useQuery({
+        queryKey: ['processing-status'],
+        queryFn: fetchProcessingStatus,
+        enabled,
+        refetchInterval: enabled ? 3000 : false,
+        staleTime: 0,
+    });
 }

@@ -280,3 +280,11 @@ export async function dismissSchedulingSuggestion(suggestionId: number): Promise
     return response.data;
 }
 
+/**
+ * Get count of emails currently being processed in the background
+ */
+export async function fetchProcessingStatus(): Promise<{ processing_count: number }> {
+    const response = await api.get<{ processing_count: number }>('/messages/processing-status');
+    return response.data;
+}
+

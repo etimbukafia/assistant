@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.security.auth import get_user_settings, get_db_for_user, get_current_user, AuthenticatedUser
+from app.security.feature_gating import require_feature, Feature
 from app.data.models import UserSettings, Digest
 from app.data.schemas import DigestPreferences, DigestsListResponse, DigestResponse
 from app.jobs.worker import schedule_digest_jobs_if_needed
@@ -68,7 +69,8 @@ def get_digest(digest_id: int, db: Session = Depends(get_db_for_user)):
 def trigger_digest_now(
     digest_type: str,
     user: AuthenticatedUser = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user)
+    db: Session = Depends(get_db_for_user),
+    _gate=Depends(require_feature(Feature.DIGESTS)),
 ):
     """Manually trigger a digest generation."""
     
