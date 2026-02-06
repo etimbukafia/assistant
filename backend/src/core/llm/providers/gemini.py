@@ -2,12 +2,16 @@
 Google Gemini API provider (fallback for complex tasks)
 """
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 from .base import BaseLLMProvider, JSON_INSTRUCTION, REPAIR_PROMPT
 
 logger = logging.getLogger(__name__)
+
+# Thread-local storage for token usage accumulation
+_token_usage = threading.local()
 
 
 class GeminiProvider(BaseLLMProvider):
@@ -64,7 +68,35 @@ class GeminiProvider(BaseLLMProvider):
             contents=[full_prompt],
         )
 
+        # Track token usage from response
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            usage = response.usage_metadata
+            input_tokens = getattr(usage, 'prompt_token_count', 0) or 0
+            output_tokens = getattr(usage, 'candidates_token_count', 0) or 0
+            self._accumulate_tokens(input_tokens, output_tokens)
+
         return response.text.strip()
+
+    def _accumulate_tokens(self, input_tokens: int, output_tokens: int) -> None:
+        """Accumulate token counts in thread-local storage."""
+        if not hasattr(_token_usage, 'input_tokens'):
+            _token_usage.input_tokens = 0
+            _token_usage.output_tokens = 0
+        _token_usage.input_tokens += input_tokens
+        _token_usage.output_tokens += output_tokens
+
+    def get_token_usage(self) -> Dict[str, int]:
+        """Get accumulated token usage for current thread."""
+        return {
+            'input_tokens': getattr(_token_usage, 'input_tokens', 0),
+            'output_tokens': getattr(_token_usage, 'output_tokens', 0),
+            'model': self.config.gemini_model
+        }
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage counters for current thread."""
+        _token_usage.input_tokens = 0
+        _token_usage.output_tokens = 0
 
     def generate_batch(
         self,

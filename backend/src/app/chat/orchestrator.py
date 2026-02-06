@@ -189,18 +189,19 @@ class ChatOrchestrator:
     ) -> Dict[str, Any]:
         """
         Call the LLM with messages and optional tools.
-        
+
         Uses LLMOrchestrator with structured JSON prompting for tool calls.
         """
         from core.llm.orchestrator import LLMOrchestrator
         from core.llm.config import LLMConfig
+        from core.llm.token_tracking import record_token_usage
 
         orchestrator = LLMOrchestrator(config=LLMConfig.for_chat())
-        
+
         # Build prompt from messages
         prompt_parts = []
         system_content = ""
-        
+
         for msg in messages:
             if msg["role"] == "system":
                 system_content = msg["content"]
@@ -208,24 +209,37 @@ class ChatOrchestrator:
                 prompt_parts.append(f"User: {msg['content']}")
             elif msg["role"] == "assistant":
                 prompt_parts.append(f"Assistant: {msg['content']}")
-        
+
         prompt = "\n\n".join(prompt_parts)
-        
+
         # Add tool descriptions with JSON format instruction
         if tools:
             tool_desc = self._build_tool_prompt(tools)
             prompt = tool_desc + "\n\n" + prompt
-        
+
         # Call LLM
         result = orchestrator.generate(
             prompt=prompt,
             system_prompt=system_content
         )
-        
+
+        # Record token usage
+        usage = orchestrator.get_token_usage()
+        if usage['input_tokens'] > 0 or usage['output_tokens'] > 0:
+            record_token_usage(
+                db=self.db,
+                user_id=self.user_id,
+                model=usage['model'],
+                input_tokens=usage['input_tokens'],
+                output_tokens=usage['output_tokens'],
+                operation="chat"
+            )
+        orchestrator.reset_token_usage()
+
         # Parse response for tool calls
         content = result.get("text", result.get("content", ""))
         tool_calls = self._extract_tool_calls_from_response(result, content)
-        
+
         return {
             "content": content if not tool_calls else "",
             "tool_calls": tool_calls

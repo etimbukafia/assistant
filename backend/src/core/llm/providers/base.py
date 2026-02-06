@@ -282,3 +282,11 @@ class BaseLLMProvider(ABC):
     def cleanup(self) -> None:
         """Release resources (unload model, close connections, etc.)"""
         pass
+
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get accumulated token usage. Override in providers that track tokens."""
+        return {'input_tokens': 0, 'output_tokens': 0, 'model': 'unknown'}
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage counters. Override in providers that track tokens."""
+        pass

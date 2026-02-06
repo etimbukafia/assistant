@@ -112,6 +112,14 @@ class ThreadStateService:
                 ai_result = self.ai_processor.update_thread_state(current_state, message_data)
                 self._apply_update_result(thread_state, message, ai_result)
 
+            # Record token usage for this user
+            if message.user_id:
+                self.ai_processor.record_and_reset_tokens(
+                    db=self.db,
+                    user_id=message.user_id,
+                    operation="email_processing"
+                )
+
             # Update message count and last message reference
             thread_state.message_count += 1
             thread_state.last_message_id = message.id
@@ -474,7 +482,16 @@ class ThreadStateService:
             logger.info(f"Batch processing {len(new_thread_msgs)} new threads")
             messages_data = [item[2] for item in new_thread_msgs]
             batch_results = self.ai_processor.init_thread_state_batch(messages_data)
-            
+
+            # Record token usage for the batch (use first message's user_id)
+            first_user_id = new_thread_msgs[0][1].user_id if new_thread_msgs else None
+            if first_user_id:
+                self.ai_processor.record_and_reset_tokens(
+                    db=self.db,
+                    user_id=first_user_id,
+                    operation="email_processing_batch"
+                )
+
             # Apply results to each message
             for (idx, message, msg_data), ai_result in zip(new_thread_msgs, batch_results):
                 try:
@@ -533,9 +550,18 @@ class ThreadStateService:
                     'thread_state': self._thread_state_to_dict(item[4]),
                     'message_data': item[3]
                 } for item in first_msgs]
-                
+
                 batch_results = self.ai_processor.update_thread_state_batch(batch_items)
-                
+
+                # Record token usage for the batch
+                first_user_id = first_msgs[0][2].user_id if first_msgs else None
+                if first_user_id:
+                    self.ai_processor.record_and_reset_tokens(
+                        db=self.db,
+                        user_id=first_user_id,
+                        operation="email_processing_batch"
+                    )
+
                 # Apply results
                 for (thread_id, idx, message, msg_data, thread_state), ai_result in zip(first_msgs, batch_results):
                     try:

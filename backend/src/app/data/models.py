@@ -765,3 +765,17 @@ class WebhookLog(Base):
     error = Column(Text, nullable=True)
     customer_id = Column(String, nullable=True)                # Polar customer_id or email address
     received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class TokenUsage(Base):
+    """Track LLM token usage per user for cost monitoring."""
+    __tablename__ = "token_usage"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    model = Column(String, nullable=False)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    cost_usd = Column(Float, nullable=False, default=0.0)
+    operation = Column(String, nullable=False, index=True)  # email_processing | chat | scheduling | etc.
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

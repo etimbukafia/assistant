@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 from core.llm import LLMOrchestrator, LLMConfig
+from core.llm.token_tracking import record_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,20 @@ class AIProcessor:
         self.prompts_dir = Path(prompts_dir)
         self._prompts_cache = {}
         self._orchestrator = LLMOrchestrator(config=llm_config or LLMConfig.for_email())
+
+    def record_and_reset_tokens(self, db, user_id: str, operation: str) -> None:
+        """Record accumulated token usage to database and reset counters."""
+        usage = self._orchestrator.get_token_usage()
+        if usage['input_tokens'] > 0 or usage['output_tokens'] > 0:
+            record_token_usage(
+                db=db,
+                user_id=user_id,
+                model=usage['model'],
+                input_tokens=usage['input_tokens'],
+                output_tokens=usage['output_tokens'],
+                operation=operation
+            )
+        self._orchestrator.reset_token_usage()
 
     def _has_placeholders(self, text: str) -> bool:
         """Check if text contains template placeholders."""

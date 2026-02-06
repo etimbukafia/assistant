@@ -3,7 +3,7 @@ from .models import (
     AgentActivityLog, SchedulingSuggestion, CalendarEvent,
     PrincipalMemory, DecisionPattern, ThreadState, TaskQueue,
     ChatSession, ChatMessage, ChatPendingAction, Digest,
-    WebhookLog
+    WebhookLog, TokenUsage
 )
 from .schemas import (
     MessageResponse, TaskResponse, UserSettingsResponse,
@@ -16,7 +16,7 @@ __all__ = [
     "AgentActivityLog", "SchedulingSuggestion", "CalendarEvent",
     "PrincipalMemory", "DecisionPattern", "ThreadState", "TaskQueue",
     "ChatSession", "ChatMessage", "ChatPendingAction", "Digest",
-    "WebhookLog",
+    "WebhookLog", "TokenUsage",
     # Schemas
     "MessageResponse", "TaskResponse", "UserSettingsResponse",
     "UserSettingsUpdateRequest", "TaskUpdateRequest",
