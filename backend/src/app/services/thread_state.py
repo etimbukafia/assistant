@@ -26,9 +26,9 @@ class ThreadStateService:
     No full thread transcript re-analysis.
     """
 
-    def __init__(self, db: Session, ai_processor: Optional[AIProcessor] = None):
+    def __init__(self, db: Session, ai_processor: Optional[AIProcessor] = None, assistant_name: str = "Donna"):
         self.db = db
-        self.ai_processor = ai_processor or AIProcessor()
+        self.ai_processor = ai_processor or AIProcessor(assistant_name=assistant_name)
 
     def get_or_create_thread_state(self, thread_id: str) -> ThreadState:
         """

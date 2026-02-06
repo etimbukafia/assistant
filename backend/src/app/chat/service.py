@@ -22,7 +22,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory, TaskQueue
+from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory, TaskQueue, UserSettings
 from app.jobs.queue import queue_service
 from .orchestrator import ChatOrchestrator
 
@@ -631,7 +631,13 @@ class ChatService:
         - Action mode messages that don't need tools
         """
         try:
-            orchestrator = ChatOrchestrator(self.db, self.user_id)
+            # Get user's assistant name preference
+            user_settings = self.db.query(UserSettings).filter(
+                UserSettings.user_id == self.user_id
+            ).first()
+            assistant_name = user_settings.assistant_name if user_settings else "Donna"
+
+            orchestrator = ChatOrchestrator(self.db, self.user_id, assistant_name=assistant_name)
             result = await orchestrator.process_message(session, content)
 
             # Save assistant response

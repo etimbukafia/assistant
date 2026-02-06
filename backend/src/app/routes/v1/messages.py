@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.security.auth import get_current_user, get_db, get_db_for_user, AuthenticatedUser, require_active_subscription
 from app.security.encryption import encrypt_body
 from app.integrations.gmail import GmailClient, get_gmail_client
-from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion, TaskQueue
+from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion, TaskQueue, UserSettings
 from app.services.email_filter import EmailFilterService, FilterAction
 from app.data.schemas import (
     SyncResponse, MessagesListResponse, MessageResponse, 
@@ -592,8 +592,15 @@ def reprocess_message(message_id: int, db: Session = Depends(get_db_for_user)):
         'sender': message.sender
     }
 
+    # Fetch assistant name from user settings
+    assistant_name = "Donna"  # default
+    if message.user_id:
+        user_settings = db.query(UserSettings).filter(UserSettings.user_id == message.user_id).first()
+        if user_settings and user_settings.assistant_name:
+            assistant_name = user_settings.assistant_name
+
     # Use state-based thread processing
-    thread_state_service = ThreadStateService(db)
+    thread_state_service = ThreadStateService(db, assistant_name=assistant_name)
     ai_results = thread_state_service.process_message(message, message_data)
 
     message.summary = ai_results['summary']

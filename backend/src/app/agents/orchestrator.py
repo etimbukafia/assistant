@@ -40,11 +40,13 @@ class AssistantOrchestrator:
     def __init__(
         self,
         model_name: str = "gemini-2.5-flash-lite",
-        prompts_dir: str = "prompts"
+        prompts_dir: str = "prompts",
+        assistant_name: str = "Donna"
     ):
         """Initialize the orchestrator"""
         self.model_name = model_name
         self.prompts_dir = Path(prompts_dir)
+        self.assistant_name = assistant_name
         self.orchestrator_id = str(uuid.uuid4())[:8]  # Short ID for this instance
 
         # Initialize AI client
@@ -206,6 +208,7 @@ class AssistantOrchestrator:
 
         # Format prompt with context
         prompt = prompt_template.format(
+            assistant_name=self.assistant_name,
             event_type=event_type,
             event_payload=json.dumps(event_payload, indent=2),
             correlation_id=correlation_id,

@@ -63,10 +63,12 @@ class AIProcessor:
         self,
         prompts_dir: str = "prompts",
         llm_config: Optional[LLMConfig] = None,
+        assistant_name: str = "Donna",
     ):
         self.prompts_dir = Path(prompts_dir)
         self._prompts_cache = {}
         self._orchestrator = LLMOrchestrator(config=llm_config or LLMConfig.for_email())
+        self.assistant_name = assistant_name
 
     def record_and_reset_tokens(self, db, user_id: str, operation: str) -> None:
         """Record accumulated token usage to database and reset counters."""
@@ -230,7 +232,7 @@ class AIProcessor:
             Summary string
         """
         prompt_template = self._load_prompt('summarize')
-        prompt = prompt_template.format(text=text)
+        prompt = prompt_template.format(assistant_name=self.assistant_name, text=text)
 
         try:
             result = self._orchestrator.generate(prompt)
@@ -326,6 +328,7 @@ class AIProcessor:
         prompt_template = self._load_prompt('extract_tasks_enhanced')
         prompts = [
             prompt_template.format(
+                assistant_name=self.assistant_name,
                 sender=msg.get('sender', ''),
                 subject=msg.get('subject', ''),
                 body=msg.get('body', ''),
@@ -351,7 +354,7 @@ class AIProcessor:
             return []
 
         prompt_template = self._load_prompt('summarize')
-        prompts = [prompt_template.format(text=text) for text in texts]
+        prompts = [prompt_template.format(assistant_name=self.assistant_name, text=text) for text in texts]
 
         try:
             results = self._orchestrator.generate_batch(prompts)
@@ -379,6 +382,7 @@ class AIProcessor:
         """
         prompt_template = self._load_prompt('init_thread_state')
         prompt = prompt_template.format(
+            assistant_name=self.assistant_name,
             current_date=datetime.now(timezone.utc).strftime('%Y-%m-%d (%A)'),
             sender=message_data.get('sender', ''),
             subject=message_data.get('subject', ''),
@@ -439,6 +443,7 @@ class AIProcessor:
         prompts = []
         for msg in messages_data:
             prompt = prompt_template.format(
+                assistant_name=self.assistant_name,
                 current_date=current_date,
                 sender=msg.get('sender', ''),
                 subject=msg.get('subject', ''),

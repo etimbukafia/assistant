@@ -13,7 +13,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from sqlalchemy.orm import Session
-from app.data.models import Message, GmailAccount
+from app.data.models import Message, GmailAccount, UserSettings
 from app.services.thread_state import ThreadStateService
 from app.jobs.queue import enqueue_task
 
@@ -71,9 +71,16 @@ def process_message(
         "sender": message.sender
     }
 
+    # Fetch assistant name from user settings
+    assistant_name = "Donna"  # default
+    if message.user_id:
+        user_settings = db.query(UserSettings).filter(UserSettings.user_id == message.user_id).first()
+        if user_settings and user_settings.assistant_name:
+            assistant_name = user_settings.assistant_name
+
     # Process using state-based thread approach
     logger.info(f"Processing message {message.id} with thread state (thread_id={message.thread_id})")
-    thread_state_service = ThreadStateService(db)
+    thread_state_service = ThreadStateService(db, assistant_name=assistant_name)
     ai_results = thread_state_service.process_message(message, message_data)
 
     # Update message with results
@@ -185,8 +192,14 @@ def process_messages_batch(
                 to_process.append(message)
 
         if to_process:
+            # Fetch assistant name from user settings
+            assistant_name = "Donna"  # default
+            user_settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+            if user_settings and user_settings.assistant_name:
+                assistant_name = user_settings.assistant_name
+
             # Use ThreadStateService batch processing (batches LLM calls for new threads)
-            thread_state_service = ThreadStateService(db)
+            thread_state_service = ThreadStateService(db, assistant_name=assistant_name)
             batch_results = thread_state_service.process_messages_batch(to_process)
             
             # Update message records and emit events

@@ -47,27 +47,28 @@ class ChatOrchestrator:
     - Persist state after each turn
     """
     
-    def __init__(self, db: Session, user_id: str):
+    def __init__(self, db: Session, user_id: str, assistant_name: str = "Donna"):
         self.db = db
         self.user_id = user_id
+        self.assistant_name = assistant_name
         self.context_manager = ChatContextManager(db, user_id)
         self.tool_registry = ChatToolRegistry(db, user_id)
-        self._command_prompt: Optional[str] = None
-        self._reflection_prompt: Optional[str] = None
-    
+        self._command_prompt_template: Optional[str] = None
+        self._reflection_prompt_template: Optional[str] = None
+
     @property
     def command_system_prompt(self) -> str:
-        """Lazy-load command mode system prompt."""
-        if self._command_prompt is None:
-            self._command_prompt = _load_prompt("chat_system")
-        return self._command_prompt
-    
+        """Lazy-load and format command mode system prompt."""
+        if self._command_prompt_template is None:
+            self._command_prompt_template = _load_prompt("chat_system")
+        return self._command_prompt_template.format(assistant_name=self.assistant_name)
+
     @property
     def reflection_system_prompt(self) -> str:
         """Lazy-load reflection mode system prompt."""
-        if self._reflection_prompt is None:
-            self._reflection_prompt = _load_prompt("chat_reflection")
-        return self._reflection_prompt
+        if self._reflection_prompt_template is None:
+            self._reflection_prompt_template = _load_prompt("chat_reflection")
+        return self._reflection_prompt_template
 
     
     async def process_message(
