@@ -65,7 +65,7 @@ const App = () => {
             {/* Badge */}
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#7E2E2E]/10 border border-[#7E2E2E]/20 mb-8">
               <span className="w-1.5 h-1.5 rounded-full bg-[#D97745] animate-pulse" />
-              <span className="text-xs font-medium text-[#D97745] uppercase tracking-wider">Early access limited to 50 Executive Assistants</span>
+              <span className="text-xs font-medium text-[#D97745] uppercase tracking-wider">Founding access limited to 50 Executive Assistants</span>
             </div>
 
             <h1 className="font-serif text-5xl sm:text-6xl lg:text-7xl text-white leading-[1.1] mb-4">
@@ -90,7 +90,7 @@ const App = () => {
                 onClick={() => document.getElementById('apply').scrollIntoView({ behavior: 'smooth' })}
                 className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-lg bg-[#7E2E2E] text-[#F9F6F2] font-medium hover:bg-[#8B3A3A] transition-all hover:shadow-lg hover:shadow-[#7E2E2E]/20"
               >
-                Request Early Access
+                Request Founding Access
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
               </button>
               <button
@@ -135,7 +135,7 @@ const App = () => {
               </p>
             </div>
 
-            {/* Card 2: Early Access */}
+            {/* Card 2: Founding Access */}
             <div className="group relative p-8 rounded-2xl bg-gradient-to-br from-[#161616] to-[#0a0a0a] border border-white/[0.08] hover:border-[#D97745]/40 transition-all duration-300 hover:shadow-2xl hover:shadow-[#D97745]/10">
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#D97745]/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
               <div className="h-10 w-10 rounded-full bg-[#D97745]/10 flex items-center justify-center mb-6 group-hover:bg-[#D97745]/20 transition-colors">
@@ -143,7 +143,7 @@ const App = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
-              <h3 className="font-serif text-xl text-white mb-3 group-hover:text-[#D97745] transition-colors duration-300">Early Access</h3>
+              <h3 className="font-serif text-xl text-white mb-3 group-hover:text-[#D97745] transition-colors duration-300">Founding Access</h3>
               <p className="text-white/50 text-sm leading-relaxed">
                 You’ll be first to use new capabilities as they’re built. That includes experimental features and improvements long before they’re released publicly.
               </p>
@@ -229,7 +229,7 @@ const App = () => {
         <div className="max-w-lg mx-auto px-6 lg:px-8">
           <div className="text-center mb-10">
             <h2 className="font-serif text-3xl sm:text-4xl text-white mb-4">
-              Request Early Access
+              Request Founding Access
             </h2>
           </div>
 
@@ -240,9 +240,9 @@ const App = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <h3 className="font-serif text-2xl text-white mb-2">Thank you, {formState.name.split(' ')[0]}.</h3>
+              <h3 className="font-serif text-2xl text-white mb-2">Thanks for applying, {formState.name.split(' ')[0]}.</h3>
               <p className="text-white/50">
-                We'll review your application and reach out within 48 hours.
+                We'll review your application and get back to you within 24 hours.
               </p>
             </div>
           ) : (
