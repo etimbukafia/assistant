@@ -1,14 +1,35 @@
 import React, { useEffect } from 'react';
-import { StyleSheet, View, Image } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
     withTiming,
     Easing
 } from 'react-native-reanimated';
+import { SvgXml } from 'react-native-svg';
 import { ImmersiveBackground } from './ImmersiveBackground';
-import { DonnaText } from './DonnaText';
-import { Colors, Typography, Radius } from '../../theme/Theme';
+
+// Teeks wordmark SVG - icon + text
+const teeksWordmarkSvg = `
+<svg width="600" height="150" viewBox="0 0 600 150" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="text_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F9F6F2" />
+      <stop offset="100%" stop-color="#FFFFFF" />
+    </linearGradient>
+  </defs>
+
+  <!-- Icon Part (Mini Interlock) -->
+  <g transform="translate(20, 25) scale(0.25)">
+    <path d="M80 100C80 88.9543 88.9543 80 100 80H230V150H80V100Z" fill="#7E2E2E"/>
+    <path d="M245 80H300C311.046 80 320 88.9543 320 100V150H245V80Z" fill="#D97745"/>
+    <path d="M165 165H235V300C235 311.046 226.046 320 215 320H185C173.954 320 165 311.046 165 300V165Z" fill="#7E2E2E"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="130" y="105" font-family="serif" font-weight="bold" font-size="80" fill="url(#text_grad)" letter-spacing="-2">Teeks<tspan fill="#D97745">.</tspan></text>
+</svg>
+`;
 
 export const CustomSplashScreen = () => {
     const opacity = useSharedValue(0);
@@ -29,16 +50,7 @@ export const CustomSplashScreen = () => {
         <ImmersiveBackground style={styles.container}>
             <View style={styles.content}>
                 <Animated.View style={[styles.logoContainer, animatedStyle]}>
-                    <View style={styles.logoRow}>
-                        <View style={styles.logoIconContainer}>
-                            <Image
-                                source={require('../../../assets/teeks_logo.png')}
-                                style={styles.logoIcon}
-                                resizeMode="contain"
-                            />
-                        </View>
-                        <DonnaText style={styles.logoText}>EEKS<DonnaText style={styles.logoDot}>.</DonnaText></DonnaText>
-                    </View>
+                    <SvgXml xml={teeksWordmarkSvg} width={300} height={75} />
                 </Animated.View>
             </View>
         </ImmersiveBackground>
@@ -56,37 +68,5 @@ const styles = StyleSheet.create({
     },
     logoContainer: {
         alignItems: 'center',
-    },
-    logoRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    logoIconContainer: {
-        width: 64,
-        height: 64,
-        backgroundColor: '#FFFFFF',
-        borderRadius: Radius.sm,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 8,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        elevation: 5,
-        padding: 6,
-    },
-    logoIcon: {
-        width: 52,
-        height: 52,
-    },
-    logoText: {
-        ...Typography.logo,
-        color: Colors.textPrimary,
-        fontSize: 48,
-        letterSpacing: 4,
-    },
-    logoDot: {
-        color: Colors.accentSecondary, // Copper dot
     },
 });
