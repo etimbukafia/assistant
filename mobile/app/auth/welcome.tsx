@@ -37,7 +37,7 @@ export default function WelcomeScreen() {
 
     return (
         <ImmersiveBackground style={styles.container}>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
 
             <SafeAreaView style={styles.safeArea}>
                 {/* Header / Nav */}
@@ -100,13 +100,13 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderRadius: Radius.full,
-        backgroundColor: 'rgba(255,255,255,0.08)',
+        backgroundColor: 'rgba(0,0,0,0.05)', // Subtle dark on linen
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        borderColor: 'rgba(0,0,0,0.1)',
     },
     backButtonText: {
         fontSize: 24,
-        color: '#FFFFFF',
+        color: Colors.textPrimary, // Dark obsidian
         lineHeight: 28,
     },
     content: {

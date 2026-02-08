@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terms of Service - Teeks</title>
+    <link rel="icon" type="image/svg+xml" href="/teeks-logo-gold.svg">
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0a0a0a;
+            color: rgba(255,255,255,0.7);
+            line-height: 1.7;
+            font-size: 15px;
+        }
+
+        a { color: #D97745; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 50;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            background: rgba(10,10,10,0.8);
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .nav-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .nav-inner img { height: 32px; }
+
+        .nav-link {
+            font-size: 14px;
+            color: rgba(255,255,255,0.6);
+            padding: 8px 16px;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background: rgba(255,255,255,0.05);
+            color: white;
+            text-decoration: none;
+        }
+
+        /* Main Content */
+        main {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 120px 24px 80px;
+        }
+
+        /* Header */
+        .page-header {
+            margin-bottom: 48px;
+            padding-bottom: 32px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+
+        h1 {
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 42px;
+            font-weight: 500;
+            color: white;
+            margin-bottom: 12px;
+        }
+
+        .meta {
+            font-size: 13px;
+            color: rgba(255,255,255,0.4);
+        }
+
+        /* Content */
+        h2 {
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 24px;
+            font-weight: 500;
+            color: white;
+            margin: 48px 0 16px;
+        }
+
+        h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: rgba(255,255,255,0.9);
+            margin: 32px 0 12px;
+        }
+
+        p { margin-bottom: 16px; }
+
+        ul, ol {
+            margin: 16px 0;
+            padding-left: 24px;
+        }
+
+        li { margin-bottom: 8px; }
+
+        strong { color: rgba(255,255,255,0.9); }
+
+        /* Highlight Box */
+        .highlight {
+            background: rgba(126, 46, 46, 0.1);
+            border: 1px solid rgba(126, 46, 46, 0.2);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin: 24px 0;
+        }
+
+        .highlight p { margin: 0; }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 24px 0;
+            font-size: 14px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+
+        th {
+            color: rgba(255,255,255,0.5);
+            font-weight: 500;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Footer */
+        footer {
+            border-top: 1px solid rgba(255,255,255,0.06);
+            padding: 32px 24px;
+            text-align: center;
+        }
+
+        .footer-inner {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        .footer-inner a {
+            font-size: 13px;
+            color: rgba(255,255,255,0.4);
+        }
+
+        .footer-inner span {
+            font-size: 13px;
+            color: rgba(255,255,255,0.3);
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="nav-inner">
+            <a href="/"><img src="/teeks-wordmark.svg" alt="Teeks"></a>
+            <a href="/" class="nav-link">← Back to Home</a>
+        </div>
+    </nav>
+
+    <main>
+        <header class="page-header">
+            <h1>Terms of Service</h1>
+            <p class="meta">Last updated: February 2025</p>
+        </header>
+
+        <h2>1. Welcome to Teeks</h2>
+        <p>These Terms of Service ("Terms") govern your access to and use of Teeks ("the Service"), an AI-powered email assistant operated by Whiteprints ("Company," "we," "us").</p>
+        <p>By accessing or using Teeks, you agree to be bound by these Terms. If you do not agree, do not use the Service.</p>
+
+        <h2>2. Service Description</h2>
+        <p>Teeks is an AI assistant designed for executive assistants and professionals. The Service provides:</p>
+        <ul>
+            <li><strong>Email Triage</strong> — Intelligent prioritization and categorization of emails</li>
+            <li><strong>Task Extraction</strong> — Automatic identification of action items from email content</li>
+            <li><strong>Reply Drafting</strong> — AI-generated email response suggestions</li>
+            <li><strong>Calendar Integration</strong> — Scheduling assistance and conflict detection</li>
+            <li><strong>Executive Briefings</strong> — Summarized insights from your inbox</li>
+        </ul>
+        <p>The Service requires connection to your email account (currently Google/Gmail) to function.</p>
+
+        <h2>3. Eligibility</h2>
+        <p>You must be at least 18 years old and capable of forming a binding contract to use Teeks. If you are using the Service on behalf of an organization, you represent that you have authority to bind that organization to these Terms.</p>
+
+        <h2>4. Account Registration</h2>
+        <h3>4.1 Account Creation</h3>
+        <p>To use Teeks, you must create an account using Google OAuth authentication. You agree to provide accurate information, maintain account security, and accept responsibility for all activity under your account.</p>
+
+        <h3>4.2 Email Access Authorization</h3>
+        <p>By connecting your Google account, you authorize Teeks to read your email messages and metadata, access your calendar (if enabled), and store processed email data as described in our <a href="/privacy">Privacy Policy</a>.</p>
+        <p>You may revoke this access at any time through your Google Account settings or by deleting your Teeks account.</p>
+
+        <h2>5. Subscription and Billing</h2>
+        <table>
+            <tr>
+                <th>Tier</th>
+                <th>Description</th>
+            </tr>
+            <tr>
+                <td><strong>Trial</strong></td>
+                <td>7-day free trial with full feature access. No payment required.</td>
+            </tr>
+            <tr>
+                <td><strong>Pro</strong></td>
+                <td>Paid subscription with full feature access. Billed monthly or annually.</td>
+            </tr>
+        </table>
+        <p>Payments are processed through Polar. Subscriptions auto-renew unless cancelled before the renewal date. You may cancel at any time through app settings.</p>
+
+        <h2>6. Acceptable Use</h2>
+        <p>You agree NOT to use Teeks to:</p>
+        <ul>
+            <li>Violate any applicable law or regulation</li>
+            <li>Infringe on the rights of others, including privacy and intellectual property</li>
+            <li>Send spam, phishing, or malicious content</li>
+            <li>Attempt to gain unauthorized access to the Service</li>
+            <li>Reverse engineer or decompile the Service</li>
+            <li>Use AI-generated drafts for harassment, fraud, or deception</li>
+        </ul>
+        <p>We reserve the right to suspend or terminate accounts that violate these terms.</p>
+
+        <h2>7. AI-Generated Content</h2>
+        <div class="highlight">
+            <p><strong>Important:</strong> AI outputs are suggestions, not final communications. You are responsible for reviewing and editing all AI-generated content before sending. AI may make errors or produce inappropriate content.</p>
+        </div>
+        <p>You retain full responsibility for all emails sent from your account, including those drafted by Teeks. We do not guarantee that AI features will be error-free or suitable for any particular purpose.</p>
+
+        <h2>8. Data and Privacy</h2>
+        <p>Your privacy is important to us. Our collection, use, and protection of your data is governed by our <a href="/privacy">Privacy Policy</a>.</p>
+        <p>Key points: We process your emails to provide the Service. We use encryption to protect sensitive data. We do not sell your personal data. You can delete your data at any time.</p>
+
+        <h2>9. Intellectual Property</h2>
+        <p>Teeks, including its design, features, code, and branding, is owned by Whiteprints and protected by intellectual property laws. You retain ownership of your emails and content. By using the Service, you grant us a limited license to process your content solely to provide the Service.</p>
+
+        <h2>10. Disclaimers</h2>
+        <p>THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY OF AI OUTPUTS, OR UNINTERRUPTED OPERATION.</p>
+
+        <h2>11. Limitation of Liability</h2>
+        <p>TO THE MAXIMUM EXTENT PERMITTED BY LAW: We are not liable for any indirect, incidental, special, consequential, or punitive damages. We are not liable for loss of profits, data, or business opportunities. Our total liability shall not exceed the amount you paid us in the 12 months preceding the claim.</p>
+
+        <h2>12. Termination</h2>
+        <p>You may stop using the Service and delete your account at any time. We may suspend or terminate your access if you violate these Terms or your subscription payment fails. Upon termination, your right to use the Service ends immediately.</p>
+
+        <h2>13. Changes to Terms</h2>
+        <p>We may update these Terms from time to time. We will notify you of material changes via email or in-app notification. Continued use after changes constitutes acceptance.</p>
+
+        <h2>14. Governing Law</h2>
+        <p>These Terms are governed by the laws of the State of Delaware, USA, without regard to conflict of law principles.</p>
+
+        <h2>15. Contact Us</h2>
+        <p>For questions about these Terms:</p>
+        <p><strong>Email:</strong> <a href="mailto:support@teeks.ai">support@teeks.ai</a></p>
+    </main>
+
+    <footer>
+        <div class="footer-inner">
+            <a href="/">Home</a>
+            <a href="/terms">Terms of Service</a>
+            <a href="/privacy">Privacy Policy</a>
+            <span>© 2025 Teeks. All rights reserved.</span>
+        </div>
+    </footer>
+</body>
+</html>

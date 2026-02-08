@@ -351,9 +351,13 @@ const App = () => {
             <img src="/teeks-logo-gold.svg" alt="Teeks Symbol" className="w-6 h-6" />
             <span className="text-white/60 text-sm">Teeks</span>
           </div>
-          <p className="text-white/30 text-xs">
-            © 2026 Teeks Intelligence. All rights reserved.
-          </p>
+          <div className="flex items-center gap-6">
+            <a href="/terms" className="text-white/40 text-xs hover:text-white/60 transition-colors">Terms of Service</a>
+            <a href="/privacy" className="text-white/40 text-xs hover:text-white/60 transition-colors">Privacy Policy</a>
+            <p className="text-white/30 text-xs">
+              © 2025 Teeks. All rights reserved.
+            </p>
+          </div>
         </div>
       </footer>
     </div>

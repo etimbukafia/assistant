@@ -4,7 +4,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius, Spacing } from '../../theme/Theme';
 import { DonnaText } from './DonnaText';
 import { Task } from '../../services/messages';
-import { GlassCard } from './GlassCard';
 
 interface DonnaCardProps {
     title: string;
@@ -48,9 +47,12 @@ export const DonnaCard: React.FC<DonnaCardProps> = ({
 
     return (
         <Pressable onPress={onPress}>
-            <GlassCard
-                variant={type === 'urgent' ? 'warm' : 'default'}
-                style={[styles.container, styles.card, { borderLeftColor: getBorderColor(), borderLeftWidth: type === 'fyi' ? 0 : 4 }]}
+            <View
+                style={[
+                    styles.container,
+                    styles.card,
+                    { borderLeftColor: getBorderColor(), borderLeftWidth: type === 'fyi' ? 0 : 4 }
+                ]}
             >
                 <View style={styles.content}>
                     <View style={styles.header}>
@@ -151,7 +153,7 @@ export const DonnaCard: React.FC<DonnaCardProps> = ({
                         </View>
                     )}
                 </View>
-            </GlassCard>
+            </View>
         </Pressable>
     );
 };
@@ -162,7 +164,16 @@ const styles = StyleSheet.create({
         marginHorizontal: Spacing.md,
     },
     card: {
-        // GlassCard handles background and borders now
+        backgroundColor: Colors.bgElevated, // White
+        borderRadius: Radius.lg,
+        borderWidth: 1,
+        borderColor: Colors.border,
+        // Shadow (Paper Stack)
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+        elevation: 2,
     },
     content: {
         padding: Spacing.md,

@@ -15,7 +15,6 @@ import { useAuth } from '../../src/context/AuthContext';
 import { useMessages, useProcessingStatus } from '../../src/hooks/useMessages';
 import { useTaskMutations } from '../../src/hooks/useTasks';
 import { ImmersiveBackground } from '../../src/components/ui/ImmersiveBackground';
-import { Glass } from '../../src/theme/Glass';
 
 type FilterType = 'all' | 'needs_reply' | 'today';
 
@@ -225,7 +224,7 @@ export default function DashboardScreen() {
 
   return (
     <ImmersiveBackground style={styles.container}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id.toString()}
@@ -303,10 +302,10 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     padding: Spacing.sm,
-    backgroundColor: Glass.default.backgroundColor,
+    backgroundColor: Colors.bgElevated,
     borderRadius: Radius.full,
     borderWidth: 1,
-    borderColor: Glass.default.borderColor,
+    borderColor: Colors.border,
   },
   actionButtonActive: {
     backgroundColor: Colors.accentSecondary,
@@ -327,10 +326,10 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
     paddingHorizontal: Spacing.sm,
     paddingVertical: Spacing.xs,
-    backgroundColor: Glass.warm.backgroundColor,
+    backgroundColor: 'rgba(217, 119, 69, 0.08)',
     borderRadius: Radius.component,
     borderWidth: 1,
-    borderColor: Glass.warm.borderColor,
+    borderColor: 'rgba(217, 119, 69, 0.15)',
   },
   focusBannerText: {
     fontSize: 12,
@@ -340,13 +339,13 @@ const styles = StyleSheet.create({
   syncBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Glass.default.backgroundColor,
+    backgroundColor: Colors.bgElevated,
     marginHorizontal: Spacing.md,
     marginBottom: Spacing.sm,
     padding: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: Glass.default.borderColor,
+    borderColor: Colors.border,
     gap: Spacing.md,
   },
   syncContent: {
@@ -368,9 +367,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
     borderRadius: Radius.full,
-    backgroundColor: Glass.default.backgroundColor,
+    backgroundColor: Colors.bgElevated,
     borderWidth: 1,
-    borderColor: Glass.default.borderColor,
+    borderColor: Colors.border,
     marginRight: Spacing.sm,
   },
   filterChipActive: {

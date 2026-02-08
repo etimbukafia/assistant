@@ -1,28 +1,28 @@
 export const Colors = {
-    // Base - Luxury Glass (Dark Mode)
-    bgBase: '#050B14', // Deep Executive Navy (almost black)
-    bgSurface: 'rgba(255, 255, 255, 0.08)', // Glass Surface fallback
-    bgElevated: 'rgba(22, 33, 62, 0.6)',
+    // Base - Boutique Stationery (Light Mode)
+    bgBase: '#F9F6F2', // Linen
+    bgSurface: '#FFFFFF', // Pure White
+    bgElevated: '#FFFFFF', // White cards
 
-    // Accents - Boutique Stationery preserved in Dark Mode
-    accentPrimary: '#7E2E2E', // Rich Auburn - Headlines & Primary CTAs (Glows)
-    accentSecondary: '#D97745', // Natural Copper - Icons & Interactive accents (Highlights)
-    accentPrecision: '#1A5F7A', // Teal - Precision/Insight (Replaces Navy for contrast)
-    accentMint: '#A0E8AF', // Soft Mint - Success/Growth (New)
+    // Accents - Preserved
+    accentPrimary: '#7E2E2E', // Rich Auburn
+    accentSecondary: '#D97745', // Natural Copper
+    accentPrecision: '#1A5F7A', // Teal
+    accentMint: '#8A9A5B', // Sage Green (Success)
 
-    // Text
-    textPrimary: '#FFFFFF', // White - Maximum legibility on dark
-    textSecondary: '#A0AEC0', // Cool Grey
-    textMuted: '#64748B',   // Slate
+    // Text - High Contrast for Light Mode
+    textPrimary: '#050505', // Obsidian
+    textSecondary: '#6B7280', // Muted Gray
+    textMuted: '#9CA3AF',   // Light Gray
 
     // Borders
-    border: 'rgba(255, 255, 255, 0.1)',
-    borderLight: 'rgba(255, 255, 255, 0.05)',
-    borderStrong: 'rgba(255, 255, 255, 0.2)',
+    border: '#E5E7EB',
+    borderLight: '#F3F4F6',
+    borderStrong: '#D1D5DB',
 
     // Status
     success: '#8A9A5B', // Sage Green
-    error: '#FF6B6B', // Softer Red for dark mode readability
+    error: '#DC2626', // Red
 };
 
 export const Spacing = {
