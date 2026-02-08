@@ -14,6 +14,8 @@ router = APIRouter(prefix="/scheduling", tags=["Scheduling"])
 def get_scheduling_suggestions(
     message_id: int = None,
     status: str = None,
+    limit: int = 50,
+    offset: int = 0,
     db: Session = Depends(get_db_for_user)
 ):
     """Get scheduling suggestions, optionally filtered by message or status"""
@@ -25,11 +27,12 @@ def get_scheduling_suggestions(
     if status:
         query = query.filter(SchedulingSuggestion.status == status)
 
-    suggestions = query.order_by(SchedulingSuggestion.created_at.desc()).all()
+    total = query.count()
+    suggestions = query.order_by(SchedulingSuggestion.created_at.desc()).offset(offset).limit(limit).all()
 
     return {
         "suggestions": [SchedulingSuggestionResponse.model_validate(s) for s in suggestions],
-        "total": len(suggestions)
+        "total": total
     }
 
 

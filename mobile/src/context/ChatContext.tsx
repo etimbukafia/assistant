@@ -115,8 +115,8 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
   const refreshSessions = useCallback(async () => {
     setIsLoadingSessions(true);
     try {
-      const fetchedSessions = await listSessions();
-      setSessions(fetchedSessions);
+      const result = await listSessions();
+      setSessions(result.sessions);
     } catch (error) {
       console.error('Failed to fetch sessions:', error);
     } finally {

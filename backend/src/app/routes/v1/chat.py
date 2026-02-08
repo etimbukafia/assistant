@@ -100,13 +100,14 @@ async def create_session(
 @router.get("/sessions")
 async def list_sessions(
     limit: int = 20,
+    offset: int = 0,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db_for_user)
 ):
     """List user's chat sessions."""
     service = ChatService(db, user.user_id)
-    sessions = service.list_sessions(limit=limit)
-    
+    sessions, total = service.list_sessions(limit=limit, offset=offset)
+
     return {
         "sessions": [
             {
@@ -118,7 +119,8 @@ async def list_sessions(
                 "message_count": len(s.messages) if s.messages else 0
             }
             for s in sessions
-        ]
+        ],
+        "total": total
     }
 
 

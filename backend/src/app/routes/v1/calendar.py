@@ -46,8 +46,8 @@ def create_calendar_event(
 @router.get("/events")
 def get_calendar_events(
     status: str = None,
-    skip: int = 0,
     limit: int = 50,
+    offset: int = 0,
     db: Session = Depends(get_db_for_user)
 ):
     """Get calendar events"""
@@ -58,7 +58,7 @@ def get_calendar_events(
         query = query.filter(CalendarEvent.status == status)
 
     total = query.count()
-    events = query.order_by(CalendarEvent.start_time.desc()).offset(skip).limit(limit).all()
+    events = query.order_by(CalendarEvent.start_time.desc()).offset(offset).limit(limit).all()
 
     return {
         "events": [CalendarEventResponse.model_validate(e) for e in events],

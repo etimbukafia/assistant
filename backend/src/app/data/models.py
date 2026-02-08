@@ -35,7 +35,7 @@ class Message(Base):
 
     # AI-generated fields
     summary = Column(Text, nullable=True)
-    needs_reply = Column(Boolean, nullable=True)
+    needs_reply = Column(Boolean, nullable=True, index=True)
     extracted_tasks = Column(JSON, nullable=True)
     extracted_dates = Column(JSON, nullable=True)
     extracted_people = Column(JSON, nullable=True)
@@ -278,7 +278,7 @@ class Task(Base):
     status = Column(String, default="pending_approval", index=True)
     # Status options: pending_approval, approved, dismissed, completed, snoozed, superseded
     approved_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True, index=True)
     dismissed_at = Column(DateTime, nullable=True)
 
     # Reminder Logic

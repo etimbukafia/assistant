@@ -51,13 +51,13 @@ export interface UpdateTaskRequest {
  */
 export async function fetchTasks(params?: {
     status?: string;
-    skip?: number;
     limit?: number;
+    offset?: number;
 }): Promise<TasksResponse> {
     const searchParams = new URLSearchParams();
     if (params?.status) searchParams.append('status', params.status);
-    if (params?.skip) searchParams.append('skip', params.skip.toString());
     if (params?.limit) searchParams.append('limit', params.limit.toString());
+    if (params?.offset) searchParams.append('offset', params.offset.toString());
 
     const query = searchParams.toString();
     const response = await api.get<TasksResponse>(`/tasks${query ? `?${query}` : ''}`);

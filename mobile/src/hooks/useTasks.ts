@@ -38,7 +38,7 @@ export const tasksKeys = {
 /**
  * Hook for fetching tasks with optional status filter
  */
-export function useTasks(params?: { status?: string; skip?: number; limit?: number; enabled?: boolean }) {
+export function useTasks(params?: { status?: string; limit?: number; offset?: number; enabled?: boolean }) {
     return useQuery({
         queryKey: tasksKeys.list(params?.status),
         queryFn: () => fetchTasks(params),

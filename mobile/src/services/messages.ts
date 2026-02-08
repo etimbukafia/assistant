@@ -97,13 +97,13 @@ export interface TimeSlot {
  * Fetch messages with optional filtering
  */
 export async function fetchMessages(params?: {
-    skip?: number;
     limit?: number;
+    offset?: number;
     needs_reply?: boolean;
 }): Promise<MessagesResponse> {
     const searchParams = new URLSearchParams();
-    if (params?.skip) searchParams.append('skip', params.skip.toString());
     if (params?.limit) searchParams.append('limit', params.limit.toString());
+    if (params?.offset) searchParams.append('offset', params.offset.toString());
     if (params?.needs_reply !== undefined) searchParams.append('needs_reply', params.needs_reply.toString());
 
     const query = searchParams.toString();

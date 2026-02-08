@@ -286,8 +286,8 @@ def sync_sent_messages(
 
 @router.get("/", response_model=MessagesListResponse)
 def get_messages(
-    skip: int = 0,
     limit: int = 3,
+    offset: int = 0,
     needs_reply: bool = None,
     db: Session = Depends(get_db_for_user)
 ):
@@ -304,7 +304,7 @@ def get_messages(
     total = query.count()
 
     # Get paginated messages
-    messages = query.order_by(Message.received_at.desc()).offset(skip).limit(limit).all()
+    messages = query.order_by(Message.received_at.desc()).offset(offset).limit(limit).all()
 
     # Fetch tasks for each message
     message_ids = [msg.id for msg in messages]
@@ -353,18 +353,23 @@ def get_messages(
 @router.get("/new")
 def get_new_messages(
     since: datetime,
+    limit: int = 50,
+    offset: int = 0,
     db: Session = Depends(get_db_for_user)
 ):
     """
     Get messages received since timestamp.
-    
+
     Used for polling - frontend checks for new items periodically.
     Only returns inbox messages (not archived/synced).
     """
-    messages = db.query(Message).filter(
+    query = db.query(Message).filter(
         Message.received_at > since,
         Message.status == "inbox"
-    ).order_by(Message.received_at.desc()).all()
+    ).order_by(Message.received_at.desc())
+
+    total = query.count()
+    messages = query.offset(offset).limit(limit).all()
     
     # Build response with tasks
     message_dicts = []
@@ -397,8 +402,8 @@ def get_new_messages(
         message_dicts.append(msg_dict)
     
     messages_response = [MessageResponse(**msg_dict) for msg_dict in message_dicts]
-    
-    return {"messages": messages_response, "count": len(messages_response)}
+
+    return {"messages": messages_response, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/processing-status")

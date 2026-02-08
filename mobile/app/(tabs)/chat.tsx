@@ -133,11 +133,11 @@ export default function ChatScreen() {
   const { isSandbox, isActive, subscriptionTier } = useAuth();
   // Don't fetch sessions in sandbox mode - no point making API calls
   // When expired (!isActive), still fetch to allow viewing history (read-only)
-  const { data: sessions, isLoading, refetch, isRefetching } = useChatSessions({
+  const { data: sessionsData, isLoading, refetch, isRefetching } = useChatSessions({
     enabled: !isSandbox,
   });
   // Show sessions for viewing (read-only when expired), but empty in sandbox
-  const actualSessions = isSandbox ? [] : (sessions || []);
+  const actualSessions = isSandbox ? [] : (sessionsData?.sessions || []);
   const deleteSession = useDeleteSession();
   const createSession = useCreateSession();
 

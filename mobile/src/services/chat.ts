@@ -81,11 +81,14 @@ export async function createSession(sessionType: SessionType = 'command'): Promi
 /**
  * List user's chat sessions.
  */
-export async function listSessions(limit: number = 20): Promise<ChatSession[]> {
-  const response = await api.get<{ sessions: ChatSession[] }>('/chat/sessions', {
-    params: { limit },
+export async function listSessions(
+  limit: number = 20,
+  offset: number = 0
+): Promise<{ sessions: ChatSession[]; total: number }> {
+  const response = await api.get<{ sessions: ChatSession[]; total: number }>('/chat/sessions', {
+    params: { limit, offset },
   });
-  return response.data.sessions;
+  return response.data;
 }
 
 /**

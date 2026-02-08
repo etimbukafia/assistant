@@ -22,6 +22,8 @@ router = APIRouter(prefix="/memory", tags=["Memory"])
 @router.get("/preferences", response_model=PrincipalMemoryListResponse)
 def get_preferences(
     context_type: str = None,
+    limit: int = 100,
+    offset: int = 0,
     db: Session = Depends(get_db_for_user)
 ):
     """Get all user preferences, optionally filtered by context type"""
@@ -31,9 +33,10 @@ def get_preferences(
     if context_type:
         query = query.filter(PrincipalMemory.context_type == context_type)
 
-    preferences = query.order_by(PrincipalMemory.key).all()
+    total = query.count()
+    preferences = query.order_by(PrincipalMemory.key).offset(offset).limit(limit).all()
 
-    return PrincipalMemoryListResponse(preferences=preferences, total=len(preferences))
+    return PrincipalMemoryListResponse(preferences=preferences, total=total)
 
 
 @router.post("/preferences", response_model=PrincipalMemoryResponse)
@@ -120,6 +123,8 @@ def get_patterns(
     status: str = None,
     context_type: str = None,
     min_confidence: float = None,
+    limit: int = 100,
+    offset: int = 0,
     db: Session = Depends(get_db_for_user)
 ):
     """Get decision patterns, optionally filtered"""
@@ -133,13 +138,18 @@ def get_patterns(
     if min_confidence:
         query = query.filter(DecisionPattern.confidence >= min_confidence)
 
-    patterns = query.order_by(DecisionPattern.confidence.desc()).all()
+    total = query.count()
+    patterns = query.order_by(DecisionPattern.confidence.desc()).offset(offset).limit(limit).all()
 
-    return DecisionPatternListResponse(patterns=patterns, total=len(patterns))
+    return DecisionPatternListResponse(patterns=patterns, total=total)
 
 
 @router.get("/patterns/suggestions", response_model=DecisionPatternListResponse)
-def get_pattern_suggestions(db: Session = Depends(get_db_for_user)):
+def get_pattern_suggestions(
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db_for_user)
+):
     """
     Get patterns ready to be surfaced as suggestions.
     Only returns patterns with:
@@ -149,13 +159,16 @@ def get_pattern_suggestions(db: Session = Depends(get_db_for_user)):
     """
     stale_threshold = datetime.now(timezone.utc) - timedelta(days=90)
 
-    patterns = db.query(DecisionPattern).filter(
+    query = db.query(DecisionPattern).filter(
         DecisionPattern.status == "observed",
         DecisionPattern.confidence >= 0.6,
         DecisionPattern.last_occurrence_at >= stale_threshold
-    ).order_by(DecisionPattern.confidence.desc()).all()
+    ).order_by(DecisionPattern.confidence.desc())
 
-    return DecisionPatternListResponse(patterns=patterns, total=len(patterns))
+    total = query.count()
+    patterns = query.offset(offset).limit(limit).all()
+
+    return DecisionPatternListResponse(patterns=patterns, total=total)
 
 
 @router.post("/patterns/{pattern_id}/action")
@@ -218,6 +231,8 @@ def action_on_pattern(
 @router.get("/contacts", response_model=ContactContextListResponse)
 def get_contacts(
     category: str = None,
+    limit: int = 100,
+    offset: int = 0,
     db: Session = Depends(get_db_for_user)
 ):
     """Get all contact contexts, optionally filtered by category"""
@@ -226,9 +241,10 @@ def get_contacts(
     if category:
         query = query.filter(ContactContext.category == category)
 
-    contacts = query.order_by(ContactContext.contact_email).all()
+    total = query.count()
+    contacts = query.order_by(ContactContext.contact_email).offset(offset).limit(limit).all()
 
-    return ContactContextListResponse(contacts=contacts, total=len(contacts))
+    return ContactContextListResponse(contacts=contacts, total=total)
 
 
 @router.get("/contacts/{contact_email}", response_model=ContactContextResponse)

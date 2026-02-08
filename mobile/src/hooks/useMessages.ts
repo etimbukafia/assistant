@@ -40,7 +40,7 @@ export const messagesKeys = {
 /**
  * Hook for fetching messages with optional filtering
  */
-export function useMessages(params?: { skip?: number; limit?: number; needs_reply?: boolean; enabled?: boolean }) {
+export function useMessages(params?: { limit?: number; offset?: number; needs_reply?: boolean; enabled?: boolean }) {
     return useQuery({
         queryKey: messagesKeys.list({ needs_reply: params?.needs_reply }),
         queryFn: () => fetchMessages(params),

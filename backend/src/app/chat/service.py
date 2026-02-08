@@ -11,7 +11,7 @@ Processing Strategy: Optimistic Sync with Async Fallback
   - Processing timeout (>8s)
   - High server load
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from enum import Enum
@@ -171,11 +171,15 @@ class ChatService:
             ChatSession.user_id == self.user_id
         ).first()
     
-    def list_sessions(self, limit: int = 20) -> List[ChatSession]:
-        """List user's sessions, most recent first."""
-        return self.db.query(ChatSession).filter(
+    def list_sessions(self, limit: int = 20, offset: int = 0) -> Tuple[List[ChatSession], int]:
+        """List user's sessions, most recent first. Returns (sessions, total_count)."""
+        query = self.db.query(ChatSession).filter(
             ChatSession.user_id == self.user_id
-        ).order_by(ChatSession.last_activity_at.desc()).limit(limit).all()
+        ).order_by(ChatSession.last_activity_at.desc())
+
+        total = query.count()
+        sessions = query.offset(offset).limit(limit).all()
+        return sessions, total
     
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and all related data."""

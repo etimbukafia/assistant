@@ -39,19 +39,20 @@ def update_digest_preferences(
 @router.get("/", response_model=DigestsListResponse)
 def get_digests(
     limit: int = 10,
+    offset: int = 0,
     digest_type: str = None,
     db: Session = Depends(get_db_for_user)
 ):
     """Get recent digests with optional type filter."""
-    
+
     query = db.query(Digest).order_by(Digest.created_at.desc())
-    
+
     if digest_type:
         query = query.filter(Digest.digest_type == digest_type)
-    
+
     total = query.count()
-    digests = query.limit(limit).all()
-    
+    digests = query.offset(offset).limit(limit).all()
+
     return DigestsListResponse(digests=digests, total=total)
 
 
