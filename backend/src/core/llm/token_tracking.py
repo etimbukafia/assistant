@@ -64,6 +64,8 @@ def record_token_usage(
     """
     Record token usage to the database.
 
+    Also updates credits_used on UserSettings for Gemini models (not Gemma).
+
     Args:
         db: Database session
         user_id: User ID
@@ -76,6 +78,7 @@ def record_token_usage(
         return
 
     from app.data.models import TokenUsage
+    from app.services.credits import is_gemini_model, add_credit_usage
 
     cost = calculate_cost(model, input_tokens, output_tokens)
 
@@ -88,6 +91,11 @@ def record_token_usage(
         operation=operation
     )
     db.add(usage)
+
+    # Update credit usage for Gemini models (not Gemma)
+    if cost > 0 and is_gemini_model(model):
+        add_credit_usage(db, user_id, cost)
+
     # Don't commit here - let caller handle transaction
 
 

@@ -32,7 +32,7 @@ export default function SplashScreen() {
 
     const navigateToLogin = () => {
         setTimeout(() => {
-            router.replace('/login' as any);
+            router.replace('/auth/welcome' as any);
         }, 1200); // Give it a moment of stillness
     };
 

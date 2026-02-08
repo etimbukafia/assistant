@@ -63,12 +63,16 @@ def activate_trial(
     # Activate trial
     settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=7)
     settings.subscription_status = "trialing"
-    
+
     # Set assistant name and mark onboarding complete
     if request and request.assistant_name:
         settings.assistant_name = request.assistant_name.strip()[:50] or "Donna"
     settings.onboarding_completed = True
-    
+
+    # Initialize credits for trial
+    from app.services.credits import initialize_credits_for_trial
+    initialize_credits_for_trial(settings)
+
     db.commit()
     
     return {

@@ -44,7 +44,7 @@ export default function LoginScreen() {
                             activeOpacity={0.9}
                             onPress={handleLogin}
                         >
-                            <DonnaText style={styles.primaryButtonText}>Log in</DonnaText>
+                            <DonnaText style={styles.primaryButtonText}>Log in ✨</DonnaText>
                             <Ionicons name="arrow-forward" size={20} color="#FFFFFF" style={{ marginLeft: 8 }} />
                         </TouchableOpacity>
                     </View>

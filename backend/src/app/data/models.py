@@ -184,6 +184,11 @@ class UserSettings(Base):
     assistant_name = Column(String, default="Donna")  # User's chosen name for AI assistant
     onboarding_completed = Column(Boolean, default=False)  # True after first-time setup
 
+    # Credit system (from migration 027)
+    credits_used = Column(Float, default=0.0)  # USD spent on Gemini models this period
+    credits_limit = Column(Float, default=1.0)  # USD limit (1.0 trial, 5.0 pro)
+    credits_period_start = Column(DateTime, nullable=True)  # When current billing period started
+
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -233,6 +238,18 @@ class UserSettings(Base):
             return max(0, delta.days)
 
         return 0
+
+    @property
+    def credits_remaining(self) -> float:
+        """Remaining credits in USD for this billing period"""
+        limit = self.credits_limit if self.credits_limit is not None else 1.0
+        used = self.credits_used if self.credits_used is not None else 0.0
+        return max(0.0, limit - used)
+
+    @property
+    def credits_exhausted(self) -> bool:
+        """Check if user has exhausted their AI credits"""
+        return self.credits_remaining <= 0
 
 
 class Task(Base):

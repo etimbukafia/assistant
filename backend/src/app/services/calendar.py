@@ -17,6 +17,7 @@ from googleapiclient.discovery import build
 
 from app.security.encryption import decrypt_token
 from app.integrations.gmail import SCOPES
+from app.infra.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,6 @@ class CalendarService:
         """
         self.db = db
         self.service = None
-        self._credentials_file = "credentials.json"
 
     def _load_credentials(self, email: Optional[str] = None) -> Optional[Credentials]:
         """
@@ -109,14 +109,13 @@ class CalendarService:
         if token_expiry and hasattr(token_expiry, 'tzinfo') and token_expiry.tzinfo is not None:
             token_expiry = token_expiry.replace(tzinfo=None)
 
-        # Load client credentials
-        try:
-            with open(self._credentials_file, 'r') as f:
-                creds_data = json.load(f)
-                client_id = creds_data['web']['client_id']
-                client_secret = creds_data['web']['client_secret']
-        except (FileNotFoundError, KeyError) as e:
-            logger.error(f"Failed to load client credentials: {e}")
+        # Load client credentials from environment
+        settings = get_settings()
+        client_id = settings.GOOGLE_CLIENT_ID
+        client_secret = settings.GOOGLE_CLIENT_SECRET
+
+        if not client_id or not client_secret:
+            logger.error("GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not configured")
             return None
 
         creds = Credentials(

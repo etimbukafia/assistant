@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_current_user, get_db_for_user, require_active_subscription, AuthenticatedUser as User
+from app.security.auth import get_current_user, get_db_for_user, require_active_subscription, require_credits_available, AuthenticatedUser as User
 from app.chat.service import ChatService, ProcessingStatus
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -196,6 +196,7 @@ async def send_message(
     session_id: str,
     request: SendMessageRequest,
     user: User = Depends(require_active_subscription),
+    _credits: User = Depends(require_credits_available),
     db: Session = Depends(get_db_for_user)
 ):
     """

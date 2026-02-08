@@ -43,6 +43,8 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
     """
     from app.processors.message import process_messages_batch
     from app.infra.database import SessionLocal
+    from app.data.models import UserSettings
+    from app.services.credits import check_credits_available
 
     # Require user_id for RLS context
     if not user_id:
@@ -50,6 +52,19 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
 
     if not tasks:
         return
+
+    # Check if user has credits available before processing
+    db_check = SessionLocal()
+    try:
+        db_check.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+        settings = db_check.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+        if settings:
+            can_proceed, _ = check_credits_available(settings)
+            if not can_proceed:
+                logger.info(f"Skipping email batch for user {user_id}: credits exhausted")
+                return
+    finally:
+        db_check.close()
 
     logger.info(f"Processing batch of {len(tasks)} emails for user {user_id}")
 

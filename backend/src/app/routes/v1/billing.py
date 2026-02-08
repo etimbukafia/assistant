@@ -105,3 +105,50 @@ def get_token_usage(
     """Get total token usage statistics for the current user."""
     usage = get_user_usage_summary(db, user.id)
     return TokenUsageResponse(**usage)
+
+
+class CreditStatusResponse(BaseModel):
+    credits_used: float
+    credits_limit: float
+    credits_remaining: float
+    percentage_used: float
+    is_exhausted: bool
+    period_start: str | None
+    tier: str
+
+
+@router.get("/credits", response_model=CreditStatusResponse)
+def get_credit_status(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get current credit usage and remaining balance.
+
+    Credits control access to AI features:
+    - Trial: 100 credits = $1.00 USD
+    - Pro: 500 credits = $5.00 USD
+
+    Only Gemini models consume credits (Gemma models are free).
+    """
+    from app.data.models import UserSettings
+    from app.services.credits import get_credit_status
+
+    settings = db.query(UserSettings).filter(
+        UserSettings.user_id == user.id
+    ).first()
+
+    if not settings:
+        raise HTTPException(status_code=404, detail="User settings not found")
+
+    status = get_credit_status(settings)
+
+    return CreditStatusResponse(
+        credits_used=status["credits_used"],
+        credits_limit=status["credits_limit"],
+        credits_remaining=status["credits_remaining"],
+        percentage_used=status["percentage_used"],
+        is_exhausted=status["is_exhausted"],
+        period_start=status["period_start"],
+        tier=status["tier"]
+    )

@@ -16,6 +16,7 @@ import {
 import {
   Inter_400Regular,
 } from '@expo-google-fonts/inter';
+import { Ionicons } from '@expo/vector-icons';
 import { AuthProvider } from '../src/context/AuthContext';
 import { ChatProvider, useChat } from '../src/context/ChatContext';
 import { SyncCTAProvider } from '../src/context/SyncCTAContext';
@@ -65,6 +66,7 @@ export default function RootLayout() {
     PlayfairDisplay_400Regular,
     Inter_400Regular,
     ...FontAwesome.font,
+    ...Ionicons.font,
   });
 
   // Expo Router uses Error Boundaries to catch errors in the navigation tree.

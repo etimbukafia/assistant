@@ -111,7 +111,11 @@ def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
             )
         except (ValueError, TypeError):
             pass
-    
+
+    # Initialize credits for Pro tier
+    from app.services.credits import initialize_credits_for_pro
+    initialize_credits_for_pro(user)
+
     logger.info(f"Subscription created for user {user.user_email}, tier=pro")
 
 
@@ -133,8 +137,8 @@ def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
         return
 
     user.subscription_status = "active"
-    
-    # Update expiry date
+
+    # Update expiry date and check for credit reset on renewal
     if subscription.get("current_period_end"):
         try:
             user.subscription_expires_at = datetime.fromisoformat(
@@ -142,7 +146,21 @@ def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
             )
         except (ValueError, TypeError):
             pass
-    
+
+    # Reset credits if this is a new billing period
+    if subscription.get("current_period_start"):
+        try:
+            new_period_start = datetime.fromisoformat(
+                subscription["current_period_start"].replace("Z", "+00:00")
+            )
+            # Only reset if this is actually a new period
+            if user.credits_period_start is None or new_period_start > user.credits_period_start:
+                from app.services.credits import reset_credits, PRO_CREDIT_LIMIT
+                reset_credits(user, PRO_CREDIT_LIMIT)
+                logger.info(f"Credits reset for user {user.user_email} on renewal")
+        except (ValueError, TypeError):
+            pass
+
     logger.info(f"Subscription active for user {user.user_email}")
 
 
@@ -223,7 +241,11 @@ def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
     user.subscription_status = "expired"
     user.polar_subscription_id = None
     user.subscription_expires_at = None
-    
+
+    # Set credit limit back to trial (don't reset usage - they keep what they've used)
+    from app.services.credits import TRIAL_CREDIT_LIMIT
+    user.credits_limit = TRIAL_CREDIT_LIMIT
+
     logger.info(f"Subscription revoked for user {user.user_email}")
 
 
