@@ -30,8 +30,12 @@ export const CustomSplashScreen = () => {
             <View style={styles.content}>
                 <Animated.View style={[styles.logoContainer, animatedStyle]}>
                     <View style={styles.logoRow}>
-                        <View style={styles.interlockContainer}>
-                            <DonnaText style={styles.logoT}>T</DonnaText>
+                        <View style={styles.logoIconContainer}>
+                            <Image
+                                source={require('../../../assets/teeks_logo.png')}
+                                style={styles.logoIcon}
+                                resizeMode="contain"
+                            />
                         </View>
                         <DonnaText style={styles.logoText}>EEKS<DonnaText style={styles.logoDot}>.</DonnaText></DonnaText>
                     </View>
@@ -57,25 +61,24 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
     },
-    interlockContainer: {
-        width: 60,
-        height: 60,
-        backgroundColor: Colors.accentPrimary, // Auburn
+    logoIconContainer: {
+        width: 64,
+        height: 64,
+        backgroundColor: '#FFFFFF',
         borderRadius: Radius.sm,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 10,
-        shadowColor: Colors.accentPrimary,
+        marginRight: 8,
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
+        shadowOpacity: 0.2,
         shadowRadius: 8,
         elevation: 5,
+        padding: 6,
     },
-    logoT: {
-        ...Typography.logo,
-        fontSize: 40,
-        color: '#FFFFFF',
-        lineHeight: 48,
+    logoIcon: {
+        width: 52,
+        height: 52,
     },
     logoText: {
         ...Typography.logo,

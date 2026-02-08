@@ -6,8 +6,6 @@ import { Colors, Spacing, Typography, Radius } from '../src/theme/Theme';
 import { DonnaText } from '../src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
 import { ImmersiveBackground } from '../src/components/ui/ImmersiveBackground';
-import { Glass } from '../src/theme/Glass';
-import { Ionicons } from '@expo/vector-icons';
 
 const { width } = Dimensions.get('window');
 
@@ -44,8 +42,8 @@ export default function LoginScreen() {
                             activeOpacity={0.9}
                             onPress={handleLogin}
                         >
-                            <DonnaText style={styles.primaryButtonText}>Log in ✨</DonnaText>
-                            <Ionicons name="arrow-forward" size={20} color="#FFFFFF" style={{ marginLeft: 8 }} />
+                            <DonnaText style={styles.primaryButtonText}>Log in</DonnaText>
+                            <DonnaText style={[styles.primaryButtonText, { marginLeft: 8 }]}>→</DonnaText>
                         </TouchableOpacity>
                     </View>
                 </View>

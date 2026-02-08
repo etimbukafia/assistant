@@ -7,7 +7,6 @@ import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
 import { ImmersiveBackground } from '../../src/components/ui/ImmersiveBackground';
-import { Glass } from '../../src/theme/Glass';
 
 const { width } = Dimensions.get('window');
 
@@ -44,7 +43,7 @@ export default function WelcomeScreen() {
                 {/* Header / Nav */}
                 <View style={styles.header}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                        <Ionicons name="chevron-back" size={24} color="#FFFFFF" />
+                        <DonnaText style={styles.backButtonText}>←</DonnaText>
                     </TouchableOpacity>
                 </View>
 
@@ -104,6 +103,11 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.08)',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.1)',
+    },
+    backButtonText: {
+        fontSize: 24,
+        color: '#FFFFFF',
+        lineHeight: 28,
     },
     content: {
         flex: 1,
