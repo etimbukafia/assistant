@@ -30,19 +30,16 @@ export const notificationKeys = {
  * Polls every 30 seconds.
  */
 export function useUnreadCount() {
-    const { isSandbox } = useAuth();
-
     const query = useQuery({
         queryKey: notificationKeys.unreadCount(),
         queryFn: fetchUnreadCount,
-        enabled: !isSandbox,
         refetchInterval: 30_000,
         staleTime: 15_000,
     });
 
     return {
-        unreadCount: isSandbox ? 0 : (query.data ?? 0),
-        isLoading: isSandbox ? false : query.isLoading,
+        unreadCount: query.data ?? 0,
+        isLoading: query.isLoading,
     };
 }
 
@@ -50,13 +47,11 @@ export function useUnreadCount() {
  * Hook for notification feed (list of notifications).
  */
 export function useNotificationFeed() {
-    const { isSandbox } = useAuth();
     const queryClient = useQueryClient();
 
     const query = useQuery({
         queryKey: notificationKeys.list(),
         queryFn: () => fetchNotifications(50, 0),
-        enabled: !isSandbox,
     });
 
     const markReadMutation = useMutation({
@@ -74,10 +69,10 @@ export function useNotificationFeed() {
     });
 
     return {
-        notifications: isSandbox ? [] : (query.data?.notifications ?? []),
-        total: isSandbox ? 0 : (query.data?.total ?? 0),
-        unreadCount: isSandbox ? 0 : (query.data?.unread_count ?? 0),
-        isLoading: isSandbox ? false : query.isLoading,
+        notifications: query.data?.notifications ?? [],
+        total: query.data?.total ?? 0,
+        unreadCount: query.data?.unread_count ?? 0,
+        isLoading: query.isLoading,
         refetch: query.refetch,
         markRead: markReadMutation.mutate,
         markAllRead: markAllReadMutation.mutate,
@@ -89,13 +84,13 @@ export function useNotificationFeed() {
  * Call once at the app root level.
  */
 export function usePushNotificationSetup() {
-    const { isAuthenticated, isSandbox } = useAuth();
+    const { isAuthenticated } = useAuth();
     const router = useRouter();
     const queryClient = useQueryClient();
     const responseListener = useRef<Notifications.Subscription>();
 
     useEffect(() => {
-        if (!isAuthenticated || isSandbox) return;
+        if (!isAuthenticated) return;
 
         // Register push token
         (async () => {
@@ -133,5 +128,5 @@ export function usePushNotificationSetup() {
                 Notifications.removeNotificationSubscription(responseListener.current);
             }
         };
-    }, [isAuthenticated, isSandbox]);
+    }, [isAuthenticated]);
 }

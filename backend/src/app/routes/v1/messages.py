@@ -719,8 +719,11 @@ def trigger_initial_sync(
     db: Session = Depends(get_db_for_user)
 ):
     """
-    Trigger initial 24-hour email backfill.
-    
+    Trigger initial email backfill for today's emails.
+
+    Fetches emails from midnight (user's timezone) to now, ensuring
+    users see all relevant emails from the current day on first sync.
+
     Called when:
     - First Gmail connection after trial activation
     - Returning subscriber after lapsed subscription
@@ -736,15 +739,18 @@ def trigger_initial_sync(
         # Already synced, use incremental
         return {"status": "already_completed", "sync_type": "incremental"}
 
-    # Queue 24-hour backfill job
-    # We use 'email_backfill' task name which should be handled by the worker
+    # Get user's timezone for calculating "today"
+    user_settings = db.query(UserSettings).filter(
+        UserSettings.user_id == user.user_id
+    ).first()
+    user_timezone = user_settings.default_timezone if user_settings else "UTC"
+
+    # Queue backfill job for today's emails (midnight to now in user's timezone)
     enqueue_task("email_backfill", {
         "user_id": user.user_id,
-        "hours_back": 24,
+        "sync_mode": "today",  # New mode: fetch from midnight in user's timezone
+        "user_timezone": user_timezone,
         "gmail_account_id": gmail_account.id
     })
-    
-    # We don't set initial_sync_completed here; the worker should do it upon completion
-    # But for now, to prevent loops if worker fails, we rely on the worker.
-    
-    return {"status": "queued", "sync_type": "initial", "hours_back": 24}
+
+    return {"status": "queued", "sync_type": "initial", "mode": "today", "timezone": user_timezone}

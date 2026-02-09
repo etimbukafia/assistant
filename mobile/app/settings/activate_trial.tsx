@@ -36,7 +36,7 @@ export default function ActivateTrialScreen() {
         onSuccess: async () => {
             // 3. Invalidate subscription queries
             queryClient.invalidateQueries({ queryKey: ['subscription'] });
-            // 4. Refresh local profile to update "isSandbox" state
+            // 4. Refresh local profile to update subscription state
             await refreshProfile();
             // 5. Navigate back to Inbox
             router.replace('/(tabs)');

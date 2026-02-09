@@ -22,7 +22,6 @@ interface AuthContextType {
     session: Session | null;
     user: User | null;
     // Subscription state
-    isSandbox: boolean;        // True if user never started trial (show demo data)
     isActive: boolean;         // True if trial/pro is currently valid (allow sync)
     subscriptionTier: string;  // "trial" | "pro"
     daysRemaining: number;     // Days left in trial/subscription
@@ -47,7 +46,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     // Subscription state
-    const [isSandbox, setIsSandbox] = useState(true); // True = never started trial
     const [isActive, setIsActive] = useState(false);  // True = trial/pro currently valid
     const [subscriptionTier, setSubscriptionTier] = useState('trial');
     const [daysRemaining, setDaysRemaining] = useState(0);
@@ -72,10 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             // Clear error state on success
             setSettingsError(false);
 
-            // Subscription state
-            // Sandbox = never started trial (show demo data)
-            setIsSandbox(settings.trial_ends_at == null);
-            // Active = trial/pro is currently valid (from backend)
+            // Subscription state - Active = trial/pro is currently valid (from backend)
             setIsActive(!!settings.is_active);
             setSubscriptionTier(settings.subscription_tier || 'trial');
             setDaysRemaining(settings.days_remaining || 0);
@@ -125,7 +120,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             checkSubscription();
         } else {
             // Reset all state on logout
-            setIsSandbox(true);
             setIsActive(false);
             setSubscriptionTier('trial');
             setDaysRemaining(0);
@@ -235,7 +229,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 session,
                 user,
                 // Subscription state
-                isSandbox,
                 isActive,
                 subscriptionTier,
                 daysRemaining,

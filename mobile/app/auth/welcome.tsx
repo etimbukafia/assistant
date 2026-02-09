@@ -20,8 +20,9 @@ export default function WelcomeScreen() {
             setIsLoading(true);
             const success = await signInWithGoogle();
             // Only navigate if sign-in was successful (not cancelled)
+            // New users go to subscription selection, returning users handled by login.tsx
             if (success) {
-                router.replace('/(tabs)' as any);
+                router.replace('/auth/subscription' as any);
             }
         } catch (error: any) {
             console.error('Google auth error:', error);

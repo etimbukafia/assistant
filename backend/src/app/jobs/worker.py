@@ -713,8 +713,11 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
     """
     Handler for 'email_backfill' tasks.
 
-    Fetches emails from the specified time window (default 24h), saves to DB,
-    applies email filters, and queues for AI processing.
+    Supports two modes:
+    - "today": Fetches emails from midnight (user's timezone) to now
+    - Legacy: Fetches emails from last N hours (hours_back parameter)
+
+    Saves to DB, applies email filters, and queues for AI processing.
     Marks initial_sync_completed = True on success.
     """
     from app.data.models import GmailAccount, Message
@@ -723,8 +726,11 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
     from app.security.encryption import encrypt_body
     from app.services.email_filter import EmailFilterService, FilterAction
     from app.jobs.queue import enqueue_task
+    from zoneinfo import ZoneInfo
 
     user_id = payload.get("user_id")
+    sync_mode = payload.get("sync_mode", "hours")  # "today" or "hours" (legacy)
+    user_timezone = payload.get("user_timezone", "UTC")
     hours_back = payload.get("hours_back", 24)
 
     if not user_id:
@@ -734,7 +740,30 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
     try:
-        logger.info(f"Starting email backfill for user {user_id} (last {hours_back}h)")
+        # Build Gmail query based on sync mode
+        if sync_mode == "today":
+            # Calculate midnight in user's timezone
+            try:
+                user_tz = ZoneInfo(user_timezone)
+            except Exception:
+                user_tz = timezone.utc
+                logger.warning(f"Invalid timezone '{user_timezone}', falling back to UTC")
+
+            now_user = datetime.now(user_tz)
+            midnight_user = now_user.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Gmail 'after:' query uses epoch seconds
+            midnight_epoch = int(midnight_user.timestamp())
+            query = f"after:{midnight_epoch}"
+
+            logger.info(
+                f"Starting email backfill for user {user_id} "
+                f"(today's emails from {midnight_user.isoformat()} in {user_timezone})"
+            )
+        else:
+            # Legacy mode: hours_back
+            query = f"newer_than:{hours_back}h"
+            logger.info(f"Starting email backfill for user {user_id} (last {hours_back}h)")
 
         client = GmailClient(db=db, user_id=user_id)
         if not client.load_credentials():
@@ -742,7 +771,6 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
             return
 
         # Fetch messages
-        query = f"newer_than:{hours_back}h"
         messages = client.get_messages(max_results=500, query=query)
 
         logger.info(f"Fetched {len(messages)} messages for backfill")

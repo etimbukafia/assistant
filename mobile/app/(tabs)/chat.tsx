@@ -20,7 +20,6 @@ import { format, isToday, isYesterday } from 'date-fns';
 
 import { Colors, Spacing, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
-import { SyncDataCTA } from '../../src/components/ui/SyncDataCTA';
 import { SubscriptionExpiredCTA } from '../../src/components/ui/SubscriptionExpiredCTA';
 import { useChatSessions, useDeleteSession, useCreateSession } from '../../src/hooks/useChat';
 import { ChatSession } from '../../src/services/chat';
@@ -130,14 +129,11 @@ const EmptyState: React.FC<{ onCreateSession: (type: 'command' | 'reflection') =
 
 export default function ChatScreen() {
   const router = useRouter();
-  const { isSandbox, isActive, subscriptionTier } = useAuth();
-  // Don't fetch sessions in sandbox mode - no point making API calls
+  const { isActive, subscriptionTier } = useAuth();
   // When expired (!isActive), still fetch to allow viewing history (read-only)
-  const { data: sessionsData, isLoading, refetch, isRefetching } = useChatSessions({
-    enabled: !isSandbox,
-  });
-  // Show sessions for viewing (read-only when expired), but empty in sandbox
-  const actualSessions = isSandbox ? [] : (sessionsData?.sessions || []);
+  const { data: sessionsData, isLoading, refetch, isRefetching } = useChatSessions({});
+  // Show sessions for viewing (read-only when expired)
+  const actualSessions = sessionsData?.sessions || [];
   const deleteSession = useDeleteSession();
   const createSession = useCreateSession();
 
@@ -196,22 +192,8 @@ export default function ChatScreen() {
         )}
       </View>
 
-      {/* Sandbox Mode - Show trial CTA */}
-      {isSandbox ? (
-        <View style={styles.sandboxContainer}>
-          <View style={styles.sandboxContent}>
-            <Ionicons name="chatbubbles-outline" size={48} color={Colors.textMuted} />
-            <DonnaText style={styles.sandboxTitle}>AI Chat Assistant</DonnaText>
-            <DonnaText style={styles.sandboxText}>
-              Get help with tasks, draft emails, and reflect on your day with AI-powered conversations.
-            </DonnaText>
-          </View>
-          <View style={{ paddingHorizontal: Spacing.md }}>
-            <SyncDataCTA />
-          </View>
-        </View>
-      ) : !isActive ? (
-        /* Expired Mode - Show resubscribe CTA but allow viewing history */
+      {/* Expired Mode - Show resubscribe CTA but allow viewing history */}
+      {!isActive ? (
         <View style={styles.listContainer}>
           {/* Expired Banner */}
           <View style={{ padding: Spacing.md }}>
@@ -239,13 +221,13 @@ export default function ChatScreen() {
               }
             />
           ) : (
-            <View style={styles.sandboxContent}>
-              <DonnaText style={styles.sandboxText}>No previous conversations</DonnaText>
+            <View style={styles.emptyContainer}>
+              <DonnaText style={styles.emptyText}>No previous conversations</DonnaText>
             </View>
           )}
         </View>
       ) : (
-        /* Session List - Only when not in sandbox */
+        /* Session List */
         <View style={styles.listContainer}>
           {!isLoading && actualSessions.length === 0 ? (
             <EmptyState onCreateSession={handleCreateSession} />
@@ -471,24 +453,12 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 24,
   },
-  sandboxContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingBottom: Spacing.xl,
-  },
-  sandboxContent: {
+  emptyContainer: {
     alignItems: 'center',
     paddingHorizontal: Spacing.xl,
-    marginBottom: Spacing.xl,
+    marginTop: Spacing.xl,
   },
-  sandboxTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.sm,
-  },
-  sandboxText: {
+  emptyText: {
     fontSize: 14,
     color: Colors.textSecondary,
     textAlign: 'center',

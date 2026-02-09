@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import { SvgXml } from 'react-native-svg';
 import { Colors, Spacing, Radius } from '../../theme/Theme';
 import { DonnaText } from '../ui/DonnaText';
 import { TeeksWordmark } from '../ui/TeeksWordmark';
@@ -85,11 +86,6 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
             >
-                {/* Logo */}
-                <View style={styles.header}>
-                    <TeeksWordmark width={140} height={45} color={Colors.textPrimary} />
-                </View>
-
                 {/* Floating Cards */}
                 <View style={styles.hero}>
                     <View style={styles.cardsContainer}>
@@ -152,8 +148,10 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
                 {/* Headline */}
                 <View style={styles.content}>
                     <DonnaText style={styles.headline}>
-                        Chaos out.{'\n'}
-                        <DonnaText style={styles.headlineHighlight}>Clarity</DonnaText> in.
+                        <DonnaText style={styles.chaosText}>Chaos</DonnaText>
+                        <DonnaText style={styles.headlineBase}> out. </DonnaText>
+                        <DonnaText style={styles.clarityText}>Clarity</DonnaText>
+                        <DonnaText style={styles.headlineBase}> in.</DonnaText>
                     </DonnaText>
                     <DonnaText style={styles.subheadline}>
                         Teeks. The Personal Assistant for Executive Assistants
@@ -168,7 +166,11 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
                         activeOpacity={0.9}
                         disabled={isLoading}
                     >
-                        <Ionicons name="logo-google" size={18} color="#FFFFFF" />
+                        <SvgXml
+                            xml={`<svg viewBox="0 0 48 48" fill="#FFFFFF"><path d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/></svg>`}
+                            width={18}
+                            height={18}
+                        />
                         <DonnaText style={styles.btnPrimaryText}>Continue with Google</DonnaText>
                     </TouchableOpacity>
 
@@ -213,18 +215,14 @@ const styles = StyleSheet.create({
         paddingHorizontal: Spacing.lg,
         paddingBottom: Spacing.xl,
     },
-    header: {
-        alignItems: 'center',
-        paddingTop: Spacing.lg,
-        marginBottom: Spacing.md,
-    },
 
     // Hero / Cards
     hero: {
         height: 320,
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: Spacing.lg,
+        marginBottom: Spacing.xxl * 1.5, // Increased spacing before headline
+        marginTop: Spacing.xxl, // Push everything down a bit more
     },
     cardsContainer: {
         width: 280,
@@ -310,32 +308,41 @@ const styles = StyleSheet.create({
         color: '#1F2937',
         lineHeight: 18,
     },
-
     // Content
     content: {
         alignItems: 'center',
         marginBottom: Spacing.xl,
     },
     headline: {
-        fontFamily: 'PlayfairDisplay_600SemiBold',
-        fontSize: 40,
+        fontFamily: 'PlayfairDisplay_700Bold',
+        fontSize: 32, // Reduced to 32px to fit on mobile screens
         fontWeight: '700',
-        lineHeight: 44,
+        lineHeight: 48, // ample space for ascenders/descenders
         textAlign: 'center',
         color: Colors.textPrimary,
-        letterSpacing: -1,
+        letterSpacing: -0.5,
         marginBottom: Spacing.md,
+        paddingHorizontal: Spacing.md,
     },
-    headlineHighlight: {
-        color: Colors.accentSecondary,
-        fontStyle: 'italic',
+    headlineBase: {
+        // Inherits from headline parent
+    },
+    chaosText: {
+        fontSize: 32,
+        color: '#A91D3A', // Chaotic ruby red
+    },
+    clarityText: {
+        fontFamily: 'PlayfairDisplay_700Bold_Italic',
+        fontSize: 32,
+        color: Colors.accentSecondary, // Copper
     },
     subheadline: {
         fontSize: 16,
-        color: Colors.textMuted,
+        color: Colors.textPrimary, // Changed from textSecondary/muted
         textAlign: 'center',
         lineHeight: 24,
         maxWidth: 320,
+        opacity: 0.8, // Slightly softened but still dark
     },
 
     // Auth
@@ -368,7 +375,8 @@ const styles = StyleSheet.create({
     },
     loginLinkText: {
         fontSize: 14,
-        color: Colors.textMuted,
+        color: Colors.textPrimary,
+        opacity: 0.8,
     },
     loginLinkHighlight: {
         color: Colors.accentSecondary,
@@ -382,11 +390,13 @@ const styles = StyleSheet.create({
     },
     footerText: {
         fontSize: 12,
-        color: Colors.textMuted,
+        color: Colors.textSecondary,
         textAlign: 'center',
         lineHeight: 18,
     },
     footerLink: {
+        fontSize: 12, // Match footerText exactly
+        color: Colors.accentSecondary,
         textDecorationLine: 'underline',
     },
 });

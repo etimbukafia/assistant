@@ -3,12 +3,9 @@ import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, Scroll
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { StatusBar } from 'expo-status-bar';
-import demoData from '../../src/data/demo_state.json';
 import { Task } from '../../src/types/api';
 import { InlineTaskItem } from '../../src/components/ui/InlineTaskItem';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../../src/context/AuthContext';
-import { SyncDataCTA } from '../../src/components/ui/SyncDataCTA';
 import { useTasks, useTaskMutations } from '../../src/hooks/useTasks';
 
 type TabView = 'all' | 'pending' | 'active' | 'waiting';
@@ -16,21 +13,17 @@ type TabView = 'all' | 'pending' | 'active' | 'waiting';
 export default function FocusScreen() {
     const [activeTab, setActiveTab] = useState<TabView>('all');
     const [showCompleted, setShowCompleted] = useState(false);
-    const { isSandbox } = useAuth();
 
     // Task mutations
     const { approve, complete, start, dismiss, isAnyPending } = useTaskMutations();
 
-    // Fetch tasks - disabled in sandbox mode
-    const { data: tasksResponse, isLoading, isRefetching, refetch } = useTasks({ enabled: !isSandbox });
+    // Fetch tasks
+    const { data: tasksResponse, isLoading, isRefetching, refetch } = useTasks({});
 
-    // In sandbox mode, use demo data; otherwise use API response
+    // Use API response
     const allTasks = useMemo(() => {
-        if (isSandbox) {
-            return demoData.tasks as unknown as Task[];
-        }
         return tasksResponse?.tasks || [];
-    }, [isSandbox, tasksResponse]);
+    }, [tasksResponse]);
 
     // Task categories (matching frontend TaskHub.jsx)
     const pendingApprovalTasks = allTasks.filter(t => t.status === 'pending_approval');
@@ -129,13 +122,6 @@ export default function FocusScreen() {
             >
                 {renderHeader()}
 
-                {/* Sync CTA Banner (only in Sandbox) */}
-                {isSandbox && (
-                    <View style={{ paddingHorizontal: Spacing.md, marginBottom: Spacing.md }}>
-                        <SyncDataCTA />
-                    </View>
-                )}
-
                 {/* Pending Approval - "Suggested by AI" */}
                 {filtered.pending.length > 0 && (
                     <View style={styles.section}>
@@ -147,10 +133,10 @@ export default function FocusScreen() {
                             <View key={task.id} style={styles.taskContainer}>
                                 <InlineTaskItem
                                             task={task}
-                                            onApprove={isSandbox ? undefined : approve}
-                                            onComplete={isSandbox ? undefined : complete}
-                                            onStart={isSandbox ? undefined : start}
-                                            onDismiss={isSandbox ? undefined : dismiss}
+                                            onApprove={approve}
+                                            onComplete={complete}
+                                            onStart={start}
+                                            onDismiss={dismiss}
                                         />
                             </View>
                         ))}
@@ -168,10 +154,10 @@ export default function FocusScreen() {
                             <View key={task.id} style={styles.taskContainer}>
                                 <InlineTaskItem
                                             task={task}
-                                            onApprove={isSandbox ? undefined : approve}
-                                            onComplete={isSandbox ? undefined : complete}
-                                            onStart={isSandbox ? undefined : start}
-                                            onDismiss={isSandbox ? undefined : dismiss}
+                                            onApprove={approve}
+                                            onComplete={complete}
+                                            onStart={start}
+                                            onDismiss={dismiss}
                                         />
                             </View>
                         ))}
@@ -189,10 +175,10 @@ export default function FocusScreen() {
                             <View key={task.id} style={styles.taskContainer}>
                                 <InlineTaskItem
                                             task={task}
-                                            onApprove={isSandbox ? undefined : approve}
-                                            onComplete={isSandbox ? undefined : complete}
-                                            onStart={isSandbox ? undefined : start}
-                                            onDismiss={isSandbox ? undefined : dismiss}
+                                            onApprove={approve}
+                                            onComplete={complete}
+                                            onStart={start}
+                                            onDismiss={dismiss}
                                         />
                             </View>
                         ))}
@@ -210,10 +196,10 @@ export default function FocusScreen() {
                             <View key={task.id} style={styles.taskContainer}>
                                 <InlineTaskItem
                                             task={task}
-                                            onApprove={isSandbox ? undefined : approve}
-                                            onComplete={isSandbox ? undefined : complete}
-                                            onStart={isSandbox ? undefined : start}
-                                            onDismiss={isSandbox ? undefined : dismiss}
+                                            onApprove={approve}
+                                            onComplete={complete}
+                                            onStart={start}
+                                            onDismiss={dismiss}
                                         />
                             </View>
                         ))}
@@ -241,10 +227,10 @@ export default function FocusScreen() {
                     <View key={task.id} style={styles.taskContainer}>
                         <InlineTaskItem
                                             task={task}
-                                            onApprove={isSandbox ? undefined : approve}
-                                            onComplete={isSandbox ? undefined : complete}
-                                            onStart={isSandbox ? undefined : start}
-                                            onDismiss={isSandbox ? undefined : dismiss}
+                                            onApprove={approve}
+                                            onComplete={complete}
+                                            onStart={start}
+                                            onDismiss={dismiss}
                                         />
                     </View>
                 ))}
