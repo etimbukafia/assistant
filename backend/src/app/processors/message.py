@@ -56,6 +56,12 @@ def process_message(
     This is the core processing logic - updates thread state incrementally,
     extracts tasks, dates, people, decisions, and scheduling intent.
 
+    COMMIT BEHAVIOR:
+    - ThreadStateService.process_message() commits thread state changes internally
+    - Message field updates (summary, needs_reply, etc.) are NOT committed here
+    - Caller is responsible for committing message changes after this returns
+    - enqueue_task() adds tasks to the session but does not commit
+
     Args:
         message: Message model instance
         db: Database session

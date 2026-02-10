@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
     View,
     StyleSheet,
@@ -10,38 +10,31 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Ionicons } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 import { Colors, Spacing, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
 import { useMutation } from '@tanstack/react-query';
-import { activateTrial, createCheckout, triggerInitialSync } from '../../src/services/billing';
+import { activateTrial, createCheckout } from '../../src/services/billing';
 
-const FEATURES = [
-    'Inbox intelligence & summaries',
-    'Task & follow-up detection',
-    'AI-assisted draft replies',
-    'Scheduling suggestions',
-    'Executive context memory',
-];
-
-type PlanType = 'trial' | 'pro_monthly' | 'pro_yearly';
+type PlanType = 'trial' | 'pro';
 
 export default function SubscriptionSelectionScreen() {
     const router = useRouter();
-    const { refreshProfile } = useAuth();
+    const { refreshProfile, user } = useAuth();
     const [selectedPlan, setSelectedPlan] = useState<PlanType>('trial');
     const [isProcessing, setIsProcessing] = useState(false);
+
+    // Extract first name from cached Supabase user metadata (zero latency)
+    const firstName = useMemo(() => {
+        const fullName = user?.user_metadata?.full_name || user?.user_metadata?.name || '';
+        const first = fullName.split(' ')[0];
+        return first || 'there';
+    }, [user]);
 
     const trialMutation = useMutation({
         mutationFn: () => activateTrial(),
         onSuccess: async () => {
-            // Start email sync immediately in background - don't wait for it
-            // This runs while user fills out setup screen, saving ~10-30s perceived wait
-            triggerInitialSync().catch(console.error);
-
-            // Refresh profile and navigate (parallel operations)
             await refreshProfile();
             router.replace('/auth/setup' as any);
         },
@@ -55,21 +48,16 @@ export default function SubscriptionSelectionScreen() {
 
     const handleContinue = async () => {
         setIsProcessing(true);
-
         try {
             if (selectedPlan === 'trial') {
                 trialMutation.mutate();
             } else {
-                // Pro plan - open checkout
                 const data = await createCheckout({
                     success_url: 'teeks://auth/setup',
                     cancel_url: 'teeks://auth/subscription',
                 });
-
                 if (data?.checkout_url) {
                     await WebBrowser.openBrowserAsync(data.checkout_url);
-                    // Start email sync immediately in background after successful checkout
-                    triggerInitialSync().catch(console.error);
                     // After checkout, refresh profile and navigate
                     await refreshProfile();
                     router.replace('/auth/setup' as any);
@@ -87,122 +75,126 @@ export default function SubscriptionSelectionScreen() {
 
     const isLoading = isProcessing || trialMutation.isPending;
 
-    return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar style="dark" />
+    const ctaText = selectedPlan === 'trial'
+        ? 'Try this week with Teeks'
+        : 'Try this month with Teeks';
 
+    return (
+        <SafeAreaView style={styles.safe}>
+            <StatusBar style="dark" />
             <ScrollView
-                style={styles.scrollView}
+                style={styles.scroll}
                 contentContainerStyle={styles.content}
                 showsVerticalScrollIndicator={false}
             >
                 {/* Header */}
                 <View style={styles.header}>
-                    <DonnaText style={styles.title}>Choose Your Plan</DonnaText>
+                    <DonnaText style={styles.title}>
+                        You don't have to carry alone
+                    </DonnaText>
                     <DonnaText style={styles.subtitle}>
-                        Start with a free trial or go Pro right away
+                        Try Teeks free, or keep it by your side every day
                     </DonnaText>
                 </View>
 
-                {/* Plan Options */}
-                <View style={styles.plansContainer}>
-                    {/* Free Trial */}
+                {/* Email Cards */}
+                <View style={styles.inbox}>
+                    {/* Free Trial Email */}
                     <TouchableOpacity
                         style={[
-                            styles.planCard,
-                            selectedPlan === 'trial' && styles.planCardSelected,
+                            styles.emailCard,
+                            selectedPlan === 'trial' && styles.emailCardSelected,
                         ]}
                         onPress={() => setSelectedPlan('trial')}
-                        activeOpacity={0.8}
+                        activeOpacity={0.85}
                     >
-                        <View style={styles.planHeader}>
-                            <View style={styles.planTitleRow}>
-                                <DonnaText style={styles.planName}>Free Trial</DonnaText>
-                                {selectedPlan === 'trial' && (
-                                    <Ionicons name="checkmark-circle" size={24} color={Colors.accentPrimary} />
-                                )}
-                            </View>
-                            <DonnaText style={styles.planPrice}>
-                                $0 <DonnaText style={styles.planPeriod}>for 7 days</DonnaText>
+                        {/* Clip */}
+                        <View style={styles.clip} />
+
+                        {/* Subject */}
+                        <View style={styles.emailHeader}>
+                            <DonnaText style={styles.subjectLabel}>
+                                Subject: <DonnaText style={styles.subjectText}>Teeks Free Trial</DonnaText>
                             </DonnaText>
                         </View>
-                        <DonnaText style={styles.planDescription}>
-                            Full access to all features. No credit card required.
-                        </DonnaText>
+
+                        {/* Body */}
+                        <View style={styles.emailBody}>
+                            <DonnaText style={styles.greeting}>
+                                Dear <DonnaText style={styles.userName}>{firstName}</DonnaText>,
+                            </DonnaText>
+                            <DonnaText style={styles.bodyBold}>
+                                Start free. See the difference in a week.
+                            </DonnaText>
+                            <DonnaText style={styles.bodyText}>
+                                Full access to all pro features and 100 Teeks credits for reply drafting and chat for 5 days. No credit card required.
+                            </DonnaText>
+                        </View>
+
+                        {/* Price — bottom right */}
+                        <View style={styles.emailFooter}>
+                            <View style={styles.priceTag}>
+                                <DonnaText style={styles.currency}>$</DonnaText>
+                                <DonnaText style={styles.amount}>0</DonnaText>
+                                <DonnaText style={styles.period}>/ 5 days</DonnaText>
+                            </View>
+                        </View>
                     </TouchableOpacity>
 
-                    {/* Pro Monthly */}
+                    {/* Pro Email */}
                     <TouchableOpacity
                         style={[
-                            styles.planCard,
-                            selectedPlan === 'pro_monthly' && styles.planCardSelected,
+                            styles.emailCard,
+                            styles.emailCardPro,
+                            selectedPlan === 'pro' && styles.emailCardSelected,
                         ]}
-                        onPress={() => setSelectedPlan('pro_monthly')}
-                        activeOpacity={0.8}
+                        onPress={() => setSelectedPlan('pro')}
+                        activeOpacity={0.85}
                     >
-                        <View style={styles.planHeader}>
-                            <View style={styles.planTitleRow}>
-                                <DonnaText style={styles.planName}>Pro Monthly</DonnaText>
-                                {selectedPlan === 'pro_monthly' && (
-                                    <Ionicons name="checkmark-circle" size={24} color={Colors.accentPrimary} />
-                                )}
-                            </View>
-                            <DonnaText style={styles.planPrice}>
-                                $9.99 <DonnaText style={styles.planPeriod}>/ month</DonnaText>
+                        {/* Copper Clip */}
+                        <View style={[styles.clip, styles.clipCopper]} />
+
+                        {/* Subject */}
+                        <View style={styles.emailHeader}>
+                            <DonnaText style={styles.subjectLabel}>
+                                Subject: <DonnaText style={styles.subjectText}>Teeks Pro</DonnaText>
                             </DonnaText>
                         </View>
-                        <DonnaText style={styles.planDescription}>
-                            Billed monthly. Cancel anytime.
-                        </DonnaText>
-                    </TouchableOpacity>
 
-                    {/* Pro Yearly */}
-                    <TouchableOpacity
-                        style={[
-                            styles.planCard,
-                            selectedPlan === 'pro_yearly' && styles.planCardSelected,
-                        ]}
-                        onPress={() => setSelectedPlan('pro_yearly')}
-                        activeOpacity={0.8}
-                    >
-                        <View style={styles.saveBadge}>
-                            <DonnaText style={styles.saveBadgeText}>Save 17%</DonnaText>
-                        </View>
-                        <View style={styles.planHeader}>
-                            <View style={styles.planTitleRow}>
-                                <DonnaText style={styles.planName}>Pro Yearly</DonnaText>
-                                {selectedPlan === 'pro_yearly' && (
-                                    <Ionicons name="checkmark-circle" size={24} color={Colors.accentPrimary} />
-                                )}
-                            </View>
-                            <DonnaText style={styles.planPrice}>
-                                $99.99 <DonnaText style={styles.planPeriod}>/ year</DonnaText>
+                        {/* Body */}
+                        <View style={styles.emailBody}>
+                            <DonnaText style={styles.greeting}>
+                                Dear <DonnaText style={styles.userName}>{firstName}</DonnaText>,
+                            </DonnaText>
+                            <DonnaText style={styles.bodyBold}>
+                                Work with clarity. Achieve more with an executive partner at your side.
+                            </DonnaText>
+                            <DonnaText style={styles.bodyText}>
+                                Inbox intelligence, task management, AI-assisted replies in your voice, calendar assistance, and executive context memory — everything you need, always by your side.
                             </DonnaText>
                         </View>
-                        <DonnaText style={styles.planDescription}>
-                            Best value. 2 months free.
-                        </DonnaText>
-                    </TouchableOpacity>
-                </View>
 
-                {/* Features List */}
-                <View style={styles.featuresSection}>
-                    <DonnaText style={styles.featuresTitle}>All plans include:</DonnaText>
-                    <View style={styles.featuresList}>
-                        {FEATURES.map((feature, index) => (
-                            <View key={index} style={styles.featureRow}>
-                                <Ionicons name="checkmark" size={18} color={Colors.accentSecondary} />
-                                <DonnaText style={styles.featureText}>{feature}</DonnaText>
+                        {/* Price — bottom right */}
+                        <View style={styles.emailFooter}>
+                            <View style={styles.priceTag}>
+                                <DonnaText style={styles.currency}>$</DonnaText>
+                                <DonnaText style={styles.amount}>19</DonnaText>
+                                <DonnaText style={styles.period}>/ month</DonnaText>
                             </View>
-                        ))}
-                    </View>
+                        </View>
+                    </TouchableOpacity>
+
+                    {/* Founding note */}
+                    <DonnaText style={styles.foundingNote}>
+                        Founding members get full access, early features, and locked-in pricing
+                    </DonnaText>
                 </View>
             </ScrollView>
 
-            {/* Footer CTA */}
+            {/* CTA */}
             <View style={styles.footer}>
                 <TouchableOpacity
-                    style={[styles.continueButton, isLoading && styles.buttonDisabled]}
+                    style={[styles.cta, isLoading && styles.ctaDisabled]}
                     onPress={handleContinue}
                     disabled={isLoading}
                     activeOpacity={0.9}
@@ -210,158 +202,222 @@ export default function SubscriptionSelectionScreen() {
                     {isLoading ? (
                         <ActivityIndicator color="#FFFFFF" />
                     ) : (
-                        <DonnaText style={styles.continueButtonText}>
-                            {selectedPlan === 'trial' ? 'Start Free Trial' : 'Continue to Checkout'}
-                        </DonnaText>
+                        <DonnaText style={styles.ctaText}>{ctaText}</DonnaText>
                     )}
                 </TouchableOpacity>
-                {selectedPlan !== 'trial' && (
-                    <DonnaText style={styles.footerNote}>
-                        You'll be redirected to secure checkout
-                    </DonnaText>
-                )}
             </View>
         </SafeAreaView>
     );
 }
 
+// ——— Styles ———
+const WARM_BG = '#FFFDF9';
+const CARD_BG = '#FFFFFF';
+const CARD_LITE = '#FFFCF8';
+const SOFT_SHADOW = 'rgba(126, 46, 46, 0.04)';
+
 const styles = StyleSheet.create({
-    container: {
+    safe: {
         flex: 1,
-        backgroundColor: Colors.bgBase,
+        backgroundColor: WARM_BG,
     },
-    scrollView: {
+    scroll: {
         flex: 1,
     },
     content: {
         padding: Spacing.lg,
-        paddingTop: Spacing.xl,
+        paddingTop: Spacing.xxl,
+        paddingBottom: Spacing.xl,
     },
+
+    // ── Header ──
     header: {
-        marginBottom: Spacing.xl,
+        alignItems: 'center',
+        marginBottom: Spacing.xl + 8,
     },
     title: {
-        fontFamily: 'PlayfairDisplay_600SemiBold',
-        fontSize: 32,
-        color: Colors.textPrimary,
+        fontFamily: 'PlayfairDisplay_700Bold',
+        fontSize: 24,
+        lineHeight: 30,
+        letterSpacing: -0.5,
+        color: Colors.accentPrimary,   // Auburn, not black
+        textAlign: 'center',
         marginBottom: Spacing.sm,
     },
     subtitle: {
-        fontSize: 16,
+        fontFamily: 'Inter_400Regular',
+        fontSize: 15,
         color: Colors.textSecondary,
-        lineHeight: 24,
+        textAlign: 'center',
+        lineHeight: 22,
     },
-    plansContainer: {
-        gap: Spacing.md,
-        marginBottom: Spacing.xl,
+
+    // ── Inbox stack ──
+    inbox: {
+        gap: 20,
     },
-    planCard: {
-        backgroundColor: Colors.bgSurface,
-        borderRadius: Radius.lg,
-        padding: Spacing.lg,
+
+    // ── Email Card ──
+    emailCard: {
+        backgroundColor: CARD_LITE,
+        borderRadius: Radius.md,
+        borderWidth: 1,
+        borderColor: 'rgba(5, 11, 20, 0.05)',
+        overflow: 'visible',
+        // Soft shadow
+        shadowColor: Colors.accentPrimary,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.06,
+        shadowRadius: 20,
+        elevation: 3,
+    },
+    emailCardPro: {
+        backgroundColor: CARD_BG,
+    },
+    emailCardSelected: {
+        borderColor: Colors.accentSecondary,
         borderWidth: 2,
-        borderColor: Colors.border,
+        shadowOpacity: 0.12,
+        shadowRadius: 28,
+        elevation: 6,
     },
-    planCardSelected: {
-        borderColor: Colors.accentPrimary,
-        backgroundColor: Colors.accentPrimary + '08',
-    },
-    planHeader: {
-        marginBottom: Spacing.xs,
-    },
-    planTitleRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 4,
-    },
-    planName: {
-        fontFamily: 'PlayfairDisplay_600SemiBold',
-        fontSize: 20,
-        color: Colors.textPrimary,
-    },
-    planPrice: {
-        fontSize: 24,
-        fontWeight: '700',
-        color: Colors.textPrimary,
-    },
-    planPeriod: {
-        fontSize: 14,
-        fontWeight: '400',
-        color: Colors.textMuted,
-    },
-    planDescription: {
-        fontSize: 14,
-        color: Colors.textSecondary,
-    },
-    saveBadge: {
+
+    // ── Clip decoration ──
+    clip: {
         position: 'absolute',
-        top: -10,
-        right: Spacing.md,
-        backgroundColor: Colors.accentSecondary,
-        paddingHorizontal: Spacing.sm,
-        paddingVertical: 4,
-        borderRadius: Radius.full,
+        top: -6,
+        left: 28,
+        width: 36,
+        height: 10,
+        borderRadius: 2,
+        backgroundColor: Colors.borderStrong, // Silver
+        zIndex: 10,
     },
-    saveBadgeText: {
-        color: '#FFFFFF',
-        fontSize: 12,
-        fontWeight: '700',
+    clipCopper: {
+        backgroundColor: Colors.accentSecondary, // Copper
     },
-    featuresSection: {
-        marginBottom: Spacing.lg,
+
+    // ── Email Header (Subject) ──
+    emailHeader: {
+        paddingHorizontal: Spacing.lg,
+        paddingTop: Spacing.md + 4,
+        paddingBottom: Spacing.sm + 2,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: 'rgba(0,0,0,0.06)',
+        borderStyle: 'dashed',
     },
-    featuresTitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: Colors.textPrimary,
-        marginBottom: Spacing.md,
+    subjectLabel: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 11,
+        letterSpacing: 0.8,
         textTransform: 'uppercase',
-        letterSpacing: 1,
+        color: Colors.textMuted,
+        opacity: 0.55,      // Faded subject line
     },
-    featuresList: {
-        gap: 12,
+    subjectText: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 11,
+        letterSpacing: 0.8,
+        textTransform: 'uppercase',
+        color: Colors.textSecondary,
+        fontWeight: '600',
     },
-    featureRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
+
+    // ── Email Body ──
+    emailBody: {
+        paddingHorizontal: Spacing.lg,
+        paddingTop: Spacing.md,
+        paddingBottom: Spacing.sm,
     },
-    featureText: {
+    greeting: {
+        fontFamily: 'Inter_400Regular',
         fontSize: 15,
         color: Colors.textPrimary,
+        marginBottom: Spacing.sm + 2,
     },
+    userName: {
+        color: Colors.accentSecondary,
+        fontWeight: '600',
+    },
+    bodyBold: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 15,
+        fontWeight: '600',
+        color: Colors.textPrimary,
+        marginBottom: Spacing.sm,
+        lineHeight: 22,
+    },
+    bodyText: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 14,
+        color: Colors.textSecondary,
+        lineHeight: 22,
+    },
+
+    // ── Email Footer (Price) ──
+    emailFooter: {
+        paddingHorizontal: Spacing.lg,
+        paddingBottom: Spacing.md,
+        alignItems: 'flex-end',
+    },
+    priceTag: {
+        flexDirection: 'row',
+        alignItems: 'baseline',
+    },
+    currency: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 11,
+        color: Colors.textMuted,
+        opacity: 0.6,
+        marginRight: 1,
+    },
+    amount: {
+        fontFamily: 'PlayfairDisplay_700Bold',
+        fontSize: 22,
+        color: Colors.accentPrimary,
+    },
+    period: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 12,
+        color: Colors.textMuted,
+        marginLeft: 3,
+    },
+
+    // ── Founding Note ──
+    foundingNote: {
+        fontFamily: 'Inter_400Regular',
+        fontSize: 13,
+        fontStyle: 'italic',
+        color: Colors.textMuted,
+        textAlign: 'center',
+        lineHeight: 20,
+    },
+
+    // ── Footer CTA ──
     footer: {
         padding: Spacing.lg,
         paddingBottom: Spacing.xl,
-        borderTopWidth: 1,
-        borderTopColor: Colors.border,
-        backgroundColor: Colors.bgSurface,
+        backgroundColor: WARM_BG,
     },
-    continueButton: {
+    cta: {
         backgroundColor: Colors.accentPrimary,
-        borderRadius: Radius.full,
+        borderRadius: Radius.xs,
         paddingVertical: Spacing.md + 2,
         alignItems: 'center',
         justifyContent: 'center',
         shadowColor: Colors.accentPrimary,
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
+        shadowOpacity: 0.25,
+        shadowRadius: 12,
         elevation: 4,
     },
-    buttonDisabled: {
+    ctaDisabled: {
         opacity: 0.6,
     },
-    continueButtonText: {
+    ctaText: {
         color: '#FFFFFF',
         fontSize: 17,
         fontWeight: '600',
-    },
-    footerNote: {
-        textAlign: 'center',
-        fontSize: 13,
-        color: Colors.textMuted,
-        marginTop: Spacing.sm,
+        letterSpacing: 0.2,
     },
 });

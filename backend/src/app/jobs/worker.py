@@ -36,14 +36,15 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
     2. Processes them using the message_processor module
     3. Leverages shared LLM provider (no reinitialization)
 
-    Critical: All tasks belong to the same user - no data leakage possible.
+    Security: Each message is verified to belong to the claimed user_id.
+    This prevents cross-user data leakage if queue service has bugs.
 
     The actual processing logic is in app.message_processor, making it
     reusable across channels (email, Slack, WhatsApp).
     """
     from app.processors.message import process_messages_batch
     from app.infra.database import SessionLocal
-    from app.data.models import UserSettings
+    from app.data.models import UserSettings, Message
     from app.services.credits import check_credits_available
 
     # Require user_id for RLS context
@@ -68,28 +69,48 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
 
     logger.info(f"Processing batch of {len(tasks)} emails for user {user_id}")
 
-    # Extract message IDs from tasks
-    message_ids = []
-    for task in tasks:
-        message_id = task["payload"].get("message_id")
-        if message_id:
-            message_ids.append(message_id)
-        else:
-            logger.warning(f"Task {task['task_id']} missing message_id in payload")
-
-    if not message_ids:
-        logger.warning(f"No valid message IDs to process for user {user_id}")
-        return
-
-    # Get correlation_id from first task
-    correlation_id = tasks[0].get("correlation_id") if tasks else None
-
     # Create session and set RLS context
     db = SessionLocal()
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
-    # Process using the reusable message processor
     try:
+        # Extract and VERIFY message IDs belong to this user (security)
+        candidate_ids = []
+        for task in tasks:
+            message_id = task["payload"].get("message_id")
+            if message_id:
+                candidate_ids.append(message_id)
+            else:
+                logger.warning(f"Task {task['task_id']} missing message_id in payload")
+
+        if not candidate_ids:
+            logger.warning(f"No valid message IDs to process for user {user_id}")
+            return
+
+        # Verify ownership: Only process messages that actually belong to this user
+        # This prevents cross-user data leakage if queue grouping has bugs
+        verified_messages = db.query(Message.id).filter(
+            Message.id.in_(candidate_ids),
+            Message.user_id == user_id  # Security: explicit ownership check
+        ).all()
+        message_ids = [m.id for m in verified_messages]
+
+        # Log if any messages were rejected
+        rejected_count = len(candidate_ids) - len(message_ids)
+        if rejected_count > 0:
+            logger.error(
+                f"SECURITY: Rejected {rejected_count} messages that don't belong to user {user_id}. "
+                f"This may indicate a queue service bug or attack attempt."
+            )
+
+        if not message_ids:
+            logger.warning(f"No verified message IDs to process for user {user_id}")
+            return
+
+        # Get correlation_id from first task
+        correlation_id = tasks[0].get("correlation_id") if tasks else None
+
+        # Process using the reusable message processor
         results = process_messages_batch(message_ids, db=db, user_id=user_id, correlation_id=correlation_id)
         logger.info(f"Batch complete: processed {len(results)} emails for user {user_id}")
     except Exception as e:

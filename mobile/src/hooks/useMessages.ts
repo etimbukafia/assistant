@@ -77,23 +77,24 @@ export function useNewMessages(since: string | null, options?: { enabled?: boole
 export function useMessageSync() {
     const queryClient = useQueryClient();
 
-    const invalidateMessages = () => {
-        queryClient.invalidateQueries({ queryKey: messagesKeys.all });
+    // Invalidate message lists only, not individual details
+    const invalidateMessageLists = () => {
+        queryClient.invalidateQueries({ queryKey: messagesKeys.lists() });
     };
 
     const syncMutation = useMutation({
         mutationFn: (maxResults?: number) => syncMessages(maxResults),
-        onSuccess: invalidateMessages,
+        onSuccess: invalidateMessageLists,
     });
 
     const syncDeletionsMutation = useMutation({
         mutationFn: syncDeletions,
-        onSuccess: invalidateMessages,
+        onSuccess: invalidateMessageLists,
     });
 
     const syncSentMutation = useMutation({
         mutationFn: syncSentMessages,
-        onSuccess: invalidateMessages,
+        onSuccess: invalidateMessageLists,
     });
 
     return {
@@ -120,30 +121,42 @@ export function useMessageSync() {
 export function useMessageMutations() {
     const queryClient = useQueryClient();
 
-    const invalidateMessages = () => {
-        queryClient.invalidateQueries({ queryKey: messagesKeys.all });
+    // Invalidate message lists only, not individual details
+    const invalidateMessageLists = () => {
+        queryClient.invalidateQueries({ queryKey: messagesKeys.lists() });
+    };
+
+    // Invalidate specific message detail
+    const invalidateMessageDetail = (messageId: number) => {
+        queryClient.invalidateQueries({ queryKey: messagesKeys.detail(messageId) });
     };
 
     const doneMutation = useMutation({
         mutationFn: markMessageDone,
-        onSuccess: invalidateMessages,
+        onSuccess: (_, messageId) => {
+            invalidateMessageLists();
+            invalidateMessageDetail(messageId);
+        },
     });
 
     const archiveMutation = useMutation({
         mutationFn: archiveMessage,
-        onSuccess: invalidateMessages,
+        onSuccess: (_, messageId) => {
+            invalidateMessageLists();
+            invalidateMessageDetail(messageId);
+        },
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteMessage,
-        onSuccess: invalidateMessages,
+        onSuccess: invalidateMessageLists,
     });
 
     const reprocessMutation = useMutation({
         mutationFn: reprocessMessage,
         onSuccess: (_, messageId) => {
-            queryClient.invalidateQueries({ queryKey: messagesKeys.detail(messageId) });
-            invalidateMessages();
+            invalidateMessageLists();
+            invalidateMessageDetail(messageId);
         },
     });
 

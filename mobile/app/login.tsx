@@ -6,12 +6,14 @@ import { useAuth } from '../src/context/AuthContext';
 
 export default function LoginScreen() {
     const router = useRouter();
-    const { signInWithGoogle, isAuthenticated, onboardingCompleted, isActive } = useAuth();
+    const { signInWithGoogle, isAuthenticated, profileLoaded, onboardingCompleted, isActive } = useAuth();
     const [isLoading, setIsLoading] = useState(false);
 
     // Redirect authenticated users to appropriate screen
+    // Wait for profileLoaded to prevent race condition where we navigate
+    // before settings are fetched (would always go to subscription)
     useEffect(() => {
-        if (isAuthenticated) {
+        if (isAuthenticated && profileLoaded) {
             if (onboardingCompleted) {
                 // Returning user - go to main app
                 router.replace('/(tabs)' as any);
@@ -23,7 +25,7 @@ export default function LoginScreen() {
                 router.replace('/auth/subscription' as any);
             }
         }
-    }, [isAuthenticated, onboardingCompleted, isActive]);
+    }, [isAuthenticated, profileLoaded, onboardingCompleted, isActive]);
 
     const handleGoogleAuth = async () => {
         try {

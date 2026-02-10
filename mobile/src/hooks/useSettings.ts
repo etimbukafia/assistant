@@ -30,10 +30,31 @@ export function useSettings() {
 
     const updateMutation = useMutation({
         mutationFn: (updates: UpdateSettingsRequest) => updateSettings(updates),
+        onMutate: async (updates) => {
+            // Cancel any outgoing refetches
+            await queryClient.cancelQueries({ queryKey: settingsKeys.detail() });
+
+            // Snapshot previous value for rollback
+            const previousSettings = queryClient.getQueryData(settingsKeys.detail());
+
+            // Optimistically update cache
+            if (previousSettings) {
+                queryClient.setQueryData(settingsKeys.detail(), {
+                    ...previousSettings,
+                    ...updates,
+                });
+            }
+
+            return { previousSettings };
+        },
         onSuccess: (data) => {
             queryClient.setQueryData(settingsKeys.detail(), data);
         },
-        onError: () => {
+        onError: (_error, _updates, context) => {
+            // Rollback to previous value on error
+            if (context?.previousSettings) {
+                queryClient.setQueryData(settingsKeys.detail(), context.previousSettings);
+            }
             Alert.alert('Error', 'Failed to update settings. Please try again.');
         },
     });

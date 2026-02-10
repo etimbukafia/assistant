@@ -42,6 +42,9 @@ class ThreadStateService:
 
         Returns:
             ThreadState object
+
+        Raises:
+            RuntimeError: If thread state cannot be created or fetched after retry
         """
         from sqlalchemy.exc import IntegrityError
 
@@ -68,6 +71,13 @@ class ThreadStateService:
                 thread_state = self.db.query(ThreadState).filter(
                     ThreadState.thread_id == thread_id
                 ).with_for_update().first()
+
+                # Defensive check - should never happen but prevents silent failures
+                if not thread_state:
+                    raise RuntimeError(
+                        f"Failed to get or create ThreadState for thread_id={thread_id}. "
+                        "IntegrityError occurred but subsequent fetch returned None."
+                    )
 
         return thread_state
 

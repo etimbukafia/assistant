@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, SafeAreaView, TouchableOpacity, Dimensions, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -12,18 +12,27 @@ const { width } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
     const router = useRouter();
-    const { signInWithGoogle } = useAuth();
+    const { signInWithGoogle, isAuthenticated, profileLoaded, onboardingCompleted, isActive } = useAuth();
     const [isLoading, setIsLoading] = useState(false);
+
+    // Navigate once authenticated and profile is loaded
+    useEffect(() => {
+        if (isAuthenticated && profileLoaded) {
+            if (onboardingCompleted) {
+                router.replace('/(tabs)' as any);
+            } else if (isActive) {
+                router.replace('/auth/setup' as any);
+            } else {
+                router.replace('/auth/subscription' as any);
+            }
+        }
+    }, [isAuthenticated, profileLoaded, onboardingCompleted, isActive]);
 
     const handleGoogleAuth = async () => {
         try {
             setIsLoading(true);
-            const success = await signInWithGoogle();
-            // Only navigate if sign-in was successful (not cancelled)
-            // New users go to subscription selection, returning users handled by login.tsx
-            if (success) {
-                router.replace('/auth/subscription' as any);
-            }
+            await signInWithGoogle();
+            // Navigation handled by useEffect above after profile loads
         } catch (error: any) {
             console.error('Google auth error:', error);
             Alert.alert(

@@ -17,16 +17,16 @@ import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeOnboarding } from '../../src/services/onboarding';
+import { triggerInitialSync } from '../../src/services/billing';
 
 export default function SetupScreen() {
     const router = useRouter();
     const queryClient = useQueryClient();
     const { refreshProfile } = useAuth();
     const [assistantName, setAssistantName] = useState('Donna');
-    const [selectedIntegrations, setSelectedIntegrations] = useState(['gmail']);
+    const [selectedIntegrations, setSelectedIntegrations] = useState<string[]>([]);
 
     const toggleIntegration = (id: string) => {
-        if (id === 'gmail') return; // Gmail is mandatory
         if (selectedIntegrations.includes(id)) {
             setSelectedIntegrations(prev => prev.filter(i => i !== id));
         } else {
@@ -36,9 +36,12 @@ export default function SetupScreen() {
 
     const setupMutation = useMutation({
         mutationFn: async () => {
-            // Run onboarding completion in parallel with any remaining setup
-            // Note: Initial sync is already started on subscription screen for faster perceived load
             await completeOnboarding({ assistant_name: assistantName.trim() || 'Donna' });
+
+            // Only trigger email sync if user chose to connect Gmail
+            if (selectedIntegrations.includes('gmail')) {
+                triggerInitialSync().catch(console.error);
+            }
         },
         onSuccess: () => {
             // Navigate immediately - don't block on profile refresh
@@ -105,10 +108,14 @@ export default function SetupScreen() {
                 <View style={styles.section}>
                     <DonnaText style={styles.sectionTitle}>Connect Your Accounts</DonnaText>
 
-                    {/* Gmail (Required) */}
+                    {/* Gmail */}
                     <TouchableOpacity
-                        style={[styles.integrationCard, styles.integrationSelected]}
-                        activeOpacity={0.9}
+                        style={[
+                            styles.integrationCard,
+                            selectedIntegrations.includes('gmail') && styles.integrationSelected,
+                        ]}
+                        onPress={() => toggleIntegration('gmail')}
+                        activeOpacity={0.8}
                     >
                         <View style={[styles.integrationIcon, { backgroundColor: '#EA433510' }]}>
                             <Ionicons name="mail" size={24} color="#EA4335" />
@@ -116,15 +123,19 @@ export default function SetupScreen() {
                         <View style={styles.integrationContent}>
                             <View style={styles.integrationTitleRow}>
                                 <DonnaText style={styles.integrationName}>Gmail</DonnaText>
-                                <View style={styles.requiredBadge}>
-                                    <DonnaText style={styles.requiredBadgeText}>Required</DonnaText>
+                                <View style={styles.optionalBadge}>
+                                    <DonnaText style={styles.optionalBadgeText}>Recommended</DonnaText>
                                 </View>
                             </View>
                             <DonnaText style={styles.integrationDesc}>
-                                Process emails, extract tasks, and generate summaries
+                                Teeks will sync your recent emails to get started
                             </DonnaText>
                         </View>
-                        <Ionicons name="checkmark-circle" size={24} color={Colors.accentPrimary} />
+                        <Ionicons
+                            name={selectedIntegrations.includes('gmail') ? 'checkmark-circle' : 'ellipse-outline'}
+                            size={24}
+                            color={selectedIntegrations.includes('gmail') ? Colors.accentPrimary : Colors.textMuted}
+                        />
                     </TouchableOpacity>
 
                     {/* Calendar (Optional) */}

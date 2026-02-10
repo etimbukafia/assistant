@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
@@ -30,9 +30,23 @@ export default function DashboardScreen() {
   const { data: processingData } = useProcessingStatus(isActive && processingActive);
   const processingCount = processingData?.processing_count ?? 0;
 
-  React.useEffect(() => {
-    if (processingActive && processingCount === 0 && processingData !== undefined) {
-      setProcessingActive(false);
+  // Track consecutive zero counts to debounce polling deactivation
+  const zeroCountRef = useRef(0);
+
+  useEffect(() => {
+    if (processingActive && processingData !== undefined) {
+      if (processingCount === 0) {
+        // Increment consecutive zero count
+        zeroCountRef.current += 1;
+        // Only stop polling after 2 consecutive zero counts (debounce)
+        if (zeroCountRef.current >= 2) {
+          setProcessingActive(false);
+          zeroCountRef.current = 0;
+        }
+      } else {
+        // Reset counter when we see processing messages
+        zeroCountRef.current = 0;
+      }
     }
   }, [processingActive, processingCount, processingData]);
   const { approve, dismiss } = useTaskMutations();

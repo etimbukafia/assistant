@@ -101,7 +101,7 @@ const App = () => {
               </button>
             </div>
             <p className="text-sm text-white/40 italic">
-              Founding members get early access to new features and locked-in pricing as Teeks grows.
+              Founding members get early access to new features and exclusive founding-member pricing as Teeks grows.
             </p>
           </div>
         </div>
@@ -120,7 +120,7 @@ const App = () => {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto px-2">
             {/* Card 1: Influence */}
             <div className="group relative p-8 rounded-2xl bg-gradient-to-br from-[#161616] to-[#0a0a0a] border border-white/[0.08] hover:border-[#D97745]/40 transition-all duration-300 hover:shadow-2xl hover:shadow-[#D97745]/10">
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#D97745]/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -149,7 +149,7 @@ const App = () => {
               </p>
             </div>
 
-            {/* Card 3: Locked-in Pricing */}
+            {/* Card 3: Founding-Member Pricing */}
             <div className="group relative p-8 rounded-2xl bg-gradient-to-br from-[#161616] to-[#0a0a0a] border border-white/[0.08] hover:border-[#D97745]/40 transition-all duration-300 hover:shadow-2xl hover:shadow-[#D97745]/10">
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#D97745]/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
               <div className="h-10 w-10 rounded-full bg-[#D97745]/10 flex items-center justify-center mb-6 group-hover:bg-[#D97745]/20 transition-colors">
@@ -158,9 +158,9 @@ const App = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 6h.008v.008H6V6z" />
                 </svg>
               </div>
-              <h3 className="font-serif text-xl text-white mb-3 group-hover:text-[#D97745] transition-colors duration-300">Locked-In Pricing</h3>
+              <h3 className="font-serif text-xl text-white mb-3 group-hover:text-[#D97745] transition-colors duration-300">Founding-Member Pricing</h3>
               <p className="text-white/50 text-sm leading-relaxed">
-                Your founding rate is secured for life. As Teeks grows and pricing evolves for future users, your rate never changes.
+                Founding members receive exclusive pricing benefits across all tiers.
               </p>
             </div>
           </div>
@@ -434,7 +434,7 @@ const FeatureCarousel = () => {
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
     >
-      <div className="relative min-h-[400px]">
+      <div className="relative min-h-[900px] md:min-h-[400px]">
         {features.map((set, setIndex) => (
           <div
             key={setIndex}

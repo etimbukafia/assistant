@@ -62,7 +62,7 @@ interface ChatContextType {
   pendingActions: PendingAction[];
 
   // Actions
-  startNewSession: (mode?: ChatMode) => Promise<void>;
+  startNewSession: (mode?: ChatMode) => Promise<ChatSession>;
   loadSession: (sessionId: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
@@ -124,7 +124,7 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     }
   }, []);
 
-  const startNewSession = useCallback(async (mode?: ChatMode) => {
+  const startNewSession = useCallback(async (mode?: ChatMode): Promise<ChatSession> => {
     const sessionType: SessionType = mode === 'reflection' ? 'reflection' : 'command';
 
     try {
@@ -137,6 +137,10 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
       if (mode) {
         setChatMode(mode);
       }
+
+      // Return the session so callers can use it immediately
+      // (state update is async, so currentSession would still be null)
+      return session;
     } catch (error) {
       console.error('Failed to create session:', error);
       throw error;
@@ -164,12 +168,17 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
 
   const sendMessage = useCallback(
     async (content: string) => {
+      // Get session ID, creating new session if needed
+      // Important: We must use the returned session, not currentSession,
+      // because state updates are async and currentSession would still be null
+      let sessionId: string;
       if (!currentSession) {
-        // Create a new session if none exists
-        await startNewSession(chatMode);
+        const newSession = await startNewSession(chatMode);
+        sessionId = newSession.id;
+      } else {
+        sessionId = currentSession.id;
       }
 
-      const sessionId = currentSession?.id;
       if (!sessionId) {
         console.error('No session available');
         return;
@@ -203,9 +212,13 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
         pollingCleanupRef.current = null;
       }
 
+      // Track if component is still mounted to prevent state updates after unmount
+      let isMounted = true;
+
       // Send message with polling support
       const cleanup = await sendMessageWithPolling(sessionId, content, {
         onComplete: (response, newPendingActions) => {
+          if (!isMounted) return; // Guard against unmounted state updates
           setMessages((prev) =>
             prev.map((m) =>
               m.id === placeholderId
@@ -217,6 +230,7 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
           setIsTyping(false);
         },
         onError: (error) => {
+          if (!isMounted) return; // Guard against unmounted state updates
           setMessages((prev) =>
             prev.map((m) =>
               m.id === placeholderId
@@ -232,6 +246,7 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
           setIsTyping(false);
         },
         onProcessing: (jobId, messageId) => {
+          if (!isMounted) return; // Guard against unmounted state updates
           // Update placeholder with job info
           setMessages((prev) =>
             prev.map((m) =>
@@ -243,7 +258,11 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
         },
       });
 
-      pollingCleanupRef.current = cleanup;
+      // Store cleanup that also marks as unmounted
+      pollingCleanupRef.current = () => {
+        isMounted = false;
+        cleanup();
+      };
     },
     [currentSession, chatMode, startNewSession]
   );
