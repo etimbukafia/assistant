@@ -26,6 +26,10 @@ class CloudflareGateMiddleware(BaseHTTPMiddleware):
         if settings.ENV == "production":
             return await call_next(request)
 
+        # Skip gate for api.teeks.app (mobile API is not behind Cloudflare Access)
+        if request.url.hostname == "api.teeks.app":
+            return await call_next(request)
+
         # Always allow CORS preflight — browsers never send custom headers on OPTIONS
         if request.method == "OPTIONS":
             return await call_next(request)
