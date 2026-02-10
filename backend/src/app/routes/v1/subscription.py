@@ -4,12 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status, Body
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser
+from app.security.auth import get_current_user, get_user_settings, get_db_for_user, AuthenticatedUser
 from app.data.models import UserSettings
 
 router = APIRouter(prefix="/subscription", tags=["Subscription"])
-
-from fastapi import Body
 
 class ActivateTrialRequest(BaseModel):
     assistant_name: Optional[str] = None
@@ -18,19 +16,15 @@ class ActivateTrialRequest(BaseModel):
 def activate_trial(
     request: ActivateTrialRequest = Body(default=None),
     user: AuthenticatedUser = Depends(get_current_user),
+    settings: UserSettings = Depends(get_user_settings),
     db: Session = Depends(get_db_for_user)
 ):
     """
     Activate 7-day free trial.
     
     Called when user explicitly chooses to sync their real data.
+    Uses get_user_settings which auto-creates the row for new users.
     """
-    settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user.user_id
-    ).first()
-    
-    if not settings:
-        raise HTTPException(status_code=404, detail="User settings not found")
 
     # PRO users don't need trial activation
     if settings.subscription_tier == "pro":
