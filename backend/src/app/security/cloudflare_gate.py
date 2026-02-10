@@ -26,6 +26,15 @@ class CloudflareGateMiddleware(BaseHTTPMiddleware):
         if settings.ENV == "production":
             return await call_next(request)
 
+        # Always allow CORS preflight — browsers never send custom headers on OPTIONS
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        # Allow webhook callbacks (they have their own auth)
+        path = request.url.path
+        if path.startswith("/v1/webhooks") or path.startswith("/v1/billing/webhook"):
+            return await call_next(request)
+
         # Non-production: require service token headers
         if not settings.CF_ACCESS_CLIENT_ID or not settings.CF_ACCESS_CLIENT_SECRET:
             return await call_next(request)
