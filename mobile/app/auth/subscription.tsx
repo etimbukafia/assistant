@@ -15,6 +15,7 @@ import { Colors, Spacing, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
 import { activateTrial, createCheckout } from '../../src/services/billing';
+import { api } from '../../src/services/api';
 
 type PlanType = 'trial' | 'pro';
 
@@ -32,43 +33,48 @@ export default function SubscriptionSelectionScreen() {
     }, [user]);
 
     const handleContinue = async () => {
+        console.log('[SUB] CTA pressed, selectedPlan:', selectedPlan);
+        console.log('[SUB] API baseURL:', api.defaults.baseURL);
         setIsProcessing(true);
         try {
             if (selectedPlan === 'trial') {
-                // Activate trial and wait for completion
+                console.log('[SUB] Calling activateTrial...');
                 await activateTrial();
+                console.log('[SUB] Trial activated, refreshing profile...');
                 await refreshProfile();
+                console.log('[SUB] Profile refreshed, navigating to setup...');
                 router.replace('/auth/setup' as any);
             } else {
+                console.log('[SUB] Calling createCheckout...');
                 const data = await createCheckout({
                     success_url: 'teeks://auth/setup',
                     cancel_url: 'teeks://auth/subscription',
                 });
+                console.log('[SUB] Checkout response:', data);
                 if (data?.checkout_url) {
-                    // Open browser for Polar checkout
-                    // openAuthSessionAsync intercepts the redirect URL instead of
-                    // triggering Expo Router navigation, avoiding double navigation
                     const result = await WebBrowser.openAuthSessionAsync(
                         data.checkout_url,
-                        'teeks://'  // Prefix to catch redirects
+                        'teeks://'
                     );
 
-                    // Check if checkout completed successfully (not canceled/dismissed)
                     if (result.type === 'success' && result.url?.includes('auth/setup')) {
-                        // Give webhook a moment to process, then refresh
                         await new Promise(resolve => setTimeout(resolve, 1500));
                         await refreshProfile();
                         router.replace('/auth/setup' as any);
                     }
-                    // If canceled, dismissed, or redirected to cancel_url, user stays here
                 }
             }
         } catch (error: any) {
+            console.error('[SUB] ERROR:', error.message);
+            console.error('[SUB] Error response status:', error.response?.status);
+            console.error('[SUB] Error response data:', JSON.stringify(error.response?.data));
+            console.error('[SUB] Error code:', error.code);
             Alert.alert(
                 'Error',
                 error.response?.data?.detail || 'Something went wrong. Please try again.'
             );
         } finally {
+            console.log('[SUB] Done, setIsProcessing(false)');
             setIsProcessing(false);
         }
     };
