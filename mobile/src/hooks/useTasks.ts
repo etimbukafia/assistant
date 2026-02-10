@@ -38,7 +38,7 @@ export const tasksKeys = {
 /**
  * Hook for fetching tasks with optional status filter
  */
-export function useTasks(params?: { status?: string; skip?: number; limit?: number; enabled?: boolean }) {
+export function useTasks(params?: { status?: string; limit?: number; offset?: number; enabled?: boolean }) {
     return useQuery({
         queryKey: tasksKeys.list(params?.status),
         queryFn: () => fetchTasks(params),
@@ -73,57 +73,82 @@ export function useTaskStats() {
 export function useTaskMutations() {
     const queryClient = useQueryClient();
 
-    const invalidateTasks = () => {
-        queryClient.invalidateQueries({ queryKey: tasksKeys.all });
+    // Invalidate task lists and stats, but not individual task details unless needed
+    const invalidateTaskLists = () => {
+        queryClient.invalidateQueries({ queryKey: tasksKeys.lists() });
+        queryClient.invalidateQueries({ queryKey: tasksKeys.stats() });
+    };
+
+    // Invalidate specific task detail
+    const invalidateTaskDetail = (taskId: number) => {
+        queryClient.invalidateQueries({ queryKey: tasksKeys.detail(taskId) });
     };
 
     const approveMutation = useMutation({
         mutationFn: approveTask,
-        onSuccess: invalidateTasks,
+        onSuccess: (_, taskId) => {
+            invalidateTaskLists();
+            invalidateTaskDetail(taskId);
+        },
         onError: () => Alert.alert('Error', 'Failed to approve task'),
     });
 
     const dismissMutation = useMutation({
         mutationFn: dismissTask,
-        onSuccess: invalidateTasks,
+        onSuccess: (_, taskId) => {
+            invalidateTaskLists();
+            invalidateTaskDetail(taskId);
+        },
         onError: () => Alert.alert('Error', 'Failed to dismiss task'),
     });
 
     const completeMutation = useMutation({
         mutationFn: completeTask,
-        onSuccess: invalidateTasks,
+        onSuccess: (_, taskId) => {
+            invalidateTaskLists();
+            invalidateTaskDetail(taskId);
+        },
         onError: () => Alert.alert('Error', 'Failed to complete task'),
     });
 
     const startMutation = useMutation({
         mutationFn: startTask,
-        onSuccess: invalidateTasks,
+        onSuccess: (_, taskId) => {
+            invalidateTaskLists();
+            invalidateTaskDetail(taskId);
+        },
         onError: () => Alert.alert('Error', 'Failed to start task'),
     });
 
     const updateMutation = useMutation({
         mutationFn: ({ taskId, data }: { taskId: number; data: UpdateTaskRequest }) =>
             updateTask(taskId, data),
-        onSuccess: invalidateTasks,
+        onSuccess: (_, { taskId }) => {
+            invalidateTaskLists();
+            invalidateTaskDetail(taskId);
+        },
         onError: () => Alert.alert('Error', 'Failed to update task'),
     });
 
     const snoozeMutation = useMutation({
         mutationFn: ({ taskId, snoozeUntil }: { taskId: number; snoozeUntil: string }) =>
             snoozeTask(taskId, snoozeUntil),
-        onSuccess: invalidateTasks,
+        onSuccess: (_, { taskId }) => {
+            invalidateTaskLists();
+            invalidateTaskDetail(taskId);
+        },
         onError: () => Alert.alert('Error', 'Failed to snooze task'),
     });
 
     const createMutation = useMutation({
         mutationFn: createTask,
-        onSuccess: invalidateTasks,
+        onSuccess: invalidateTaskLists,
         onError: () => Alert.alert('Error', 'Failed to create task'),
     });
 
     const createManualMutation = useMutation({
         mutationFn: createManualTask,
-        onSuccess: invalidateTasks,
+        onSuccess: invalidateTaskLists,
         onError: () => Alert.alert('Error', 'Failed to create task'),
     });
 

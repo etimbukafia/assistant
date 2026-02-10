@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.security.auth import get_user_settings, get_db_for_user, get_current_user, AuthenticatedUser
+from app.security.feature_gating import require_feature, Feature
 from app.data.models import UserSettings, Digest
 from app.data.schemas import DigestPreferences, DigestsListResponse, DigestResponse
 from app.jobs.worker import schedule_digest_jobs_if_needed
@@ -38,19 +39,20 @@ def update_digest_preferences(
 @router.get("/", response_model=DigestsListResponse)
 def get_digests(
     limit: int = 10,
+    offset: int = 0,
     digest_type: str = None,
     db: Session = Depends(get_db_for_user)
 ):
     """Get recent digests with optional type filter."""
-    
+
     query = db.query(Digest).order_by(Digest.created_at.desc())
-    
+
     if digest_type:
         query = query.filter(Digest.digest_type == digest_type)
-    
+
     total = query.count()
-    digests = query.limit(limit).all()
-    
+    digests = query.offset(offset).limit(limit).all()
+
     return DigestsListResponse(digests=digests, total=total)
 
 
@@ -68,7 +70,8 @@ def get_digest(digest_id: int, db: Session = Depends(get_db_for_user)):
 def trigger_digest_now(
     digest_type: str,
     user: AuthenticatedUser = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user)
+    db: Session = Depends(get_db_for_user),
+    _gate=Depends(require_feature(Feature.DIGESTS)),
 ):
     """Manually trigger a digest generation."""
     

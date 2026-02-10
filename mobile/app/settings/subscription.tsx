@@ -42,7 +42,18 @@ export default function SubscriptionScreen() {
                 cancel_url: 'teeks://billing/cancel',
             });
             if (data?.checkout_url) {
-                await WebBrowser.openBrowserAsync(data.checkout_url);
+                // Use openAuthSessionAsync to intercept redirects and avoid double navigation
+                const result = await WebBrowser.openAuthSessionAsync(
+                    data.checkout_url,
+                    'teeks://'
+                );
+
+                // Only refresh if checkout completed successfully
+                if (result.type === 'success' && result.url?.includes('billing/success')) {
+                    // Give webhook a moment to process
+                    await new Promise(resolve => setTimeout(resolve, 1500));
+                }
+                // Always refetch to get latest status (success or not)
                 refetch();
             }
         } catch (err: any) {

@@ -18,8 +18,8 @@ router = APIRouter(prefix="/tasks", tags=["Tasks"])
 @router.get("/", response_model=TasksListResponse)
 def get_tasks(
     status: str = None,
-    skip: int = 0,
     limit: int = 50,
+    offset: int = 0,
     db: Session = Depends(get_db_for_user)
 ):
     """Get tasks with optional status filter"""
@@ -29,7 +29,7 @@ def get_tasks(
         query = query.filter(Task.status == status)
 
     total = query.count()
-    tasks = query.order_by(Task.created_at.desc()).offset(skip).limit(limit).all()
+    tasks = query.order_by(Task.created_at.desc()).offset(offset).limit(limit).all()
 
     return TasksListResponse(tasks=tasks, total=total)
 

@@ -7,8 +7,10 @@ import { Mail, Sparkles, Shield, Clock } from 'lucide-react';
  * Entry point for unauthenticated users. 
  * Directs to Supabase auth (not directly to Gmail).
  */
-const LandingPage = ({ onConnect, demoMode, setDemoMode }) => (
+const LandingPage = ({ onConnect, demoMode, setDemoMode, onFoundingMember }) => (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col">
+        {/* ... existing hero ... */}
+
         {/* Hero Section */}
         <div className="flex-1 flex items-center justify-center p-6">
             <div className="max-w-lg w-full text-center">
@@ -75,7 +77,7 @@ const LandingPage = ({ onConnect, demoMode, setDemoMode }) => (
                 </div>
 
                 {/* Trust indicators */}
-                <p className="mt-8 text-slate-500 text-xs">
+                <p className="mt-8 text-slate-500 text-xs text-center">
                     Your data is encrypted and never shared. Read our{' '}
                     <a href="#" className="text-slate-400 hover:text-white underline">Privacy Policy</a>
                 </p>
@@ -83,8 +85,14 @@ const LandingPage = ({ onConnect, demoMode, setDemoMode }) => (
         </div>
 
         {/* Footer */}
-        <footer className="py-6 text-center text-slate-500 text-sm">
-            <p>© 2026 Inbox Brain. Built for executive assistants.</p>
+        <footer className="py-8 text-center border-t border-slate-800/50">
+            <p className="text-slate-500 text-sm mb-4">© 2026 Inbox Brain. Built for executive assistants.</p>
+            <button
+                onClick={onFoundingMember}
+                className="text-amber-500/80 hover:text-amber-400 text-sm font-medium transition-colors hover:underline"
+            >
+                Are you an EA? Apply for Founding Member Access ✨
+            </button>
         </footer>
     </div>
 );

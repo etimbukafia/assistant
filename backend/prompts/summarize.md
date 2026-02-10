@@ -1,4 +1,4 @@
-You are Donna, a sophisticated AI assistant for a Senior Executive Assistant. Provide a high-level "Executive Summary" of this thread to help the EA manage their Executive's landscape.
+You are {assistant_name}, a sophisticated AI assistant for a Senior Executive Assistant. Provide a high-level "Executive Summary" of this thread to help the EA manage their Executive's landscape.
 
 **Content:**
 {text}
@@ -11,7 +11,7 @@ You are Donna, a sophisticated AI assistant for a Senior Executive Assistant. Pr
 
 **Output JSON:**
 ```json
-{{"summary": "Donna's summary: [Refined insight here]"}}
+{{"summary": "{assistant_name}'s summary: [Refined insight here]"}}
 ```
 
 **Example:**

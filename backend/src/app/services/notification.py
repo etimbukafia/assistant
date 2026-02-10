@@ -117,6 +117,22 @@ class NotificationService:
         }, synchronize_session="fetch")
         self.db.commit()
 
+    @staticmethod
+    def _is_quiet_hours(preferences: Dict) -> bool:
+        """Check if current time is in quiet hours."""
+        quiet_start = preferences.get("quiet_hours_start", "22:00")
+        quiet_end = preferences.get("quiet_hours_end", "08:00")
+
+        now = datetime.now(timezone.utc).time()
+        start = time.fromisoformat(quiet_start)
+        end = time.fromisoformat(quiet_end)
+
+        if start < end:
+            return start <= now <= end
+        else:
+            # Overnight range (e.g., 22:00 - 08:00)
+            return now >= start or now <= end
+
     def _send_push(self, notification: Notification):
         """Enqueue push notification for async delivery with retry support."""
         from app.jobs.task_queue import enqueue_task
@@ -255,19 +271,3 @@ def send_push_for_notification(notification_id: int, user_id: str, db) -> bool:
     db.commit()
     logger.info(f"Push sent for notification {notification_id} to {len(tokens)} device(s)")
     return any_success
-
-    @staticmethod
-    def _is_quiet_hours(preferences: Dict) -> bool:
-        """Check if current time is in quiet hours."""
-        quiet_start = preferences.get("quiet_hours_start", "22:00")
-        quiet_end = preferences.get("quiet_hours_end", "08:00")
-
-        now = datetime.now(timezone.utc).time()
-        start = time.fromisoformat(quiet_start)
-        end = time.fromisoformat(quiet_end)
-
-        if start < end:
-            return start <= now <= end
-        else:
-            # Overnight range (e.g., 22:00 - 08:00)
-            return now >= start or now <= end

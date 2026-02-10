@@ -15,8 +15,9 @@ from fastapi import BackgroundTasks
 
 from core.events import emit_event
 from core.queue import Worker, BatchWorker
-from app.jobs.task_queue import queue_service
+from app.jobs.queue import queue_service
 from app.jobs.trial_warnings import handle_check_trial_expirations, get_next_trial_check_time
+from app.jobs.webhook_health import handle_check_webhook_health, get_next_webhook_health_check_time
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -35,13 +36,16 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
     2. Processes them using the message_processor module
     3. Leverages shared LLM provider (no reinitialization)
 
-    Critical: All tasks belong to the same user - no data leakage possible.
+    Security: Each message is verified to belong to the claimed user_id.
+    This prevents cross-user data leakage if queue service has bugs.
 
     The actual processing logic is in app.message_processor, making it
     reusable across channels (email, Slack, WhatsApp).
     """
     from app.processors.message import process_messages_batch
     from app.infra.database import SessionLocal
+    from app.data.models import UserSettings, Message
+    from app.services.credits import check_credits_available
 
     # Require user_id for RLS context
     if not user_id:
@@ -50,30 +54,63 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
     if not tasks:
         return
 
+    # Check if user has credits available before processing
+    db_check = SessionLocal()
+    try:
+        db_check.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+        settings = db_check.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+        if settings:
+            can_proceed, _ = check_credits_available(settings)
+            if not can_proceed:
+                logger.info(f"Skipping email batch for user {user_id}: credits exhausted")
+                return
+    finally:
+        db_check.close()
+
     logger.info(f"Processing batch of {len(tasks)} emails for user {user_id}")
-
-    # Extract message IDs from tasks
-    message_ids = []
-    for task in tasks:
-        message_id = task["payload"].get("message_id")
-        if message_id:
-            message_ids.append(message_id)
-        else:
-            logger.warning(f"Task {task['task_id']} missing message_id in payload")
-
-    if not message_ids:
-        logger.warning(f"No valid message IDs to process for user {user_id}")
-        return
-
-    # Get correlation_id from first task
-    correlation_id = tasks[0].get("correlation_id") if tasks else None
 
     # Create session and set RLS context
     db = SessionLocal()
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
-    # Process using the reusable message processor
     try:
+        # Extract and VERIFY message IDs belong to this user (security)
+        candidate_ids = []
+        for task in tasks:
+            message_id = task["payload"].get("message_id")
+            if message_id:
+                candidate_ids.append(message_id)
+            else:
+                logger.warning(f"Task {task['task_id']} missing message_id in payload")
+
+        if not candidate_ids:
+            logger.warning(f"No valid message IDs to process for user {user_id}")
+            return
+
+        # Verify ownership: Only process messages that actually belong to this user
+        # This prevents cross-user data leakage if queue grouping has bugs
+        verified_messages = db.query(Message.id).filter(
+            Message.id.in_(candidate_ids),
+            Message.user_id == user_id  # Security: explicit ownership check
+        ).all()
+        message_ids = [m.id for m in verified_messages]
+
+        # Log if any messages were rejected
+        rejected_count = len(candidate_ids) - len(message_ids)
+        if rejected_count > 0:
+            logger.error(
+                f"SECURITY: Rejected {rejected_count} messages that don't belong to user {user_id}. "
+                f"This may indicate a queue service bug or attack attempt."
+            )
+
+        if not message_ids:
+            logger.warning(f"No verified message IDs to process for user {user_id}")
+            return
+
+        # Get correlation_id from first task
+        correlation_id = tasks[0].get("correlation_id") if tasks else None
+
+        # Process using the reusable message processor
         results = process_messages_batch(message_ids, db=db, user_id=user_id, correlation_id=correlation_id)
         logger.info(f"Batch complete: processed {len(results)} emails for user {user_id}")
     except Exception as e:
@@ -209,6 +246,17 @@ async def handle_send_push_notification(task_id: int, task_type: str, payload: D
         logger.info(f"[{correlation_id}] Push notification {notification_id} delivered")
     except Exception as e:
         logger.error(f"[{correlation_id}] Push notification {notification_id} failed: {e}", exc_info=True)
+        # Record error on notification so it's visible beyond logs
+        try:
+            from app.data.models import Notification
+            notification = db.query(Notification).filter(
+                Notification.id == notification_id
+            ).first()
+            if notification:
+                notification.push_error = str(e)
+                db.commit()
+        except Exception:
+            db.rollback()
         raise  # Re-raise for retry
     finally:
         db.close()
@@ -313,7 +361,7 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
     from app.data.models import Task, Message, UserSettings, TaskReminder
     from app.infra.database import SessionLocal
     from app.processors.ai import AIProcessor
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -482,7 +530,7 @@ async def handle_data_cleanup(task_id: int, task_type: str, payload: Dict[str, A
     """
     from app.data.models import Message, Task
     from app.infra.database import SessionLocal
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     RETENTION_DAYS = 30
 
@@ -572,7 +620,7 @@ async def handle_chat_cleanup(task_id: int, task_type: str, payload: Dict[str, A
     """
     from app.chat import ChatService
     from app.infra.database import SessionLocal
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     db = SessionLocal()
     try:
@@ -656,7 +704,7 @@ async def handle_generate_briefing(task_id: int, task_type: str, payload: Dict[s
         )
 
         # Emit event for UI notification
-        from app.jobs.task_queue import enqueue_task
+        from app.jobs.queue import enqueue_task
         enqueue_task(
             task_type="emit_event",
             payload={
@@ -686,8 +734,11 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
     """
     Handler for 'email_backfill' tasks.
 
-    Fetches emails from the specified time window (default 24h), saves to DB,
-    applies email filters, and queues for AI processing.
+    Supports two modes:
+    - "today": Fetches emails from midnight (user's timezone) to now
+    - Legacy: Fetches emails from last N hours (hours_back parameter)
+
+    Saves to DB, applies email filters, and queues for AI processing.
     Marks initial_sync_completed = True on success.
     """
     from app.data.models import GmailAccount, Message
@@ -695,9 +746,12 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
     from app.integrations.gmail import GmailClient
     from app.security.encryption import encrypt_body
     from app.services.email_filter import EmailFilterService, FilterAction
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
+    from zoneinfo import ZoneInfo
 
     user_id = payload.get("user_id")
+    sync_mode = payload.get("sync_mode", "hours")  # "today" or "hours" (legacy)
+    user_timezone = payload.get("user_timezone", "UTC")
     hours_back = payload.get("hours_back", 24)
 
     if not user_id:
@@ -707,7 +761,30 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
     try:
-        logger.info(f"Starting email backfill for user {user_id} (last {hours_back}h)")
+        # Build Gmail query based on sync mode
+        if sync_mode == "today":
+            # Calculate midnight in user's timezone
+            try:
+                user_tz = ZoneInfo(user_timezone)
+            except Exception:
+                user_tz = timezone.utc
+                logger.warning(f"Invalid timezone '{user_timezone}', falling back to UTC")
+
+            now_user = datetime.now(user_tz)
+            midnight_user = now_user.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Gmail 'after:' query uses epoch seconds
+            midnight_epoch = int(midnight_user.timestamp())
+            query = f"after:{midnight_epoch}"
+
+            logger.info(
+                f"Starting email backfill for user {user_id} "
+                f"(today's emails from {midnight_user.isoformat()} in {user_timezone})"
+            )
+        else:
+            # Legacy mode: hours_back
+            query = f"newer_than:{hours_back}h"
+            logger.info(f"Starting email backfill for user {user_id} (last {hours_back}h)")
 
         client = GmailClient(db=db, user_id=user_id)
         if not client.load_credentials():
@@ -715,7 +792,6 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
             return
 
         # Fetch messages
-        query = f"newer_than:{hours_back}h"
         messages = client.get_messages(max_results=500, query=query)
 
         logger.info(f"Fetched {len(messages)} messages for backfill")
@@ -880,7 +956,7 @@ async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str
     from app.data.models import UserSettings, Digest
     from app.infra.database import SessionLocal
     from app.services.digest import DigestService
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -1004,7 +1080,7 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
     """
     from app.data.models import Digest
     from app.infra.database import SessionLocal
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
@@ -1127,7 +1203,7 @@ def schedule_digest_jobs_if_needed(db):
     Ensures exactly one pending job per (user, digest_type) combination.
     """
     from app.data.models import UserSettings, TaskQueue
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     # Query all pending digest jobs once (O(1) queries, not O(users * types))
     pending_jobs = db.query(TaskQueue).filter(
@@ -1290,7 +1366,7 @@ async def handle_cleanup_stuck_chat_messages(task_id: int, task_type: str, paylo
     """
     from app.data.models import ChatMessage
     from app.infra.database import SessionLocal
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
     # 5 minutes timeout for background cleanup (longer than 2-min TTL-on-read)
     BACKGROUND_TIMEOUT_MINUTES = 5
@@ -1384,6 +1460,7 @@ TASK_HANDLERS = {
     "process_chat_message": handle_process_chat_message,
     "renew_gmail_watches": handle_renew_gmail_watches,
     "check_trial_expirations": handle_check_trial_expirations,
+    "check_webhook_health": handle_check_webhook_health,
 }
 
 
@@ -1435,9 +1512,9 @@ def schedule_cleanup_jobs_if_needed(db):
     Called on worker startup to ensure cleanup jobs are running.
     """
     from app.data.models import TaskQueue
-    from app.jobs.task_queue import enqueue_task
+    from app.jobs.queue import enqueue_task
 
-    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations"]
+    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations", "check_webhook_health"]
 
     for task_type in cleanup_jobs:
         existing = db.query(TaskQueue).filter(
@@ -1454,6 +1531,8 @@ def schedule_cleanup_jobs_if_needed(db):
                 next_run = get_next_cleanup_time()
             elif task_type == "check_trial_expirations":
                 next_run = get_next_trial_check_time()
+            elif task_type == "check_webhook_health":
+                next_run = get_next_webhook_health_check_time()
             else:
                 continue
 

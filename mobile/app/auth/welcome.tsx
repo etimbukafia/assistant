@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, SafeAreaView, TouchableOpacity, Dimensions, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -7,23 +7,32 @@ import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
 import { ImmersiveBackground } from '../../src/components/ui/ImmersiveBackground';
-import { Glass } from '../../src/theme/Glass';
 
 const { width } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
     const router = useRouter();
-    const { signInWithGoogle } = useAuth();
+    const { signInWithGoogle, isAuthenticated, profileLoaded, onboardingCompleted, isActive } = useAuth();
     const [isLoading, setIsLoading] = useState(false);
+
+    // Navigate once authenticated and profile is loaded
+    useEffect(() => {
+        if (isAuthenticated && profileLoaded) {
+            if (onboardingCompleted) {
+                router.replace('/(tabs)' as any);
+            } else if (isActive) {
+                router.replace('/auth/setup' as any);
+            } else {
+                router.replace('/auth/subscription' as any);
+            }
+        }
+    }, [isAuthenticated, profileLoaded, onboardingCompleted, isActive]);
 
     const handleGoogleAuth = async () => {
         try {
             setIsLoading(true);
-            const success = await signInWithGoogle();
-            // Only navigate if sign-in was successful (not cancelled)
-            if (success) {
-                router.replace('/(tabs)' as any);
-            }
+            await signInWithGoogle();
+            // Navigation handled by useEffect above after profile loads
         } catch (error: any) {
             console.error('Google auth error:', error);
             Alert.alert(
@@ -38,13 +47,13 @@ export default function WelcomeScreen() {
 
     return (
         <ImmersiveBackground style={styles.container}>
-            <StatusBar style="light" />
+            <StatusBar style="dark" />
 
             <SafeAreaView style={styles.safeArea}>
                 {/* Header / Nav */}
                 <View style={styles.header}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-                        <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+                        <DonnaText style={styles.backButtonText}>←</DonnaText>
                     </TouchableOpacity>
                 </View>
 
@@ -66,12 +75,11 @@ export default function WelcomeScreen() {
                             disabled={isLoading}
                         >
                             {isLoading ? (
-                                <ActivityIndicator size="small" color={Colors.bgBase} />
+                                <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
                                 <>
-                                    {/* Visual G icon placeholder or text */}
                                     <View style={styles.googleIconPlaceholder}>
-                                        <DonnaText style={styles.googleIconText}>G</DonnaText>
+                                        <Ionicons name="logo-google" size={20} color="#FFFFFF" />
                                     </View>
                                     <DonnaText style={styles.googleButtonText}>Continue with Google</DonnaText>
                                 </>
@@ -97,14 +105,19 @@ const styles = StyleSheet.create({
     },
     backButton: {
         padding: Spacing.xs,
-        width: 40,
-        height: 40,
+        width: 44,
+        height: 44,
         justifyContent: 'center',
         alignItems: 'center',
         borderRadius: Radius.full,
-        backgroundColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: 'rgba(0,0,0,0.05)', // Subtle dark on linen
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        borderColor: 'rgba(0,0,0,0.1)',
+    },
+    backButtonText: {
+        fontSize: 24,
+        color: Colors.textPrimary, // Dark obsidian
+        lineHeight: 28,
     },
     content: {
         flex: 1,
@@ -118,9 +131,9 @@ const styles = StyleSheet.create({
     },
     title: {
         fontFamily: 'PlayfairDisplay_600SemiBold',
-        fontSize: 36,
-        lineHeight: 44,
-        color: '#FFFFFF',
+        fontSize: 40,
+        lineHeight: 48,
+        color: Colors.accentPrimary, // Rich Auburn
         textAlign: 'center',
         marginBottom: Spacing.sm,
     },
@@ -138,16 +151,18 @@ const styles = StyleSheet.create({
     googleButton: {
         width: '100%',
         height: 56,
-        backgroundColor: '#FFFFFF', // White background
+        backgroundColor: Colors.accentSecondary, // Natural Copper
         borderRadius: Radius.full,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        shadowColor: '#000',
+        shadowColor: Colors.accentSecondary,
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
+        shadowOpacity: 0.4,
+        shadowRadius: 12,
         elevation: 5,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.2)',
         marginBottom: Spacing.sm,
     },
     googleButtonDisabled: {
@@ -156,15 +171,11 @@ const styles = StyleSheet.create({
     googleIconPlaceholder: {
         marginRight: 12,
     },
-    googleIconText: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: Colors.bgBase, // Dark text
-    },
     googleButtonText: {
         fontFamily: 'Inter_400Regular',
         fontSize: 16,
-        color: Colors.bgBase, // Dark text
+        color: '#FFFFFF', // White text on copper
         fontWeight: '600',
+        letterSpacing: 0.5,
     },
 });

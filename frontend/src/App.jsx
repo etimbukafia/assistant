@@ -20,6 +20,7 @@ import CheckoutCancel from './views/CheckoutCancel';
 import ChatView from './views/ChatView';
 import GmailConnectView from './views/GmailConnectView';
 import DeleteConfirmDialog from './components/DeleteConfirmDialog';
+import FoundingMemberPage from './views/FoundingMemberPage';
 
 const AppContent = () => {
     const { isAuthenticated, loading: authLoading, user } = useAuth();
@@ -86,6 +87,8 @@ const AppContent = () => {
                 setCurrentView('checkout-cancel');
             } else if (path === '/billing') {
                 setCurrentView('billing');
+            } else if (path === '/founding-members') {
+                setCurrentView('founding-members');
             } else if (currentView === 'landing' || currentView === 'auth' || path === '/dashboard') {
                 // Check if Gmail is connected before going to dashboard
                 if (gmailConnected === false && !demoMode) {
@@ -99,7 +102,12 @@ const AppContent = () => {
             }
         } else if (!demoMode) {
             // Not authenticated and not in demo mode - go to landing
-            if (currentView !== 'landing' && currentView !== 'auth') {
+            // Allow access to founding-members page without auth
+            if (path === '/founding-members') {
+                if (currentView !== 'founding-members') {
+                    setCurrentView('founding-members');
+                }
+            } else if (currentView !== 'landing' && currentView !== 'auth') {
                 setCurrentView('landing');
                 window.history.replaceState({}, '', '/');
             }

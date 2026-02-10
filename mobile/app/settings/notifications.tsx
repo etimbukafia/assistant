@@ -25,15 +25,11 @@ const DEFAULT_PREFS = {
 
 export default function NotificationSettingsScreen() {
     const router = useRouter();
-    const { settings, isLoading, updateSettings, isUpdating, isSandbox } = useSettings();
+    const { settings, isLoading, updateSettings, isUpdating } = useSettings();
 
     const prefs = settings?.notification_preferences ?? DEFAULT_PREFS;
 
     const handleToggle = (key: string, value: boolean) => {
-        if (isSandbox) {
-            Alert.alert('Demo Mode', 'Settings changes are disabled in demo mode. Connect your email to enable.');
-            return;
-        }
         updateSettings({
             notification_preferences: { ...prefs, [key]: value },
         });
@@ -85,7 +81,7 @@ export default function NotificationSettingsScreen() {
                                 onValueChange={(v) => handleToggle('push_enabled', v)}
                                 trackColor={{ true: Colors.success }}
                                 thumbColor="#FFF"
-                                disabled={isUpdating || isSandbox}
+                                disabled={isUpdating}
                             />
                         </View>
                     </View>
@@ -110,7 +106,7 @@ export default function NotificationSettingsScreen() {
                                 onValueChange={(v) => handleToggle('push_urgent_tasks', v)}
                                 trackColor={{ true: Colors.success }}
                                 thumbColor="#FFF"
-                                disabled={isUpdating || isSandbox || !pushEnabled}
+                                disabled={isUpdating || !pushEnabled}
                             />
                         </View>
 
@@ -129,7 +125,7 @@ export default function NotificationSettingsScreen() {
                                 onValueChange={(v) => handleToggle('push_deadlines', v)}
                                 trackColor={{ true: Colors.success }}
                                 thumbColor="#FFF"
-                                disabled={isUpdating || isSandbox || !pushEnabled}
+                                disabled={isUpdating || !pushEnabled}
                             />
                         </View>
 
@@ -148,7 +144,7 @@ export default function NotificationSettingsScreen() {
                                 onValueChange={(v) => handleToggle('push_digests', v)}
                                 trackColor={{ true: Colors.success }}
                                 thumbColor="#FFF"
-                                disabled={isUpdating || isSandbox || !pushEnabled}
+                                disabled={isUpdating || !pushEnabled}
                             />
                         </View>
 
@@ -167,7 +163,7 @@ export default function NotificationSettingsScreen() {
                                 onValueChange={(v) => handleToggle('push_briefings', v)}
                                 trackColor={{ true: Colors.success }}
                                 thumbColor="#FFF"
-                                disabled={isUpdating || isSandbox || !pushEnabled}
+                                disabled={isUpdating || !pushEnabled}
                             />
                         </View>
                     </View>

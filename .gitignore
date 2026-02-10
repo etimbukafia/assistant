@@ -33,6 +33,7 @@ tests/
 !design/
 !design/*.md
 !claude.md
+!BUSINESS_ANALYSIS.md
 
 # Google credentials
 credentials.json

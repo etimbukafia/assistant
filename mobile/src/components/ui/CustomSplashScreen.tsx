@@ -1,14 +1,14 @@
 import React, { useEffect } from 'react';
-import { StyleSheet, View, Image } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
     withTiming,
     Easing
 } from 'react-native-reanimated';
+import { TeeksWordmark } from './TeeksWordmark';
 import { ImmersiveBackground } from './ImmersiveBackground';
-import { DonnaText } from './DonnaText';
-import { Colors, Typography } from '../../theme/Theme';
+import { Colors } from '../../theme/Theme';
 
 export const CustomSplashScreen = () => {
     const opacity = useSharedValue(0);
@@ -28,15 +28,8 @@ export const CustomSplashScreen = () => {
     return (
         <ImmersiveBackground style={styles.container}>
             <View style={styles.content}>
-                <Animated.View style={[styles.logoRow, animatedStyle]}>
-                    {/* "T" Logo Icon */}
-                    <Image
-                        source={require('../../../assets/teeks_logo_cleaned_1769863142071.png')}
-                        style={styles.logoIcon}
-                        resizeMode="contain"
-                    />
-                    {/* "eeks" Text */}
-                    <DonnaText style={styles.logoText}>eeks</DonnaText>
+                <Animated.View style={[styles.logoContainer, animatedStyle]}>
+                    <TeeksWordmark width={300} height={75} color={Colors.accentPrimary} />
                 </Animated.View>
             </View>
         </ImmersiveBackground>
@@ -52,19 +45,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    logoRow: {
-        flexDirection: 'row',
+    logoContainer: {
         alignItems: 'center',
-    },
-    logoIcon: {
-        width: 48,
-        height: 48,
-        marginRight: 4,
-    },
-    logoText: {
-        ...Typography.logo,
-        color: Colors.textPrimary,
-        fontSize: 42,
-        letterSpacing: 2,
     },
 });

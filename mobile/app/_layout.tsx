@@ -12,13 +12,15 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import {
   PlayfairDisplay_400Regular,
   PlayfairDisplay_600SemiBold,
+  PlayfairDisplay_700Bold,
+  PlayfairDisplay_700Bold_Italic,
 } from '@expo-google-fonts/playfair-display';
 import {
   Inter_400Regular,
 } from '@expo-google-fonts/inter';
+import { Ionicons } from '@expo/vector-icons';
 import { AuthProvider } from '../src/context/AuthContext';
 import { ChatProvider, useChat } from '../src/context/ChatContext';
-import { SyncCTAProvider } from '../src/context/SyncCTAContext';
 import { OmniChatOverlay } from '../src/components/chat/OmniChatOverlay';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '../src/utils/queryClient';
@@ -63,8 +65,11 @@ export default function RootLayout() {
   const [loaded, error] = useFonts({
     PlayfairDisplay_600SemiBold,
     PlayfairDisplay_400Regular,
+    PlayfairDisplay_700Bold,
+    PlayfairDisplay_700Bold_Italic,
     Inter_400Regular,
     ...FontAwesome.font,
+    ...Ionicons.font,
   });
 
   // Expo Router uses Error Boundaries to catch errors in the navigation tree.
@@ -98,32 +103,32 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <ChatProvider>
         <AuthProvider>
-          <SyncCTAProvider>
-            <ThemeProvider value={DonnaTheme}>
-              <GestureHandlerRootView style={{ flex: 1 }}>
-                <Stack screenOptions={{ headerShown: false }}>
-                  <Stack.Screen name="index" />
-                  <Stack.Screen name="login" />
-                  <Stack.Screen name="auth/welcome" />
-                  <Stack.Screen name="auth/google/choose-account" options={{ presentation: 'modal' }} />
-                  <Stack.Screen name="auth/google/consent" options={{ presentation: 'modal' }} />
-                  <Stack.Screen name="auth/activation-explanation" options={{ presentation: 'modal' }} />
-                  <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
-                  <Stack.Screen name="settings/profile" options={{ presentation: 'modal' }} />
-                  <Stack.Screen name="settings/activate_trial" options={{ presentation: 'modal' }} />
-                  <Stack.Screen name="settings/privacy" options={{ presentation: 'modal' }} />
-                  <Stack.Screen name="(tabs)" options={{
-                    headerShown: false,
-                    presentation: 'card',
-                    gestureEnabled: false,
-                    animation: 'fade',
-                  }} />
-                </Stack>
-                {/* Global OmniChat Overlay - appears on ALL screens */}
-                <GlobalChatOverlay />
-              </GestureHandlerRootView>
-            </ThemeProvider>
-          </SyncCTAProvider>
+          <ThemeProvider value={DonnaTheme}>
+            <GestureHandlerRootView style={{ flex: 1 }}>
+              <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="index" />
+                <Stack.Screen name="login" />
+                <Stack.Screen name="auth/welcome" />
+                <Stack.Screen name="auth/subscription" />
+                <Stack.Screen name="auth/setup" />
+                <Stack.Screen name="auth/google/choose-account" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="auth/google/consent" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="auth/activation-explanation" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="chat" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="settings/profile" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="settings/activate_trial" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="settings/privacy" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="(tabs)" options={{
+                  headerShown: false,
+                  presentation: 'card',
+                  gestureEnabled: false,
+                  animation: 'fade',
+                }} />
+              </Stack>
+              {/* Global OmniChat Overlay - appears on ALL screens */}
+              <GlobalChatOverlay />
+            </GestureHandlerRootView>
+          </ThemeProvider>
         </AuthProvider>
       </ChatProvider>
     </QueryClientProvider>

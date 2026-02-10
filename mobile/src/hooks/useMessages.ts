@@ -22,6 +22,7 @@ import {
     getSchedulingSuggestion,
     sendSchedulingReply,
     dismissSchedulingSuggestion,
+    fetchProcessingStatus,
     Message,
     MessagesResponse,
     SchedulingSuggestion,
@@ -39,7 +40,7 @@ export const messagesKeys = {
 /**
  * Hook for fetching messages with optional filtering
  */
-export function useMessages(params?: { skip?: number; limit?: number; needs_reply?: boolean; enabled?: boolean }) {
+export function useMessages(params?: { limit?: number; offset?: number; needs_reply?: boolean; enabled?: boolean }) {
     return useQuery({
         queryKey: messagesKeys.list({ needs_reply: params?.needs_reply }),
         queryFn: () => fetchMessages(params),
@@ -76,23 +77,24 @@ export function useNewMessages(since: string | null, options?: { enabled?: boole
 export function useMessageSync() {
     const queryClient = useQueryClient();
 
-    const invalidateMessages = () => {
-        queryClient.invalidateQueries({ queryKey: messagesKeys.all });
+    // Invalidate message lists only, not individual details
+    const invalidateMessageLists = () => {
+        queryClient.invalidateQueries({ queryKey: messagesKeys.lists() });
     };
 
     const syncMutation = useMutation({
         mutationFn: (maxResults?: number) => syncMessages(maxResults),
-        onSuccess: invalidateMessages,
+        onSuccess: invalidateMessageLists,
     });
 
     const syncDeletionsMutation = useMutation({
         mutationFn: syncDeletions,
-        onSuccess: invalidateMessages,
+        onSuccess: invalidateMessageLists,
     });
 
     const syncSentMutation = useMutation({
         mutationFn: syncSentMessages,
-        onSuccess: invalidateMessages,
+        onSuccess: invalidateMessageLists,
     });
 
     return {
@@ -119,30 +121,42 @@ export function useMessageSync() {
 export function useMessageMutations() {
     const queryClient = useQueryClient();
 
-    const invalidateMessages = () => {
-        queryClient.invalidateQueries({ queryKey: messagesKeys.all });
+    // Invalidate message lists only, not individual details
+    const invalidateMessageLists = () => {
+        queryClient.invalidateQueries({ queryKey: messagesKeys.lists() });
+    };
+
+    // Invalidate specific message detail
+    const invalidateMessageDetail = (messageId: number) => {
+        queryClient.invalidateQueries({ queryKey: messagesKeys.detail(messageId) });
     };
 
     const doneMutation = useMutation({
         mutationFn: markMessageDone,
-        onSuccess: invalidateMessages,
+        onSuccess: (_, messageId) => {
+            invalidateMessageLists();
+            invalidateMessageDetail(messageId);
+        },
     });
 
     const archiveMutation = useMutation({
         mutationFn: archiveMessage,
-        onSuccess: invalidateMessages,
+        onSuccess: (_, messageId) => {
+            invalidateMessageLists();
+            invalidateMessageDetail(messageId);
+        },
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteMessage,
-        onSuccess: invalidateMessages,
+        onSuccess: invalidateMessageLists,
     });
 
     const reprocessMutation = useMutation({
         mutationFn: reprocessMessage,
         onSuccess: (_, messageId) => {
-            queryClient.invalidateQueries({ queryKey: messagesKeys.detail(messageId) });
-            invalidateMessages();
+            invalidateMessageLists();
+            invalidateMessageDetail(messageId);
         },
     });
 
@@ -259,4 +273,18 @@ export function useSchedulingMutations() {
 
         isAnyPending: sendMutation.isPending || dismissMutation.isPending,
     };
+}
+
+/**
+ * Hook for polling email processing status after sync.
+ * Only polls when enabled. Caller disables when count hits 0.
+ */
+export function useProcessingStatus(enabled: boolean = false) {
+    return useQuery({
+        queryKey: ['processing-status'],
+        queryFn: fetchProcessingStatus,
+        enabled,
+        refetchInterval: enabled ? 3000 : false,
+        staleTime: 0,
+    });
 }

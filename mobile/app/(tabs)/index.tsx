@@ -1,74 +1,75 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { DonnaCard } from '../../src/components/ui/DonnaCard';
-import { SyncDataCTA } from '../../src/components/ui/SyncDataCTA';
 import { SubscriptionExpiredCTA } from '../../src/components/ui/SubscriptionExpiredCTA';
 import { StatusBar } from 'expo-status-bar';
-import demoData from '../../src/data/demo_state.json';
 import { Message } from '../../src/services/messages';
 import { parseISO, formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/context/AuthContext';
-import { useMessages } from '../../src/hooks/useMessages';
+import { useMessages, useProcessingStatus } from '../../src/hooks/useMessages';
 import { useTaskMutations } from '../../src/hooks/useTasks';
 import { ImmersiveBackground } from '../../src/components/ui/ImmersiveBackground';
-import { Glass } from '../../src/theme/Glass';
 
 type FilterType = 'all' | 'needs_reply' | 'today';
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { isSandbox, isActive, subscriptionTier, initialSyncCompleted } = useAuth();
+  const { isActive, subscriptionTier, initialSyncCompleted } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
   const [focusMode, setFocusMode] = useState(false);
+  const [processingActive, setProcessingActive] = useState(false);
 
-  // Fetch messages - disabled in sandbox mode
-  const { data: messagesResponse, isLoading, isRefetching, refetch } = useMessages({ enabled: !isSandbox });
+  // Fetch messages
+  const { data: messagesResponse, isLoading, isRefetching, refetch } = useMessages();
+
+  // Processing status polling - starts on pull-to-refresh
+  const { data: processingData } = useProcessingStatus(isActive && processingActive);
+  const processingCount = processingData?.processing_count ?? 0;
+
+  // Track consecutive zero counts to debounce polling deactivation
+  const zeroCountRef = useRef(0);
+
+  useEffect(() => {
+    if (processingActive && processingData !== undefined) {
+      if (processingCount === 0) {
+        // Increment consecutive zero count
+        zeroCountRef.current += 1;
+        // Only stop polling after 2 consecutive zero counts (debounce)
+        if (zeroCountRef.current >= 2) {
+          setProcessingActive(false);
+          zeroCountRef.current = 0;
+        }
+      } else {
+        // Reset counter when we see processing messages
+        zeroCountRef.current = 0;
+      }
+    }
+  }, [processingActive, processingCount, processingData]);
   const { approve, dismiss } = useTaskMutations();
 
   const handleApproveTask = useCallback((taskId: number) => {
-    if (isSandbox) {
-      Alert.alert('Demo Mode', 'Task approval is disabled in demo mode. Connect your email to enable.');
-      return;
-    }
     approve(taskId);
-  }, [isSandbox, approve]);
+  }, [approve]);
 
   const handleDismissTask = useCallback((taskId: number) => {
-    if (isSandbox) {
-      Alert.alert('Demo Mode', 'Task actions are disabled in demo mode. Connect your email to enable.');
-      return;
-    }
     dismiss(taskId);
-  }, [isSandbox, dismiss]);
+  }, [dismiss]);
 
-  // In sandbox mode, use demo data with dynamic dates; otherwise use API response
+  // Messages from API
   const messages = useMemo(() => {
-    if (isSandbox) {
-      const now = new Date();
-      return (demoData.messages as unknown as Message[]).map((msg, index) => {
-        // Make dates relative to today for realistic demo
-        const date = new Date(now);
-        if (index < 2) {
-          // First two messages: today, spaced apart
-          date.setHours(now.getHours() - 2 - index * 2, 0, 0, 0);
-        } else {
-          // Remaining messages: yesterday
-          date.setDate(date.getDate() - 1);
-          date.setHours(14, 0, 0, 0);
-        }
-        return { ...msg, received_at: date.toISOString() };
-      });
-    }
     return messagesResponse?.messages || [];
-  }, [isSandbox, messagesResponse]);
+  }, [messagesResponse]);
 
   const onRefresh = React.useCallback(() => {
     refetch();
-  }, [refetch]);
+    if (isActive) {
+      setProcessingActive(true);
+    }
+  }, [refetch, isActive]);
 
   const filteredMessages = useMemo(() => {
     let filtered = messages;
@@ -125,27 +126,33 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* Sync CTA Banner (only in Sandbox - never started trial) */}
-      {isSandbox && (
-        <View style={styles.ctaBanner}>
-          <SyncDataCTA />
-        </View>
-      )}
-
-      {/* Subscription Expired Banner (started trial but expired) */}
-      {!isSandbox && !isActive && (
+      {/* Subscription Expired Banner */}
+      {!isActive && (
         <View style={styles.ctaBanner}>
           <SubscriptionExpiredCTA tier={subscriptionTier as 'trial' | 'pro'} />
         </View>
       )}
 
       {/* Initial Sync Progress Banner (When active and syncing) */}
-      {!isSandbox && isActive && !initialSyncCompleted && (
+      {isActive && !initialSyncCompleted && (
         <View style={styles.syncBanner}>
           <ActivityIndicator size="small" color={Colors.accentPrimary} />
           <View style={styles.syncContent}>
             <DonnaText style={styles.syncTitle}>Syncing your world...</DonnaText>
             <DonnaText style={styles.syncDesc}>Processing emails from the last 24 hours.</DonnaText>
+          </View>
+        </View>
+      )}
+
+      {/* Processing Status Banner */}
+      {processingActive && processingCount > 0 && (
+        <View style={styles.syncBanner}>
+          <ActivityIndicator size="small" color={Colors.accentSecondary} />
+          <View style={styles.syncContent}>
+            <DonnaText style={styles.syncTitle}>
+              Processing {processingCount} email{processingCount !== 1 ? 's' : ''}...
+            </DonnaText>
+            <DonnaText style={styles.syncDesc}>AI is analyzing your messages</DonnaText>
           </View>
         </View>
       )}
@@ -198,7 +205,7 @@ export default function DashboardScreen() {
 
   return (
     <ImmersiveBackground style={styles.container}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id.toString()}
@@ -276,10 +283,10 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     padding: Spacing.sm,
-    backgroundColor: Glass.default.backgroundColor,
+    backgroundColor: Colors.bgElevated,
     borderRadius: Radius.full,
     borderWidth: 1,
-    borderColor: Glass.default.borderColor,
+    borderColor: Colors.border,
   },
   actionButtonActive: {
     backgroundColor: Colors.accentSecondary,
@@ -300,10 +307,10 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.sm,
     paddingHorizontal: Spacing.sm,
     paddingVertical: Spacing.xs,
-    backgroundColor: Glass.warm.backgroundColor,
+    backgroundColor: 'rgba(217, 119, 69, 0.08)',
     borderRadius: Radius.component,
     borderWidth: 1,
-    borderColor: Glass.warm.borderColor,
+    borderColor: 'rgba(217, 119, 69, 0.15)',
   },
   focusBannerText: {
     fontSize: 12,
@@ -313,13 +320,13 @@ const styles = StyleSheet.create({
   syncBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Glass.default.backgroundColor,
+    backgroundColor: Colors.bgElevated,
     marginHorizontal: Spacing.md,
     marginBottom: Spacing.sm,
     padding: Spacing.md,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: Glass.default.borderColor,
+    borderColor: Colors.border,
     gap: Spacing.md,
   },
   syncContent: {
@@ -341,9 +348,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
     borderRadius: Radius.full,
-    backgroundColor: Glass.default.backgroundColor,
+    backgroundColor: Colors.bgElevated,
     borderWidth: 1,
-    borderColor: Glass.default.borderColor,
+    borderColor: Colors.border,
     marginRight: Spacing.sm,
   },
   filterChipActive: {

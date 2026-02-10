@@ -4,10 +4,10 @@ from typing import List
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser, require_active_subscription
+from app.security.auth import get_current_user, get_db, get_db_for_user, AuthenticatedUser, require_active_subscription
 from app.security.encryption import encrypt_body
 from app.integrations.gmail import GmailClient, get_gmail_client
-from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion
+from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion, TaskQueue, UserSettings
 from app.services.email_filter import EmailFilterService, FilterAction
 from app.data.schemas import (
     SyncResponse, MessagesListResponse, MessageResponse, 
@@ -286,8 +286,8 @@ def sync_sent_messages(
 
 @router.get("/", response_model=MessagesListResponse)
 def get_messages(
-    skip: int = 0,
     limit: int = 3,
+    offset: int = 0,
     needs_reply: bool = None,
     db: Session = Depends(get_db_for_user)
 ):
@@ -304,7 +304,7 @@ def get_messages(
     total = query.count()
 
     # Get paginated messages
-    messages = query.order_by(Message.received_at.desc()).offset(skip).limit(limit).all()
+    messages = query.order_by(Message.received_at.desc()).offset(offset).limit(limit).all()
 
     # Fetch tasks for each message
     message_ids = [msg.id for msg in messages]
@@ -353,18 +353,23 @@ def get_messages(
 @router.get("/new")
 def get_new_messages(
     since: datetime,
+    limit: int = 50,
+    offset: int = 0,
     db: Session = Depends(get_db_for_user)
 ):
     """
     Get messages received since timestamp.
-    
+
     Used for polling - frontend checks for new items periodically.
     Only returns inbox messages (not archived/synced).
     """
-    messages = db.query(Message).filter(
+    query = db.query(Message).filter(
         Message.received_at > since,
         Message.status == "inbox"
-    ).order_by(Message.received_at.desc()).all()
+    ).order_by(Message.received_at.desc())
+
+    total = query.count()
+    messages = query.offset(offset).limit(limit).all()
     
     # Build response with tasks
     message_dicts = []
@@ -397,8 +402,23 @@ def get_new_messages(
         message_dicts.append(msg_dict)
     
     messages_response = [MessageResponse(**msg_dict) for msg_dict in message_dicts]
-    
-    return {"messages": messages_response, "count": len(messages_response)}
+
+    return {"messages": messages_response, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/processing-status")
+def get_processing_status(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get count of emails currently being processed for this user."""
+    count = db.query(TaskQueue).filter(
+        TaskQueue.task_type == "process_email",
+        TaskQueue.user_id == user.user_id,
+        TaskQueue.status.in_(["pending", "in_progress"]),
+    ).count()
+
+    return {"processing_count": count}
 
 
 @router.get("/{message_id}", response_model=MessageResponse)
@@ -577,8 +597,15 @@ def reprocess_message(message_id: int, db: Session = Depends(get_db_for_user)):
         'sender': message.sender
     }
 
+    # Fetch assistant name from user settings
+    assistant_name = "Donna"  # default
+    if message.user_id:
+        user_settings = db.query(UserSettings).filter(UserSettings.user_id == message.user_id).first()
+        if user_settings and user_settings.assistant_name:
+            assistant_name = user_settings.assistant_name
+
     # Use state-based thread processing
-    thread_state_service = ThreadStateService(db)
+    thread_state_service = ThreadStateService(db, assistant_name=assistant_name)
     ai_results = thread_state_service.process_message(message, message_data)
 
     message.summary = ai_results['summary']
@@ -692,8 +719,11 @@ def trigger_initial_sync(
     db: Session = Depends(get_db_for_user)
 ):
     """
-    Trigger initial 24-hour email backfill.
-    
+    Trigger initial email backfill for today's emails.
+
+    Fetches emails from midnight (user's timezone) to now, ensuring
+    users see all relevant emails from the current day on first sync.
+
     Called when:
     - First Gmail connection after trial activation
     - Returning subscriber after lapsed subscription
@@ -709,15 +739,18 @@ def trigger_initial_sync(
         # Already synced, use incremental
         return {"status": "already_completed", "sync_type": "incremental"}
 
-    # Queue 24-hour backfill job
-    # We use 'email_backfill' task name which should be handled by the worker
+    # Get user's timezone for calculating "today"
+    user_settings = db.query(UserSettings).filter(
+        UserSettings.user_id == user.user_id
+    ).first()
+    user_timezone = user_settings.default_timezone if user_settings else "UTC"
+
+    # Queue backfill job for today's emails (midnight to now in user's timezone)
     enqueue_task("email_backfill", {
         "user_id": user.user_id,
-        "hours_back": 24,
+        "sync_mode": "today",  # New mode: fetch from midnight in user's timezone
+        "user_timezone": user_timezone,
         "gmail_account_id": gmail_account.id
     })
-    
-    # We don't set initial_sync_completed here; the worker should do it upon completion
-    # But for now, to prevent loops if worker fails, we rely on the worker.
-    
-    return {"status": "queued", "sync_type": "initial", "hours_back": 24}
+
+    return {"status": "queued", "sync_type": "initial", "mode": "today", "timezone": user_timezone}

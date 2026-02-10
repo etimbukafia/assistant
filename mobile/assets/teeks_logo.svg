@@ -1,0 +1,77 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Premium Brand Colors & Gradients -->
+    <linearGradient id="navy_grad" x1="512" y1="140" x2="512" y2="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#214061"/>
+      <stop offset="100%" stop-color="#142E46"/>
+    </linearGradient>
+    
+    <linearGradient id="teal_grad" x1="450" y1="100" x2="550" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0E8A8F"/>
+      <stop offset="100%" stop-color="#095D61"/>
+    </linearGradient>
+    
+    <linearGradient id="mint_grad" x1="550" y1="100" x2="450" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A5E2C9"/>
+      <stop offset="100%" stop-color="#8ECFB5"/>
+    </linearGradient>
+
+    <!-- Depth Filters -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="10"/>
+      <feOffset dx="0" dy="6" result="offsetblur"/>
+      <feFlood flood-color="black" flood-opacity="0.4"/>
+      <feComposite in2="offsetblur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Masks for Surgical Interweaving -->
+    <mask id="teal_mask">
+      <rect width="1024" height="1024" fill="white" />
+      <!-- Hide part of teal where mint goes OVER -->
+      <path d="M500 450 Q 550 550, 600 650" stroke="black" stroke-width="100" stroke-linecap="round" fill="none" />
+    </mask>
+  </defs>
+
+  <!-- L1: Navy Crossbars (Back Layer) -->
+  <g id="navy_group_back">
+    <path d="M260 140 H 764 V 210 H 260 Z" fill="url(#navy_grad)" />
+    <path d="M260 250 H 764 V 320 H 260 Z" fill="url(#navy_grad)" />
+  </g>
+
+  <!-- L2: Teal Strand (Lower part of the twist) -->
+  <path d="M420 80 
+           L 420 180 
+           C 420 400, 580 500, 520 700 
+           C 480 850, 500 950, 440 1000 
+           L 360 1000 
+           C 420 950, 400 850, 440 700 
+           C 500 500, 340 400, 340 180 
+           L 340 80 Z" 
+        fill="url(#teal_grad)" filter="url(#shadow)" />
+
+  <!-- L3: Mint Strand (Over-Under Twist) -->
+  <path d="M604 80 
+           L 604 220 
+           C 604 400, 444 500, 504 700 
+           C 544 850, 524 950, 584 1000 
+           L 664 1000 
+           C 604 950, 624 850, 584 700 
+           C 524 500, 684 400, 684 220 
+           L 684 80 Z" 
+        fill="url(#mint_grad)" filter="url(#shadow)" />
+
+  <!-- L4: Navy Crossbars (Front layer to complete the "through" look) -->
+  <!-- We only draw the parts that overlap the teal/mint strands to give the "through" effect -->
+  <g id="navy_group_front">
+    <!-- Using a clip or just drawing over certain zones -->
+    <path d="M480 140 H 544 V 210 H 480 Z" fill="url(#navy_grad)" />
+    <path d="M480 250 H 544 V 320 H 480 Z" fill="url(#navy_grad)" />
+  </g>
+
+  <!-- L5: Final touchups on interweaving points -->
+  <!-- (Adding highlights or small shadow overlays at specific joints) -->
+</svg>

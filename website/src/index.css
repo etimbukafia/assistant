@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@theme {
+  /* Dark Executive Palette */
+  --color-bg-primary: #0a0a0a;
+  --color-bg-secondary: #111111;
+  --color-bg-card: #161616;
+  --color-bg-card-hover: #1a1a1a;
+
+  /* Warm Accent - Rich Auburn / Natural Copper */
+  --color-accent: #7E2E2E;
+  --color-accent-muted: #D97745;
+  --color-accent-glow: rgba(126, 46, 46, 0.15);
+
+  /* Text */
+  --color-text-primary: #fafafa;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #737373;
+
+  /* Borders */
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-hover: rgba(255, 255, 255, 0.15);
+
+  /* Fonts */
+  --font-family-serif: "Playfair Display", Georgia, serif;
+  --font-family-sans: "Inter", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: var(--color-accent);
+  color: var(--color-bg-primary);
+}

@@ -29,8 +29,22 @@ SCOPES = [
 
 
 def _get_redirect_uri() -> str:
-    """Get OAuth redirect URI from settings."""
-    return get_settings().OAUTH_REDIRECT_URI
+    """Get Gmail OAuth redirect URI from settings."""
+    return get_settings().GMAIL_OAUTH_REDIRECT_URI
+
+
+def _get_client_config() -> dict:
+    """Build OAuth client config from environment variables."""
+    settings = get_settings()
+    return {
+        "web": {
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [settings.GMAIL_OAUTH_REDIRECT_URI],
+        }
+    }
 
 
 class GmailClient:
@@ -38,7 +52,6 @@ class GmailClient:
         self,
         db: Optional[Session] = None,
         user_id: Optional[str] = None,
-        credentials_file: str = "credentials.json"
     ):
         """
         Initialize Gmail client with database session for token storage
@@ -46,9 +59,7 @@ class GmailClient:
         Args:
             db: SQLAlchemy database session (for multi-user support)
             user_id: Authenticated user's ID (from Supabase auth.uid())
-            credentials_file: Path to Google OAuth credentials JSON file
         """
-        self.credentials_file = credentials_file
         self.db = db
         self.user_id = user_id
         self.creds = None
@@ -63,8 +74,8 @@ class GmailClient:
         Returns:
             tuple: (auth_url, state) - URL to redirect user to, and state for validation
         """
-        flow = Flow.from_client_secrets_file(
-            self.credentials_file,
+        flow = Flow.from_client_config(
+            _get_client_config(),
             scopes=SCOPES,
             redirect_uri=_get_redirect_uri()
         )
@@ -89,8 +100,8 @@ class GmailClient:
         Returns:
             Credentials object
         """
-        flow = Flow.from_client_secrets_file(
-            self.credentials_file,
+        flow = Flow.from_client_config(
+            _get_client_config(),
             scopes=SCOPES,
             redirect_uri=_get_redirect_uri(),
             state=state
@@ -295,16 +306,12 @@ class GmailClient:
         return False
 
     def _get_client_id(self) -> str:
-        """Get client ID from credentials file"""
-        with open(self.credentials_file, 'r') as f:
-            creds_data = json.load(f)
-            return creds_data['web']['client_id']
+        """Get client ID from environment"""
+        return get_settings().GOOGLE_CLIENT_ID
 
     def _get_client_secret(self) -> str:
-        """Get client secret from credentials file"""
-        with open(self.credentials_file, 'r') as f:
-            creds_data = json.load(f)
-            return creds_data['web']['client_secret']
+        """Get client secret from environment"""
+        return get_settings().GOOGLE_CLIENT_SECRET
 
     def is_authenticated(self) -> bool:
         """Check if client has valid credentials"""

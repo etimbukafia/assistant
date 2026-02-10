@@ -1,0 +1,21 @@
+<svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="paint0_linear" x1="80" y1="80" x2="320" y2="320" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7E2E2E"/>
+      <stop offset="1" stop-color="#D97745"/>
+    </linearGradient>
+  </defs>
+  <!-- Background subtle circle for branding vibe -->
+  <circle cx="200" cy="200" r="180" fill="white" fill-opacity="0.05" />
+  
+  <!-- The 'T' Interlock -->
+  <!-- Horizontal Bar (Top Left) -->
+  <path d="M80 100C80 88.9543 88.9543 80 100 80H230V150H80V100Z" fill="url(#paint0_linear)"/>
+  <!-- Horizontal Bar (Top Right) -->
+  <path d="M245 80H300C311.046 80 320 88.9543 320 100V150H245V80Z" fill="#1E3A8A"/>
+  <!-- Vertical Stem -->
+  <path d="M165 165H235V300C235 311.046 226.046 320 215 320H185C173.954 320 165 311.046 165 300V165Z" fill="url(#paint0_linear)"/>
+  
+  <!-- Smaller Accent Block for 'Precision' -->
+  <rect x="245" y="165" width="40" height="40" rx="10" fill="#D97745" fill-opacity="0.8"/>
+</svg>

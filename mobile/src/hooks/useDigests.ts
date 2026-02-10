@@ -11,16 +11,6 @@ import {
     updateDigestPreferences,
     DigestPreferences,
 } from '@/src/services/digests';
-import { useAuth } from '@/src/context/AuthContext';
-
-// Default digest preferences for sandbox mode
-const SANDBOX_DIGEST_PREFERENCES: DigestPreferences = {
-    enabled: true,
-    morning_briefing: { enabled: true, time: '07:30' },
-    end_of_day: { enabled: true, time: '17:00' },
-    weekly_review: { enabled: false, time: '09:00', day: 'monday' },
-    delivery_channel: 'email',
-};
 
 export const digestsKeys = {
     all: ['digests'] as const,
@@ -31,25 +21,11 @@ export const digestsKeys = {
  * Hook for fetching digest preferences
  */
 export function useDigestPreferences(options?: { enabled?: boolean }) {
-    const { isSandbox } = useAuth();
-
-    const query = useQuery({
+    return useQuery({
         queryKey: digestsKeys.preferences(),
         queryFn: fetchDigestPreferences,
-        enabled: (options?.enabled ?? true) && !isSandbox, // Disable API calls in sandbox mode
+        enabled: options?.enabled ?? true,
     });
-
-    // Return sandbox data when in sandbox mode
-    if (isSandbox) {
-        return {
-            ...query,
-            data: SANDBOX_DIGEST_PREFERENCES,
-            isLoading: false,
-            error: null,
-        };
-    }
-
-    return query;
 }
 
 /**

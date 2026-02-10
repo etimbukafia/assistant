@@ -1,13 +1,17 @@
 /**
  * Authentication Context using Supabase Auth with Google OAuth
- * 
+ *
  * Security:
  * - Uses expo-secure-store for encrypted token storage
  * - Implements PKCE flow via expo-auth-session
  * - Auto-refreshes tokens
+ *
+ * State Management:
+ * - Uses useReducer for profile state to batch updates and reduce re-renders
+ * - Auth state (session/user) kept separate as it changes independently
  */
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../utils/supabase';
@@ -16,17 +20,43 @@ import type { Session, User } from '@supabase/supabase-js';
 // Required for OAuth redirect handling
 WebBrowser.maybeCompleteAuthSession();
 
+// =============================================================================
+// Types
+// =============================================================================
+
+interface ProfileState {
+    profileLoaded: boolean;
+    settingsError: boolean;
+    // Subscription
+    isActive: boolean;
+    subscriptionTier: string;
+    daysRemaining: number;
+    // Personalization & Onboarding
+    assistantName: string;
+    onboardingCompleted: boolean;
+    // Integration state
+    initialSyncCompleted: boolean;
+    gmailConnected: boolean;
+    calendarConnected: boolean;
+}
+
+type ProfileAction =
+    | { type: 'LOADING' }
+    | { type: 'LOADED'; payload: Partial<ProfileState> }
+    | { type: 'ERROR' }
+    | { type: 'RESET' };
+
 interface AuthContextType {
     isAuthenticated: boolean;
     isLoading: boolean;
+    profileLoaded: boolean;
     session: Session | null;
     user: User | null;
     // Subscription state
-    isSandbox: boolean;        // True if user never started trial (show demo data)
-    isActive: boolean;         // True if trial/pro is currently valid (allow sync)
-    subscriptionTier: string;  // "trial" | "pro"
-    daysRemaining: number;     // Days left in trial/subscription
-    settingsError: boolean;    // True if failed to fetch settings (connection issue)
+    isActive: boolean;
+    subscriptionTier: string;
+    daysRemaining: number;
+    settingsError: boolean;
     // Personalization & Onboarding
     assistantName: string;
     onboardingCompleted: boolean;
@@ -40,64 +70,103 @@ interface AuthContextType {
     refreshProfile: () => Promise<void>;
 }
 
+// =============================================================================
+// Reducer
+// =============================================================================
+
+const initialProfileState: ProfileState = {
+    profileLoaded: false,
+    settingsError: false,
+    isActive: false,
+    subscriptionTier: 'trial',
+    daysRemaining: 0,
+    assistantName: 'Donna',
+    onboardingCompleted: false,
+    initialSyncCompleted: false,
+    gmailConnected: false,
+    calendarConnected: false,
+};
+
+function profileReducer(state: ProfileState, action: ProfileAction): ProfileState {
+    switch (action.type) {
+        case 'LOADING':
+            return { ...state, profileLoaded: false };
+        case 'LOADED':
+            return {
+                ...state,
+                ...action.payload,
+                profileLoaded: true,
+                settingsError: false,
+            };
+        case 'ERROR':
+            return { ...state, profileLoaded: true, settingsError: true };
+        case 'RESET':
+            return initialProfileState;
+        default:
+            return state;
+    }
+}
+
+// =============================================================================
+// Context
+// =============================================================================
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+    // Core auth state (changes independently from profile)
     const [session, setSession] = useState<Session | null>(null);
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    // Subscription state
-    const [isSandbox, setIsSandbox] = useState(true); // True = never started trial
-    const [isActive, setIsActive] = useState(false);  // True = trial/pro currently valid
-    const [subscriptionTier, setSubscriptionTier] = useState('trial');
-    const [daysRemaining, setDaysRemaining] = useState(0);
-    const [settingsError, setSettingsError] = useState(false); // True = failed to fetch settings
-    // Personalization & Onboarding
-    const [assistantName, setAssistantName] = useState('Donna');
-    const [onboardingCompleted, setOnboardingCompleted] = useState(false);
-    // Integration state
-    const [initialSyncCompleted, setInitialSyncCompleted] = useState(false);
-    const [gmailConnected, setGmailConnected] = useState(false);
-    const [calendarConnected, setCalendarConnected] = useState(false);
 
-    const checkSubscription = async () => {
+    // Profile state (batched updates via reducer)
+    const [profile, dispatch] = useReducer(profileReducer, initialProfileState);
+
+    // Abort controller ref for cancelling in-flight requests
+    const abortControllerRef = useRef<AbortController | null>(null);
+
+    const checkSubscription = useCallback(async () => {
         if (!session?.user) return;
+
+        // Cancel any in-flight request
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
+        abortControllerRef.current = new AbortController();
 
         try {
             // Dynamically import api to avoid circular dependencies if any
             const { api } = require('../services/api');
-            const response = await api.get('/settings');
+            const response = await api.get('/settings', {
+                signal: abortControllerRef.current.signal
+            });
             const settings = response.data;
 
-            // Clear error state on success
-            setSettingsError(false);
-
-            // Subscription state
-            // Sandbox = never started trial (show demo data)
-            setIsSandbox(settings.trial_ends_at == null);
-            // Active = trial/pro is currently valid (from backend)
-            setIsActive(!!settings.is_active);
-            setSubscriptionTier(settings.subscription_tier || 'trial');
-            setDaysRemaining(settings.days_remaining || 0);
-
-            setDaysRemaining(settings.days_remaining || 0);
-
-            // Personalization & Onboarding
-            setAssistantName(settings.assistant_name || 'Donna');
-            setOnboardingCompleted(!!settings.onboarding_completed);
-
-            // Integration state
-            setInitialSyncCompleted(!!settings.initial_sync_completed);
-            setGmailConnected(!!settings.gmail_connected);
-            setCalendarConnected(!!settings.calendar_connected);
-        } catch (error) {
+            // Single dispatch updates all profile state at once (reduces re-renders)
+            dispatch({
+                type: 'LOADED',
+                payload: {
+                    isActive: !!settings.is_active,
+                    subscriptionTier: settings.subscription_tier || 'trial',
+                    daysRemaining: settings.days_remaining || 0,
+                    assistantName: settings.assistant_name || 'Donna',
+                    onboardingCompleted: !!settings.onboarding_completed,
+                    initialSyncCompleted: !!settings.initial_sync_completed,
+                    gmailConnected: !!settings.gmail_connected,
+                    calendarConnected: !!settings.calendar_connected,
+                },
+            });
+        } catch (error: any) {
+            // Ignore abort errors - they're expected when session changes mid-fetch
+            if (error?.name === 'AbortError' || error?.name === 'CanceledError') {
+                return;
+            }
             console.error('Failed to fetch settings:', error);
             // Mark error so UI can show connection issue instead of demo data
-            setSettingsError(true);
-            // Keep previous values if we had them, otherwise safe defaults
-            // Don't reset to sandbox - user might be a paying customer with connection issues
+            // Keep previous values - user might be a paying customer with connection issues
+            dispatch({ type: 'ERROR' });
         }
-    };
+    }, [session?.user]);
 
     useEffect(() => {
         // Get initial session
@@ -122,33 +191,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Check subscription whenever session changes
     useEffect(() => {
         if (session) {
+            // Reset profileLoaded before fetching new settings
+            dispatch({ type: 'LOADING' });
             checkSubscription();
         } else {
-            // Reset all state on logout
-            setIsSandbox(true);
-            setIsActive(false);
-            setSubscriptionTier('trial');
-            setDaysRemaining(0);
-            setSettingsError(false);
-            setAssistantName('Donna');
-            setOnboardingCompleted(false);
-            setInitialSyncCompleted(false);
-            setGmailConnected(false);
-            setCalendarConnected(false);
+            // Cancel any in-flight request on logout
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+            // Reset all profile state on logout
+            dispatch({ type: 'RESET' });
         }
-    }, [session]);
+
+        // Cleanup on unmount
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+        };
+    }, [session, checkSubscription]);
 
     /**
      * Sign in with Google using Supabase OAuth
-     * 
+     *
      * This uses the PKCE flow via expo-auth-session for security.
      * The redirect URI must be configured in Supabase dashboard.
      */
-    const signInWithGoogle = async (): Promise<boolean> => {
+    const signInWithGoogle = useCallback(async (): Promise<boolean> => {
         try {
             // Create redirect URI for OAuth callback
             // NOTE: In Expo Go, this generates exp://... which Expo Go can intercept.
-            // For production builds, it uses teeks://...  
+            // For production builds, it uses teeks://...
             // BOTH must be whitelisted in Supabase dashboard -> Authentication -> URL Configuration
             const redirectUri = makeRedirectUri({
                 // Don't specify scheme in dev - let Expo pick the right one
@@ -210,12 +283,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             console.error('Google sign-in error:', error);
             throw error;
         }
-    };
+    }, []);
 
     /**
      * Sign out and clear all auth state
      */
-    const signOut = async () => {
+    const signOut = useCallback(async () => {
         try {
             const { error } = await supabase.auth.signOut();
             if (error) throw error;
@@ -225,34 +298,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             console.error('Sign out error:', error);
             throw error;
         }
+    }, []);
+
+    // Memoize context value to prevent unnecessary re-renders of consumers
+    const value: AuthContextType = {
+        isAuthenticated: !!session,
+        isLoading,
+        session,
+        user,
+        // Spread profile state
+        ...profile,
+        // Actions
+        signInWithGoogle,
+        signOut,
+        refreshProfile: checkSubscription,
     };
 
     return (
-        <AuthContext.Provider
-            value={{
-                isAuthenticated: !!session,
-                isLoading,
-                session,
-                user,
-                // Subscription state
-                isSandbox,
-                isActive,
-                subscriptionTier,
-                daysRemaining,
-                settingsError,
-                // Personalization & Onboarding
-                assistantName,
-                onboardingCompleted,
-                // Integration state
-                initialSyncCompleted,
-                gmailConnected,
-                calendarConnected,
-                // Actions
-                signInWithGoogle,
-                signOut,
-                refreshProfile: checkSubscription
-            }}
-        >
+        <AuthContext.Provider value={value}>
             {children}
         </AuthContext.Provider>
     );

@@ -30,8 +30,9 @@ class Settings:
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     SUPABASE_JWT_SECRET: str = os.getenv("SUPABASE_JWT_SECRET", "")
-    OAUTH_REDIRECT_URI: str = os.getenv(
-        "OAUTH_REDIRECT_URI", "http://localhost:8000/auth/gmail/callback"
+    GMAIL_OAUTH_REDIRECT_URI: str = os.getenv(
+        "GMAIL_OAUTH_REDIRECT_URI",
+        os.getenv("OAUTH_REDIRECT_URI", "http://localhost:8000/auth/gmail/callback")
     )
     
     # Polar Billing

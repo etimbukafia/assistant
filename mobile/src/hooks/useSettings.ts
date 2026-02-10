@@ -10,40 +10,11 @@ import {
     fetchSettings,
     updateSettings,
     UpdateSettingsRequest,
-    UserSettings,
 } from '@/src/services/settings';
-import { useAuth } from '@/src/context/AuthContext';
 
 export const settingsKeys = {
     all: ['settings'] as const,
     detail: () => [...settingsKeys.all] as const,
-};
-
-// Default settings for sandbox mode
-const SANDBOX_SETTINGS: UserSettings = {
-    auto_approve_tasks: false,
-    enable_quick_reply_from_task: true,
-    task_detection_instructions: '',
-    notification_preferences: {
-        push_enabled: true,
-        push_urgent_tasks: true,
-        push_deadlines: true,
-        push_digests: true,
-        push_briefings: true,
-    },
-    digest_preferences: {
-        enabled: true,
-        morning_briefing: { enabled: true, time: '08:00' },
-        end_of_day: { enabled: true, time: '18:00' },
-        weekly_review: { enabled: true, day: 'monday', time: '09:00' },
-    },
-    calendar_preferences: {
-        working_hours_start: '09:00',
-        working_hours_end: '17:00',
-        buffer_minutes: 15,
-        auto_accept_meetings: false,
-    },
-    default_timezone: 'UTC',
 };
 
 /**
@@ -51,20 +22,39 @@ const SANDBOX_SETTINGS: UserSettings = {
  */
 export function useSettings() {
     const queryClient = useQueryClient();
-    const { isSandbox } = useAuth();
 
     const query = useQuery({
         queryKey: settingsKeys.detail(),
         queryFn: fetchSettings,
-        enabled: !isSandbox, // Disable API calls in sandbox mode
     });
 
     const updateMutation = useMutation({
         mutationFn: (updates: UpdateSettingsRequest) => updateSettings(updates),
+        onMutate: async (updates) => {
+            // Cancel any outgoing refetches
+            await queryClient.cancelQueries({ queryKey: settingsKeys.detail() });
+
+            // Snapshot previous value for rollback
+            const previousSettings = queryClient.getQueryData(settingsKeys.detail());
+
+            // Optimistically update cache
+            if (previousSettings) {
+                queryClient.setQueryData(settingsKeys.detail(), {
+                    ...previousSettings,
+                    ...updates,
+                });
+            }
+
+            return { previousSettings };
+        },
         onSuccess: (data) => {
             queryClient.setQueryData(settingsKeys.detail(), data);
         },
-        onError: () => {
+        onError: (_error, _updates, context) => {
+            // Rollback to previous value on error
+            if (context?.previousSettings) {
+                queryClient.setQueryData(settingsKeys.detail(), context.previousSettings);
+            }
             Alert.alert('Error', 'Failed to update settings. Please try again.');
         },
     });
@@ -77,13 +67,12 @@ export function useSettings() {
     };
 
     return {
-        settings: isSandbox ? SANDBOX_SETTINGS : query.data,
-        isLoading: isSandbox ? false : query.isLoading,
-        error: isSandbox ? null : query.error,
+        settings: query.data,
+        isLoading: query.isLoading,
+        error: query.error,
         refetch: query.refetch,
         updateSetting,
         updateSettings: updateMutation.mutate,
         isUpdating: updateMutation.isPending,
-        isSandbox,
     };
 }

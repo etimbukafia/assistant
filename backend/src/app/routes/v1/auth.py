@@ -55,8 +55,8 @@ def gmail_callback(
             "email": email_address
         }
     except Exception as e:
-        # In a real app we might redirect to frontend with error param
-        return {"status": "error", "message": str(e)}
+        from fastapi import HTTPException
+        raise HTTPException(status_code=502, detail=f"Gmail authentication failed: {str(e)}")
 
 
 @router.get("/status")

@@ -79,11 +79,11 @@ export async function loadLastMode(): Promise<'action' | 'reflection'> {
 /**
  * Fetch all chat sessions for the current user.
  */
-export function useChatSessions(options?: { limit?: number; enabled?: boolean }) {
-  const { limit = 20, enabled = true } = options || {};
+export function useChatSessions(options?: { limit?: number; offset?: number; enabled?: boolean }) {
+  const { limit = 20, offset = 0, enabled = true } = options || {};
   return useQuery({
     queryKey: chatKeys.sessions(),
-    queryFn: () => listSessions(limit),
+    queryFn: () => listSessions(limit, offset),
     staleTime: 1000 * 30, // 30 seconds
     enabled,
   });

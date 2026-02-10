@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.infra.database import SessionLocal
-from app.data.models import Message, GmailAccount
+from app.data.models import Message, GmailAccount, WebhookLog
 from app.integrations.gmail import GmailClient
 from app.services.email_filter import EmailFilterService, FilterAction
 from app.security.encryption import encrypt_body
@@ -44,11 +44,23 @@ async def handle_gmail_push(request: Request):
     to fetch changes from. We then use the History API to get actual new
     messages and feed them through the existing processing pipeline.
     """
+    def _log_gmail_webhook(event_type: str, processed: bool, error: str = None, customer_id: str = None):
+        """Log Gmail webhook to audit table."""
+        log_db = SessionLocal()
+        try:
+            log_db.add(WebhookLog(source="gmail", event_type=event_type, processed=processed, error=error, customer_id=customer_id))
+            log_db.commit()
+        except Exception:
+            pass
+        finally:
+            log_db.close()
+
     try:
         body = await request.json()
     except Exception:
         # Must return 200 to avoid Pub/Sub retries on bad payloads
         logger.warning("Gmail webhook: invalid JSON body")
+        _log_gmail_webhook("gmail_push", False, "invalid_json")
         return {"status": "ignored", "reason": "invalid_json"}
 
     # Extract and decode Pub/Sub message data
@@ -57,12 +69,14 @@ async def handle_gmail_push(request: Request):
 
     if not encoded_data:
         logger.warning("Gmail webhook: no data in message")
+        _log_gmail_webhook("gmail_push", False, "no_data")
         return {"status": "ignored", "reason": "no_data"}
 
     try:
         decoded = json.loads(base64.b64decode(encoded_data))
     except Exception:
         logger.warning("Gmail webhook: failed to decode message data")
+        _log_gmail_webhook("gmail_push", False, "decode_failed")
         return {"status": "ignored", "reason": "decode_failed"}
 
     email_address = decoded.get("emailAddress")
@@ -70,6 +84,7 @@ async def handle_gmail_push(request: Request):
 
     if not email_address:
         logger.warning("Gmail webhook: no emailAddress in payload")
+        _log_gmail_webhook("gmail_push", False, "no_email")
         return {"status": "ignored", "reason": "no_email"}
 
     logger.info(f"Gmail webhook: notification for {email_address}, historyId={notification_history_id}")
@@ -206,6 +221,7 @@ async def handle_gmail_push(request: Request):
             f"({len(process_ids)} for AI) for {email_address}"
         )
 
+        _log_gmail_webhook("gmail_push", True, customer_id=email_address)
         return {
             "status": "ok",
             "new_messages": synced_count,
@@ -215,6 +231,7 @@ async def handle_gmail_push(request: Request):
     except Exception as e:
         db.rollback()
         logger.error(f"Gmail webhook processing failed for {email_address}: {e}", exc_info=True)
+        _log_gmail_webhook("gmail_push", False, str(e)[:500], customer_id=email_address)
         # Return 200 anyway to prevent Pub/Sub retry storms during transient errors.
         # The next notification will re-fetch from the same history ID.
         return {"status": "error", "detail": str(e)}

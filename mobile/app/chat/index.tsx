@@ -130,7 +130,8 @@ const EmptyState: React.FC<{ onCreateSession: (type: 'command' | 'reflection') =
 
 export default function ChatSessionsScreen() {
   const router = useRouter();
-  const { data: sessions, isLoading, refetch, isRefetching } = useChatSessions();
+  const { data: sessionsData, isLoading, refetch, isRefetching } = useChatSessions();
+  const sessions = sessionsData?.sessions || [];
   const deleteSession = useDeleteSession();
   const createSession = useCreateSession();
 

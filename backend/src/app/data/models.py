@@ -35,7 +35,7 @@ class Message(Base):
 
     # AI-generated fields
     summary = Column(Text, nullable=True)
-    needs_reply = Column(Boolean, nullable=True)
+    needs_reply = Column(Boolean, nullable=True, index=True)
     extracted_tasks = Column(JSON, nullable=True)
     extracted_dates = Column(JSON, nullable=True)
     extracted_people = Column(JSON, nullable=True)
@@ -184,6 +184,11 @@ class UserSettings(Base):
     assistant_name = Column(String, default="Donna")  # User's chosen name for AI assistant
     onboarding_completed = Column(Boolean, default=False)  # True after first-time setup
 
+    # Credit system (from migration 027)
+    credits_used = Column(Float, default=0.0)  # USD spent on Gemini models this period
+    credits_limit = Column(Float, default=1.0)  # USD limit (1.0 trial, 5.0 pro)
+    credits_period_start = Column(DateTime, nullable=True)  # When current billing period started
+
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -234,6 +239,18 @@ class UserSettings(Base):
 
         return 0
 
+    @property
+    def credits_remaining(self) -> float:
+        """Remaining credits in USD for this billing period"""
+        limit = self.credits_limit if self.credits_limit is not None else 1.0
+        used = self.credits_used if self.credits_used is not None else 0.0
+        return max(0.0, limit - used)
+
+    @property
+    def credits_exhausted(self) -> bool:
+        """Check if user has exhausted their AI credits"""
+        return self.credits_remaining <= 0
+
 
 class Task(Base):
     """Structured tasks extracted from messages with smart reminders"""
@@ -261,7 +278,7 @@ class Task(Base):
     status = Column(String, default="pending_approval", index=True)
     # Status options: pending_approval, approved, dismissed, completed, snoozed, superseded
     approved_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True, index=True)
     dismissed_at = Column(DateTime, nullable=True)
 
     # Reminder Logic
@@ -749,5 +766,33 @@ class Notification(Base):
     push_sent = Column(Boolean, default=False)
     push_sent_at = Column(DateTime, nullable=True)
     push_ticket_id = Column(String, nullable=True)
+    push_error = Column(Text, nullable=True)
 
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class WebhookLog(Base):
+    """Append-only log of incoming webhooks for health monitoring and audit."""
+    __tablename__ = "webhook_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String, nullable=False, index=True)        # "polar" | "gmail"
+    event_type = Column(String, nullable=False, index=True)    # e.g. "subscription.created", "gmail_push"
+    processed = Column(Boolean, default=False)
+    error = Column(Text, nullable=True)
+    customer_id = Column(String, nullable=True)                # Polar customer_id or email address
+    received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class TokenUsage(Base):
+    """Track LLM token usage per user for cost monitoring."""
+    __tablename__ = "token_usage"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    model = Column(String, nullable=False)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    cost_usd = Column(Float, nullable=False, default=0.0)
+    operation = Column(String, nullable=False, index=True)  # email_processing | chat | scheduling | etc.
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

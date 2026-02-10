@@ -97,13 +97,13 @@ export interface TimeSlot {
  * Fetch messages with optional filtering
  */
 export async function fetchMessages(params?: {
-    skip?: number;
     limit?: number;
+    offset?: number;
     needs_reply?: boolean;
 }): Promise<MessagesResponse> {
     const searchParams = new URLSearchParams();
-    if (params?.skip) searchParams.append('skip', params.skip.toString());
     if (params?.limit) searchParams.append('limit', params.limit.toString());
+    if (params?.offset) searchParams.append('offset', params.offset.toString());
     if (params?.needs_reply !== undefined) searchParams.append('needs_reply', params.needs_reply.toString());
 
     const query = searchParams.toString();
@@ -277,6 +277,14 @@ export async function sendSchedulingReply(suggestionId: number, editedReply?: st
  */
 export async function dismissSchedulingSuggestion(suggestionId: number): Promise<{ success: boolean }> {
     const response = await api.post<{ success: boolean }>(`/scheduling/suggestions/${suggestionId}/dismiss`);
+    return response.data;
+}
+
+/**
+ * Get count of emails currently being processed in the background
+ */
+export async function fetchProcessingStatus(): Promise<{ processing_count: number }> {
+    const response = await api.get<{ processing_count: number }>('/messages/processing-status');
     return response.data;
 }
 

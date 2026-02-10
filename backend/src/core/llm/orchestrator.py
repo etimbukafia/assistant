@@ -102,6 +102,17 @@ class LLMOrchestrator:
             self._provider.cleanup()
             self._provider = None
 
+    def get_token_usage(self) -> Dict[str, Any]:
+        """Get accumulated token usage from current provider."""
+        if self._provider is not None:
+            return self._provider.get_token_usage()
+        return {'input_tokens': 0, 'output_tokens': 0, 'model': 'unknown'}
+
+    def reset_token_usage(self) -> None:
+        """Reset token usage counters."""
+        if self._provider is not None:
+            self._provider.reset_token_usage()
+
     def __enter__(self):
         return self
 

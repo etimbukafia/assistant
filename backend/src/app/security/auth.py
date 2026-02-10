@@ -335,6 +335,43 @@ def require_pro_tier(
     return user
 
 
+def require_credits_available(
+    user: AuthenticatedUser = Depends(get_current_user),
+    settings: UserSettings = Depends(get_user_settings),
+) -> AuthenticatedUser:
+    """
+    Require user has credits remaining for AI operations.
+
+    Use on endpoints that consume Gemini tokens.
+    Returns HTTP 402 when credits are exhausted.
+    """
+    from app.services.credits import check_credits_available
+
+    can_proceed, error_details = check_credits_available(settings)
+
+    if not can_proceed:
+        # Determine action based on tier
+        if settings.subscription_tier == "trial":
+            action = "upgrade"
+            message = "You've used all your trial AI credits. Upgrade to Pro for more."
+        else:
+            action = "wait_for_renewal"
+            message = "You've used all your AI credits for this billing period."
+
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "credits_exhausted",
+                "message": message,
+                "action": action,
+                "credits_used": error_details["credits_used"],
+                "credits_limit": error_details["credits_limit"],
+                "tier": settings.subscription_tier,
+            }
+        )
+    return user
+
+
 # =============================================================================
 # RLS Setup
 # =============================================================================

@@ -1,17 +1,60 @@
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 from core.llm import LLMOrchestrator, LLMConfig
+from core.llm.token_tracking import record_token_usage
 
 logger = logging.getLogger(__name__)
 
 
+def _strip_quoted_replies(body: str) -> str:
+    """Strip quoted reply blocks from email body to reduce redundant content."""
+    # Remove "On <date>, <person> wrote:" blocks and everything after
+    pattern = r'\n\s*On .{10,80} wrote:\s*\n'
+    match = re.search(pattern, body)
+    if match:
+        body = body[:match.start()].rstrip()
+
+    # Remove lines starting with ">" (quoted text)
+    lines = body.split('\n')
+    cleaned = []
+    consecutive_quotes = 0
+    for line in lines:
+        if line.strip().startswith('>'):
+            consecutive_quotes += 1
+            if consecutive_quotes <= 2:
+                # Keep first couple of quoted lines for context
+                cleaned.append(line)
+        else:
+            consecutive_quotes = 0
+            cleaned.append(line)
+
+    return '\n'.join(cleaned).strip()
+
+
+def _prepare_body(body: str, max_length: int) -> str:
+    """Strip quoted replies and apply smart truncation (head + tail) if needed."""
+    body = _strip_quoted_replies(body)
+
+    if len(body) <= max_length:
+        return body
+
+    # Smart truncation: keep head and tail where action items often live
+    head_size = int(max_length * 0.7)
+    tail_size = max_length - head_size - 30  # 30 chars for marker
+    truncated = body[:head_size] + "\n\n[... content truncated ...]\n\n" + body[-tail_size:]
+
+    logger.info(f"Email body truncated from {len(body)} to {max_length} chars")
+    return truncated
+
+
 class AIProcessor:
-    MAX_BODY_LENGTH = 3000
-    MAX_SCHEDULING_BODY = 1500
+    MAX_BODY_LENGTH = 12000
+    MAX_SCHEDULING_BODY = 4000
     
     # Placeholder patterns for detection
     PLACEHOLDER_PATTERNS = ["[", "]", "{", "}", "INSERT", "TIME HERE", "NAME HERE", "YOUR", "THEIR"]
@@ -20,10 +63,26 @@ class AIProcessor:
         self,
         prompts_dir: str = "prompts",
         llm_config: Optional[LLMConfig] = None,
+        assistant_name: str = "Donna",
     ):
         self.prompts_dir = Path(prompts_dir)
         self._prompts_cache = {}
         self._orchestrator = LLMOrchestrator(config=llm_config or LLMConfig.for_email())
+        self.assistant_name = assistant_name
+
+    def record_and_reset_tokens(self, db, user_id: str, operation: str) -> None:
+        """Record accumulated token usage to database and reset counters."""
+        usage = self._orchestrator.get_token_usage()
+        if usage['input_tokens'] > 0 or usage['output_tokens'] > 0:
+            record_token_usage(
+                db=db,
+                user_id=user_id,
+                model=usage['model'],
+                input_tokens=usage['input_tokens'],
+                output_tokens=usage['output_tokens'],
+                operation=operation
+            )
+        self._orchestrator.reset_token_usage()
 
     def _has_placeholders(self, text: str) -> bool:
         """Check if text contains template placeholders."""
@@ -173,7 +232,7 @@ class AIProcessor:
             Summary string
         """
         prompt_template = self._load_prompt('summarize')
-        prompt = prompt_template.format(text=text)
+        prompt = prompt_template.format(assistant_name=self.assistant_name, text=text)
 
         try:
             result = self._orchestrator.generate(prompt)
@@ -269,6 +328,7 @@ class AIProcessor:
         prompt_template = self._load_prompt('extract_tasks_enhanced')
         prompts = [
             prompt_template.format(
+                assistant_name=self.assistant_name,
                 sender=msg.get('sender', ''),
                 subject=msg.get('subject', ''),
                 body=msg.get('body', ''),
@@ -294,7 +354,7 @@ class AIProcessor:
             return []
 
         prompt_template = self._load_prompt('summarize')
-        prompts = [prompt_template.format(text=text) for text in texts]
+        prompts = [prompt_template.format(assistant_name=self.assistant_name, text=text) for text in texts]
 
         try:
             results = self._orchestrator.generate_batch(prompts)
@@ -322,10 +382,11 @@ class AIProcessor:
         """
         prompt_template = self._load_prompt('init_thread_state')
         prompt = prompt_template.format(
+            assistant_name=self.assistant_name,
             current_date=datetime.now(timezone.utc).strftime('%Y-%m-%d (%A)'),
             sender=message_data.get('sender', ''),
             subject=message_data.get('subject', ''),
-            body=message_data.get('body', '')[:3000]  # Limit body size
+            body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
         )
 
         try:
@@ -382,10 +443,11 @@ class AIProcessor:
         prompts = []
         for msg in messages_data:
             prompt = prompt_template.format(
+                assistant_name=self.assistant_name,
                 current_date=current_date,
                 sender=msg.get('sender', ''),
                 subject=msg.get('subject', ''),
-                body=msg.get('body', '')[:self.MAX_BODY_LENGTH]
+                body=_prepare_body(msg.get('body', ''), self.MAX_BODY_LENGTH)
             )
             prompts.append(prompt)
         
@@ -470,7 +532,7 @@ class AIProcessor:
             message_count=thread_state.get('message_count', 0),
             sender=message_data.get('sender', ''),
             subject=message_data.get('subject', ''),
-            body=message_data.get('body', '')[:self.MAX_BODY_LENGTH]  # Limit body size
+            body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
         )
 
         try:
@@ -568,10 +630,10 @@ class AIProcessor:
                 message_count=thread_state.get('message_count', 0),
                 sender=message_data.get('sender', ''),
                 subject=message_data.get('subject', ''),
-                body=message_data.get('body', '')[:self.MAX_BODY_LENGTH]
+                body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
             )
             prompts.append(prompt)
-        
+
         try:
             # Single batch API call
             results = self._orchestrator.generate_batch(prompts)

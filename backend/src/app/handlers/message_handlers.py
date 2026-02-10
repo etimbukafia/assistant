@@ -31,6 +31,8 @@ async def enqueue_message_for_processing(event: Dict[str, Any], payload: Dict[st
     3. Triggered immediately after sync (no delay for manual syncs)
 
     The actual processing logic is in app.message_processor.
+
+    Security: user_id is derived from the Message record in DB, not from payload.
     """
     message_id = payload.get("message_id")
 
@@ -40,29 +42,30 @@ async def enqueue_message_for_processing(event: Dict[str, Any], payload: Dict[st
 
     db = SessionLocal()
     try:
-        # Require user_id from payload for RLS context
-        user_id = payload.get("user_id")
-        if not user_id:
-            raise ValueError(f"RLS context missing: no user_id in payload for message {message_id}")
-
-        # Set RLS context
-        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
-
-        # Validate message exists and isn't already processed
+        # First fetch message WITHOUT RLS to get the authoritative user_id
+        # This prevents payload injection attacks where user_id could be spoofed
         message = db.query(Message).filter(Message.id == message_id).first()
 
         if not message:
             logger.error(f"Message {message_id} not found", extra={"correlation_id": event["correlation_id"]})
             return
 
+        # Get user_id from the database record, NOT from payload (security)
+        user_id = message.user_id
+        if not user_id:
+            raise ValueError(f"Message {message_id} has no user_id in database")
+
+        # Now set RLS context with verified user_id
+        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
         if message.processed:
             logger.info(f"Message {message_id} already processed", extra={"correlation_id": event["correlation_id"]})
             return
-        
-        # Enqueue for batch processing
+
+        # Enqueue for batch processing with verified user_id
         enqueue_task(
             task_type="process_email",
-            payload={"message_id": message_id, "user_id": user_id},  # Include user_id in payload instead
+            payload={"message_id": message_id, "user_id": user_id},
             correlation_id=event["correlation_id"],
             db=db
         )
@@ -91,20 +94,27 @@ async def update_contact_stats(event: Dict[str, Any], payload: Dict[str, Any]):
 
     Increments message_count for the sender in ContactContext.
     This powers Layer 3 relationship-based email filtering.
+
+    Security: user_id is derived from the Message record in DB, not from payload.
     """
     message_id = payload.get("message_id")
-    user_id = payload.get("user_id")
 
-    if not message_id or not user_id:
+    if not message_id:
         return
 
     db = SessionLocal()
     try:
-        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
-
+        # Fetch message first to get authoritative user_id (not from payload)
         message = db.query(Message).filter(Message.id == message_id).first()
         if not message:
             return
+
+        # Get user_id from DB record, not payload (security)
+        user_id = message.user_id
+        if not user_id:
+            return
+
+        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
         # Extract sender email
         sender = message.sender or ""
@@ -166,26 +176,29 @@ async def process_attachments(event: Dict[str, Any], payload: Dict[str, Any]):
     """
     Process attachments from received messages.
     Downloads files and extracts insights using DocumentProcessor.
+
+    Security: user_id is derived from the Message record in DB, not from payload.
     """
     message_id = payload.get("message_id")
-    user_id = payload.get("user_id")
 
     if not message_id:
         return
-        
-    # Require user_id for RLS context
-    if not user_id:
-        raise ValueError(f"RLS context missing: no user_id for attachment processing, message {message_id}")
 
     db = SessionLocal()
-    # Set RLS context
-    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
-
     try:
+        # Fetch message first to get authoritative user_id (not from payload)
         message = db.query(Message).filter(Message.id == message_id).first()
 
         if not message or not message.has_attachments:
             return
+
+        # Get user_id from DB record, not payload (security)
+        user_id = message.user_id
+        if not user_id:
+            raise ValueError(f"Message {message_id} has no user_id in database")
+
+        # Now set RLS context with verified user_id
+        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
         attachments_meta = message.attachments or []
         if not attachments_meta:
@@ -245,6 +258,27 @@ async def process_attachments(event: Dict[str, Any], payload: Dict[str, Any]):
         # Always save insights when there are attachments (even if all skipped)
         message.attachment_insights = insights
         db.commit()
+
+        # Notify user about skipped attachments
+        if skipped:
+            try:
+                from app.services.notification import NotificationService
+                svc = NotificationService(db, user_id)
+
+                skipped_names = ", ".join(s["filename"] for s in skipped[:3])
+                suffix = f" and {len(skipped) - 3} more" if len(skipped) > 3 else ""
+
+                svc.create_notification(
+                    title=f"{len(skipped)} attachment(s) couldn't be processed",
+                    body=f"{skipped_names}{suffix}",
+                    category="system",
+                    priority="normal",
+                    target_type="message",
+                    target_id=str(message_id),
+                    send_push=False,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create attachment skip notification: {e}")
 
         logger.info(
             f"Attachment processing complete for message {message_id}: "

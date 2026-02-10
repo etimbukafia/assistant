@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.infra.config import get_settings, Settings
 from app.infra.database import SessionLocal, get_db
-from app.data.models import UserSettings
+from app.data.models import UserSettings, WebhookLog
 from app.services import get_polar_service, PolarService
 from app.security.auth import get_user_settings, get_db_for_user
 
@@ -111,7 +111,11 @@ def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
             )
         except (ValueError, TypeError):
             pass
-    
+
+    # Initialize credits for Pro tier
+    from app.services.credits import initialize_credits_for_pro
+    initialize_credits_for_pro(user)
+
     logger.info(f"Subscription created for user {user.user_email}, tier=pro")
 
 
@@ -133,8 +137,8 @@ def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
         return
 
     user.subscription_status = "active"
-    
-    # Update expiry date
+
+    # Update expiry date and check for credit reset on renewal
     if subscription.get("current_period_end"):
         try:
             user.subscription_expires_at = datetime.fromisoformat(
@@ -142,7 +146,21 @@ def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
             )
         except (ValueError, TypeError):
             pass
-    
+
+    # Reset credits if this is a new billing period
+    if subscription.get("current_period_start"):
+        try:
+            new_period_start = datetime.fromisoformat(
+                subscription["current_period_start"].replace("Z", "+00:00")
+            )
+            # Only reset if this is actually a new period
+            if user.credits_period_start is None or new_period_start > user.credits_period_start:
+                from app.services.credits import reset_credits, PRO_CREDIT_LIMIT
+                reset_credits(user, PRO_CREDIT_LIMIT)
+                logger.info(f"Credits reset for user {user.user_email} on renewal")
+        except (ValueError, TypeError):
+            pass
+
     logger.info(f"Subscription active for user {user.user_email}")
 
 
@@ -223,7 +241,11 @@ def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
     user.subscription_status = "expired"
     user.polar_subscription_id = None
     user.subscription_expires_at = None
-    
+
+    # Set credit limit back to trial (don't reset usage - they keep what they've used)
+    from app.services.credits import TRIAL_CREDIT_LIMIT
+    user.credits_limit = TRIAL_CREDIT_LIMIT
+
     logger.info(f"Subscription revoked for user {user.user_email}")
 
 
@@ -283,25 +305,36 @@ async def handle_polar_webhook(
 
     # If secret not configured, acknowledge receipt but don't process
     if event is None:
+        db.add(WebhookLog(source="polar", event_type="unknown", processed=False, error="webhook_secret_not_configured"))
+        db.commit()
         return {"received": True, "handled": False, "reason": "webhook_secret_not_configured"}
 
-    event_type = event.get("type")
+    event_type = event.get("type", "unknown")
+    customer_id = event.get("data", {}).get("subscription", {}).get("customer_id")
     logger.info(f"Received Polar webhook: {event_type}")
-    
+
     # Route to handler
     handler = EVENT_HANDLERS.get(event_type)
     if not handler:
+        db.add(WebhookLog(source="polar", event_type=event_type, processed=False, error="no_handler", customer_id=customer_id))
+        db.commit()
         logger.debug(f"No handler for event type: {event_type}")
         return {"received": True, "handled": False}
-    
-    # Process event
+
     # Process event
     try:
         handler(event, db)
+        db.add(WebhookLog(source="polar", event_type=event_type, processed=True, customer_id=customer_id))
         db.commit()
         return {"received": True, "handled": True}
     except Exception as e:
         db.rollback()
+        # Log in a fresh transaction since we rolled back
+        try:
+            db.add(WebhookLog(source="polar", event_type=event_type, processed=False, error=str(e)[:500], customer_id=customer_id))
+            db.commit()
+        except Exception:
+            pass
         logger.error(f"Error handling webhook {event_type}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

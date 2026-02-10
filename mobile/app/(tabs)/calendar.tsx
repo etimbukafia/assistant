@@ -10,10 +10,8 @@ import { format, parseISO, isToday } from 'date-fns';
 import { CalendarEvent, CalendarBriefing } from '../../src/services/calendar';
 import { useCalendarEvents, useCalendarMutations } from '../../src/hooks/useCalendar';
 import { useAuth } from '../../src/context/AuthContext';
-import { SyncDataCTA } from '../../src/components/ui/SyncDataCTA';
 import { ConnectIntegrationCTA } from '../../src/components/ui/ConnectIntegrationCTA';
 import { SubscriptionExpiredCTA } from '../../src/components/ui/SubscriptionExpiredCTA';
-import demoData from '../../src/data/demo_state.json';
 
 // Extracted EventCard component for better FlashList performance
 const EventCard = React.memo(({
@@ -168,37 +166,21 @@ const EventCard = React.memo(({
 
 export default function CalendarScreen() {
     const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
-    const { isSandbox, isActive, subscriptionTier, calendarConnected } = useAuth();
+    const { isActive, subscriptionTier, calendarConnected } = useAuth();
 
-    // Fetch events from backend (disabled in sandbox mode)
+    // Fetch events from backend
     const { data: eventsResponse, isLoading, isRefetching, refetch } = useCalendarEvents(
         undefined, // no status filter
-        { enabled: !isSandbox && calendarConnected }
+        { enabled: calendarConnected }
     );
 
     // Calendar mutations
     const { sync, isSyncing, generateFollowUps, isGeneratingFollowUps } = useCalendarMutations();
 
-    // In sandbox mode, use demo data with dynamic dates; otherwise use API response
+    // Use API response
     const events = useMemo(() => {
-        if (isSandbox) {
-            const now = new Date();
-            return ((demoData as any).calendar || []).map((event: any, index: number) => {
-                // Make dates relative to today for realistic demo
-                const startDate = new Date(now);
-                startDate.setHours(10 + index * 2, 0, 0, 0);
-                const endDate = new Date(startDate);
-                endDate.setMinutes(endDate.getMinutes() + 30 + (index * 15));
-                return {
-                    ...event,
-                    start_time: startDate.toISOString(),
-                    end_time: endDate.toISOString(),
-                    status: index === 0 ? 'upcoming' : event.status,
-                };
-            }) as CalendarEvent[];
-        }
         return eventsResponse?.events || [];
-    }, [isSandbox, eventsResponse]);
+    }, [eventsResponse]);
 
     const onRefresh = useCallback(() => {
         refetch();
@@ -245,21 +227,7 @@ export default function CalendarScreen() {
     ), [isSyncing]);
 
     const ListEmpty = useCallback(() => {
-        // State 1: Sandbox mode - show trial CTA
-        if (isSandbox) {
-            return (
-                <View style={styles.emptyContainer}>
-                    <Ionicons name="calendar-outline" size={48} color={Colors.textMuted} />
-                    <DonnaText variant="h2" style={styles.emptyTitle}>Preview Your Calendar</DonnaText>
-                    <DonnaText variant="caption" style={styles.emptyText}>Start your free trial to see your real meetings and get AI briefings.</DonnaText>
-                    <View style={{ marginTop: Spacing.md, width: '100%' }}>
-                        <SyncDataCTA />
-                    </View>
-                </View>
-            );
-        }
-
-        // State 2: Subscription expired - show resubscribe CTA
+        // State 1: Subscription expired - show resubscribe CTA
         if (!isActive) {
             return (
                 <View style={styles.emptyContainer}>
@@ -300,10 +268,9 @@ export default function CalendarScreen() {
                 </TouchableOpacity>
             </View>
         );
-    }, [isSandbox, isActive, subscriptionTier, calendarConnected, isSyncing]);
+    }, [isActive, subscriptionTier, calendarConnected, isSyncing]);
 
-    // Don't show loading in sandbox mode (no API call happening)
-    if (isLoading && !isSandbox) {
+    if (isLoading) {
         return (
             <SafeAreaView style={styles.container}>
                 <StatusBar style="dark" />
