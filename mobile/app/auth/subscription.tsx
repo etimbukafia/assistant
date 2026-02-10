@@ -14,7 +14,6 @@ import * as WebBrowser from 'expo-web-browser';
 import { Colors, Spacing, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
-import { useMutation } from '@tanstack/react-query';
 import { activateTrial, createCheckout } from '../../src/services/billing';
 
 type PlanType = 'trial' | 'pro';
@@ -32,35 +31,36 @@ export default function SubscriptionSelectionScreen() {
         return first || 'there';
     }, [user]);
 
-    const trialMutation = useMutation({
-        mutationFn: () => activateTrial(),
-        onSuccess: async () => {
-            await refreshProfile();
-            router.replace('/auth/setup' as any);
-        },
-        onError: (error: any) => {
-            Alert.alert(
-                'Activation Failed',
-                error.response?.data?.detail || 'Something went wrong. Please try again.'
-            );
-        },
-    });
-
     const handleContinue = async () => {
         setIsProcessing(true);
         try {
             if (selectedPlan === 'trial') {
-                trialMutation.mutate();
+                // Activate trial and wait for completion
+                await activateTrial();
+                await refreshProfile();
+                router.replace('/auth/setup' as any);
             } else {
                 const data = await createCheckout({
                     success_url: 'teeks://auth/setup',
                     cancel_url: 'teeks://auth/subscription',
                 });
                 if (data?.checkout_url) {
-                    await WebBrowser.openBrowserAsync(data.checkout_url);
-                    // After checkout, refresh profile and navigate
-                    await refreshProfile();
-                    router.replace('/auth/setup' as any);
+                    // Open browser for Polar checkout
+                    // openAuthSessionAsync intercepts the redirect URL instead of
+                    // triggering Expo Router navigation, avoiding double navigation
+                    const result = await WebBrowser.openAuthSessionAsync(
+                        data.checkout_url,
+                        'teeks://'  // Prefix to catch redirects
+                    );
+
+                    // Check if checkout completed successfully (not canceled/dismissed)
+                    if (result.type === 'success' && result.url?.includes('auth/setup')) {
+                        // Give webhook a moment to process, then refresh
+                        await new Promise(resolve => setTimeout(resolve, 1500));
+                        await refreshProfile();
+                        router.replace('/auth/setup' as any);
+                    }
+                    // If canceled, dismissed, or redirected to cancel_url, user stays here
                 }
             }
         } catch (error: any) {
@@ -73,7 +73,7 @@ export default function SubscriptionSelectionScreen() {
         }
     };
 
-    const isLoading = isProcessing || trialMutation.isPending;
+    const isLoading = isProcessing;
 
     const ctaText = selectedPlan === 'trial'
         ? 'Try this week with Teeks'

@@ -64,21 +64,23 @@ def activate_trial(
     settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=7)
     settings.subscription_status = "trialing"
 
-    # Set assistant name and mark onboarding complete
+    # Set assistant name if provided (optional during trial activation)
     if request and request.assistant_name:
         settings.assistant_name = request.assistant_name.strip()[:50] or "Donna"
-    settings.onboarding_completed = True
+
+    # NOTE: Don't set onboarding_completed here - that happens in the setup screen
+    # Setting it prematurely causes race conditions with auth flow redirects
 
     # Initialize credits for trial
     from app.services.credits import initialize_credits_for_trial
     initialize_credits_for_trial(settings)
 
     db.commit()
-    
+
     return {
         "status": "activated",
         "trial_ends_at": settings.trial_ends_at.isoformat(),
         "days_remaining": 7,
         "assistant_name": settings.assistant_name,
-        "onboarding_completed": True
+        "onboarding_completed": settings.onboarding_completed  # Return actual value
     }
