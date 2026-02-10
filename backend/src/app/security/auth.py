@@ -124,14 +124,20 @@ def verify_jwt(token: str, jwt_secret: str) -> dict:
     Raises:
         HTTPException: If token is invalid or expired
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     if not jwt_secret:
+        logger.error("AUTH_DEBUG: JWT secret not configured")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Server configuration error: JWT secret not configured"
         )
 
     try:
-        return jwt.decode(
+        logger.info(f"AUTH_DEBUG: Attempting to verify token (first 20 chars): {token[:20]}...")
+        logger.info(f"AUTH_DEBUG: JWT secret configured (first 10 chars): {jwt_secret[:10]}...")
+        result = jwt.decode(
             token,
             jwt_secret,
             algorithms=["HS256"],
@@ -142,13 +148,17 @@ def verify_jwt(token: str, jwt_secret: str) -> dict:
                 "require": ["sub", "email", "exp", "aud"]
             }
         )
+        logger.info(f"AUTH_DEBUG: Token verified successfully for user: {result.get('sub', 'unknown')}")
+        return result
     except ExpiredSignatureError:
+        logger.warning("AUTH_DEBUG: Token expired")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expired. Please refresh your session.",
             headers={"WWW-Authenticate": "Bearer"}
         )
     except InvalidTokenError as e:
+        logger.warning(f"AUTH_DEBUG: Invalid token error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}",
@@ -185,9 +195,13 @@ async def get_current_user(
         def route(user: AuthenticatedUser = Depends(get_current_user)):
             return {"user_id": user.user_id}
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     token = extract_token_from_header(authorization)
 
     if not token:
+        logger.warning(f"AUTH_DEBUG: No token in request. Authorization header: {authorization[:50] if authorization else 'None'}...")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated. Please sign in.",

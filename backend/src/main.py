@@ -62,6 +62,8 @@ app.add_middleware(CloudflareGateMiddleware)
 @app.on_event("startup")
 def startup_event():
     setup_logging(level="INFO", structured=False)
+    from app.infra.config import get_settings
+    print(f"Startup Config: ENV={get_settings().ENV}")
     init_db()
     schedule_cleanup_job_if_needed()
     schedule_chat_cleanup_job_if_needed()

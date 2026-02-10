@@ -148,3 +148,23 @@ def get_ai_health(db: Session = Depends(get_db)):
         }
 
     return result
+
+
+@router.get("/debug/auth-config")
+def debug_auth_config():
+    """
+    Debug endpoint to verify auth configuration.
+    Shows whether required secrets are configured (not the values).
+    """
+    from app.infra.config import get_settings
+    settings = get_settings()
+
+    return {
+        "env": settings.ENV,
+        "supabase_url_configured": bool(settings.SUPABASE_URL),
+        "supabase_url_preview": settings.SUPABASE_URL[:30] + "..." if settings.SUPABASE_URL else None,
+        "supabase_jwt_secret_configured": bool(settings.SUPABASE_JWT_SECRET),
+        "supabase_jwt_secret_length": len(settings.SUPABASE_JWT_SECRET) if settings.SUPABASE_JWT_SECRET else 0,
+        "supabase_jwt_secret_preview": settings.SUPABASE_JWT_SECRET[:10] + "..." if settings.SUPABASE_JWT_SECRET else None,
+        "cloudflare_gate_enabled": bool(settings.CF_ACCESS_CLIENT_ID and settings.CF_ACCESS_CLIENT_SECRET),
+    }
