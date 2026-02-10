@@ -12,10 +12,16 @@ Security:
 - Never trust client-side identity
 - All user identity comes from verified JWT claims
 - RLS policies enforce data isolation at database level
+
+JWT Algorithm Support:
+- HS256: Uses SUPABASE_JWT_SECRET (older Supabase projects)
+- ES256: Uses JWKS public key from Supabase (newer projects)
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from functools import lru_cache
 from typing import Optional
+import logging
 
 from fastapi import Depends, HTTPException, Header, status
 from sqlalchemy import text
@@ -26,6 +32,24 @@ from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 from app.infra.config import get_settings, Settings
 from app.infra.database import get_db
 from app.data.models import UserSettings
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# JWKS Support for ES256 tokens
+# =============================================================================
+
+@lru_cache(maxsize=1)
+def get_jwks_client(supabase_url: str) -> jwt.PyJWKClient:
+    """
+    Get cached JWKS client for Supabase project.
+
+    Supabase exposes JWKS at: {supabase_url}/auth/v1/.well-known/jwks.json
+    """
+    jwks_url = f"{supabase_url}/auth/v1/.well-known/jwks.json"
+    logger.info(f"Initializing JWKS client from: {jwks_url}")
+    return jwt.PyJWKClient(jwks_url, cache_keys=True)
 
 
 # =============================================================================
@@ -115,41 +139,79 @@ def extract_token_from_header(authorization: Optional[str]) -> Optional[str]:
     return None
 
 
-def verify_jwt(token: str, jwt_secret: str) -> dict:
+def get_token_algorithm(token: str) -> str:
+    """Extract algorithm from JWT header without verifying."""
+    try:
+        header = jwt.get_unverified_header(token)
+        return header.get("alg", "HS256")
+    except Exception:
+        return "HS256"
+
+
+def verify_jwt(token: str, jwt_secret: str, supabase_url: str = "") -> dict:
     """
     Verify a Supabase JWT and return decoded claims.
 
-    Pure function: (token, secret) -> claims dict
+    Supports both:
+    - HS256: Uses jwt_secret (older Supabase projects)
+    - ES256: Uses JWKS public key (newer Supabase projects)
 
     Raises:
         HTTPException: If token is invalid or expired
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
-    if not jwt_secret:
-        logger.error("AUTH_DEBUG: JWT secret not configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server configuration error: JWT secret not configured"
-        )
+    alg = get_token_algorithm(token)
+    logger.info(f"AUTH_DEBUG: Token algorithm: {alg}, first 20 chars: {token[:20]}...")
 
     try:
-        logger.info(f"AUTH_DEBUG: Attempting to verify token (first 20 chars): {token[:20]}...")
-        logger.info(f"AUTH_DEBUG: JWT secret configured (first 10 chars): {jwt_secret[:10]}...")
-        result = jwt.decode(
-            token,
-            jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-            options={
-                "verify_exp": True,
-                "verify_aud": True,
-                "require": ["sub", "email", "exp", "aud"]
-            }
-        )
+        if alg == "ES256":
+            # ES256 requires JWKS public key verification
+            if not supabase_url:
+                logger.error("AUTH_DEBUG: ES256 token but SUPABASE_URL not configured")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server configuration error: SUPABASE_URL required for ES256 tokens"
+                )
+
+            jwks_client = get_jwks_client(supabase_url)
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            logger.info(f"AUTH_DEBUG: Got signing key from JWKS, kid: {signing_key.key_id}")
+
+            result = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["ES256"],
+                audience="authenticated",
+                options={
+                    "verify_exp": True,
+                    "verify_aud": True,
+                    "require": ["sub", "email", "exp", "aud"]
+                }
+            )
+        else:
+            # HS256 uses shared secret
+            if not jwt_secret:
+                logger.error("AUTH_DEBUG: HS256 token but JWT secret not configured")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server configuration error: JWT secret not configured"
+                )
+
+            logger.info(f"AUTH_DEBUG: Using HS256 with secret (first 10 chars): {jwt_secret[:10]}...")
+            result = jwt.decode(
+                token,
+                jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+                options={
+                    "verify_exp": True,
+                    "verify_aud": True,
+                    "require": ["sub", "email", "exp", "aud"]
+                }
+            )
+
         logger.info(f"AUTH_DEBUG: Token verified successfully for user: {result.get('sub', 'unknown')}")
         return result
+
     except ExpiredSignatureError:
         logger.warning("AUTH_DEBUG: Token expired")
         raise HTTPException(
@@ -195,9 +257,6 @@ async def get_current_user(
         def route(user: AuthenticatedUser = Depends(get_current_user)):
             return {"user_id": user.user_id}
     """
-    import logging
-    logger = logging.getLogger(__name__)
-
     token = extract_token_from_header(authorization)
 
     if not token:
@@ -208,7 +267,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    payload = verify_jwt(token, settings.SUPABASE_JWT_SECRET)
+    payload = verify_jwt(token, settings.SUPABASE_JWT_SECRET, settings.SUPABASE_URL)
 
     try:
         return AuthenticatedUser.from_jwt_payload(payload)
@@ -235,7 +294,7 @@ async def get_current_user_optional(
         return None
 
     try:
-        payload = verify_jwt(token, settings.SUPABASE_JWT_SECRET)
+        payload = verify_jwt(token, settings.SUPABASE_JWT_SECRET, settings.SUPABASE_URL)
         return AuthenticatedUser.from_jwt_payload(payload)
     except (HTTPException, ValueError):
         return None
