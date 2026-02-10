@@ -137,8 +137,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
             // Dynamically import api to avoid circular dependencies if any
             const { api } = require('../services/api');
-            const response = await api.get('/settings', {
-                signal: abortControllerRef.current.signal
+            // Fetch latest settings from backend
+            const response = await api.get('/settings/', {
+                signal: abortControllerRef.current.signal,
+                validateStatus: (status: number) => status < 500 // Don't throw on 404
             });
             const settings = response.data;
 
