@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { OnboardingScreen } from '../src/components/onboarding/OnboardingScreen';
@@ -7,7 +7,6 @@ import { useAuth } from '../src/context/AuthContext';
 export default function LoginScreen() {
     const router = useRouter();
     const {
-        signInWithGoogle,
         signOut,
         isAuthenticated,
         profileLoaded,
@@ -16,7 +15,6 @@ export default function LoginScreen() {
         accountConflict,
         accountConflictMessage
     } = useAuth();
-    const [isLoading, setIsLoading] = useState(false);
 
     // Handle account conflict - show error and sign out
     useEffect(() => {
@@ -57,23 +55,9 @@ export default function LoginScreen() {
         }
     }, [isAuthenticated, profileLoaded, onboardingCompleted, isActive, accountConflict]);
 
-    const handleGoogleAuth = async () => {
-        try {
-            setIsLoading(true);
-            const success = await signInWithGoogle();
-            if (success) {
-                // Navigation will be handled by useEffect above after auth state updates
-            }
-        } catch (error: any) {
-            console.error('Google auth error:', error);
-            Alert.alert(
-                'Sign In Failed',
-                error?.message || 'Unable to sign in with Google. Please try again.',
-                [{ text: 'OK' }]
-            );
-        } finally {
-            setIsLoading(false);
-        }
+    const handleGoogleAuth = () => {
+        // Navigate to pre-frame screen which explains permissions before OAuth
+        router.push('/auth/connect-google' as any);
     };
 
     const handleLogin = () => {
@@ -84,7 +68,7 @@ export default function LoginScreen() {
         <OnboardingScreen
             onGoogleAuth={handleGoogleAuth}
             onLogin={handleLogin}
-            isLoading={isLoading}
+            isLoading={false}
         />
     );
 }

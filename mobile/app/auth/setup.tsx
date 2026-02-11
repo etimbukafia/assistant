@@ -25,30 +25,17 @@ export default function SetupScreen() {
     const queryClient = useQueryClient();
     const { refreshProfile } = useAuth();
     const [assistantName, setAssistantName] = useState('Donna');
-    const [selectedIntegrations, setSelectedIntegrations] = useState<string[]>([]);
-
-    const toggleIntegration = (id: string) => {
-        if (selectedIntegrations.includes(id)) {
-            setSelectedIntegrations(prev => prev.filter(i => i !== id));
-        } else {
-            setSelectedIntegrations(prev => [...prev, id]);
-        }
-    };
 
     const setupMutation = useMutation({
         mutationFn: async () => {
             await completeOnboarding({ assistant_name: assistantName.trim() || 'Donna' });
 
-            // Only trigger email sync if user chose to connect Gmail
-            if (selectedIntegrations.includes('gmail')) {
-                triggerInitialSync().catch(console.error);
-            }
+            // User granted all scopes during OAuth - enable full product
+            // Trigger initial email sync
+            triggerInitialSync().catch(console.error);
 
-            // Configure calendar if user chose to connect it
-            if (selectedIntegrations.includes('calendar')) {
-                // Set primary calendar as the default - uses same Google OAuth as Gmail
-                updateCalendarSettings({ calendar_ids: ['primary'] }).catch(console.error);
-            }
+            // Set primary calendar as default
+            updateCalendarSettings({ calendar_ids: ['primary'] }).catch(console.error);
         },
         onSuccess: () => {
             // Navigate immediately - don't block on profile refresh
@@ -111,69 +98,37 @@ export default function SetupScreen() {
                     </DonnaText>
                 </View>
 
-                {/* Integrations Section */}
+                {/* What's Next Section */}
                 <View style={styles.section}>
-                    <DonnaText style={styles.sectionTitle}>Connect Your Accounts</DonnaText>
+                    <DonnaText style={styles.sectionTitle}>What happens next</DonnaText>
 
                     {/* Gmail */}
-                    <TouchableOpacity
-                        style={[
-                            styles.integrationCard,
-                            selectedIntegrations.includes('gmail') && styles.integrationSelected,
-                        ]}
-                        onPress={() => toggleIntegration('gmail')}
-                        activeOpacity={0.8}
-                    >
+                    <View style={styles.integrationCard}>
                         <View style={[styles.integrationIcon, { backgroundColor: '#EA433510' }]}>
                             <Ionicons name="mail" size={24} color="#EA4335" />
                         </View>
                         <View style={styles.integrationContent}>
-                            <View style={styles.integrationTitleRow}>
-                                <DonnaText style={styles.integrationName}>Gmail</DonnaText>
-                                <View style={styles.optionalBadge}>
-                                    <DonnaText style={styles.optionalBadgeText}>Recommended</DonnaText>
-                                </View>
-                            </View>
+                            <DonnaText style={styles.integrationName}>Email Sync</DonnaText>
                             <DonnaText style={styles.integrationDesc}>
-                                Teeks will sync your recent emails to get started
+                                Your recent emails will be synced to extract tasks and context
                             </DonnaText>
                         </View>
-                        <Ionicons
-                            name={selectedIntegrations.includes('gmail') ? 'checkmark-circle' : 'ellipse-outline'}
-                            size={24}
-                            color={selectedIntegrations.includes('gmail') ? Colors.accentPrimary : Colors.textMuted}
-                        />
-                    </TouchableOpacity>
+                        <Ionicons name="checkmark-circle" size={24} color={Colors.success} />
+                    </View>
 
-                    {/* Calendar (Optional) */}
-                    <TouchableOpacity
-                        style={[
-                            styles.integrationCard,
-                            selectedIntegrations.includes('calendar') && styles.integrationSelected,
-                        ]}
-                        onPress={() => toggleIntegration('calendar')}
-                        activeOpacity={0.8}
-                    >
+                    {/* Calendar */}
+                    <View style={styles.integrationCard}>
                         <View style={[styles.integrationIcon, { backgroundColor: '#4285F410' }]}>
                             <Ionicons name="calendar" size={24} color="#4285F4" />
                         </View>
                         <View style={styles.integrationContent}>
-                            <View style={styles.integrationTitleRow}>
-                                <DonnaText style={styles.integrationName}>Google Calendar</DonnaText>
-                                <View style={styles.optionalBadge}>
-                                    <DonnaText style={styles.optionalBadgeText}>Optional</DonnaText>
-                                </View>
-                            </View>
+                            <DonnaText style={styles.integrationName}>Calendar Access</DonnaText>
                             <DonnaText style={styles.integrationDesc}>
-                                Smart scheduling suggestions and daily briefings
+                                Smart scheduling suggestions based on your availability
                             </DonnaText>
                         </View>
-                        <Ionicons
-                            name={selectedIntegrations.includes('calendar') ? 'checkmark-circle' : 'ellipse-outline'}
-                            size={24}
-                            color={selectedIntegrations.includes('calendar') ? Colors.accentPrimary : Colors.textMuted}
-                        />
-                    </TouchableOpacity>
+                        <Ionicons name="checkmark-circle" size={24} color={Colors.success} />
+                    </View>
                 </View>
 
                 {/* Info Note */}

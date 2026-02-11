@@ -109,6 +109,7 @@ export default function RootLayout() {
                 <Stack.Screen name="index" />
                 <Stack.Screen name="login" />
                 <Stack.Screen name="auth/welcome" />
+                <Stack.Screen name="auth/connect-google" />
                 <Stack.Screen name="auth/subscription" />
                 <Stack.Screen name="auth/setup" />
                 <Stack.Screen name="auth/google/choose-account" options={{ presentation: 'modal' }} />

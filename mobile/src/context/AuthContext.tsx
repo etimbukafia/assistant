@@ -231,9 +231,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                                     provider_refresh_token: providerRefreshToken || undefined,
                                     email: session.user.email,
                                 });
-                                console.log('Gmail connected successfully (web)');
-                            } catch (gmailError) {
-                                console.error('Failed to connect Gmail (web):', gmailError);
+                                console.log('Google connected successfully (web)');
+                            } catch (gmailError: any) {
+                                console.error('Failed to connect Google (web):', gmailError);
+
+                                // Check if this is a missing scopes error
+                                const errorDetail = gmailError?.response?.data?.detail;
+                                if (errorDetail?.error === 'missing_scopes') {
+                                    // Sign out to clean up partial state
+                                    await supabase.auth.signOut();
+                                    // Show alert with missing permissions
+                                    const { Alert } = require('react-native');
+                                    Alert.alert(
+                                        'Permissions Required',
+                                        `To use Teeks, please grant all requested permissions:\n\n• ${errorDetail.missing_permissions?.join('\n• ')}`,
+                                        [{ text: 'OK' }]
+                                    );
+                                }
                             }
                         }
 
@@ -363,11 +377,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                                         provider_refresh_token: providerRefreshToken || undefined,
                                         email: email,
                                     });
-                                    console.log('Gmail connected successfully');
+                                    console.log('Google connected successfully');
                                 }
-                            } catch (gmailError) {
-                                console.error('Failed to connect Gmail:', gmailError);
-                                // Don't fail the login if Gmail connection fails
+                            } catch (gmailError: any) {
+                                console.error('Failed to connect Google:', gmailError);
+
+                                // Check if this is a missing scopes error - must fail login
+                                const errorDetail = gmailError?.response?.data?.detail;
+                                if (errorDetail?.error === 'missing_scopes') {
+                                    // Sign out to clean up partial state
+                                    await supabase.auth.signOut();
+                                    // Re-throw so UI can handle it
+                                    throw gmailError;
+                                }
+                                // For other errors, log but allow login to proceed
                             }
                         }
 
