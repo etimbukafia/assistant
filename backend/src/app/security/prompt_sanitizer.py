@@ -104,7 +104,7 @@ def sanitize_for_prompt(text: str) -> str:
 
     # Escape role markers by adding zero-width spaces
     # This breaks the pattern without changing visible content
-    sanitized = re.sub(r"(?i)(SYSTEM|USER|ASSISTANT|HUMAN|AI)\s*:", r"\1\u200B:", sanitized)
+    sanitized = re.sub(r"(?i)(SYSTEM|USER|ASSISTANT|HUMAN|AI)\s*:", r"\1" + "\u200B:", sanitized)
 
     # Escape markdown delimiters
     sanitized = sanitized.replace("---", "\\-\\-\\-")
