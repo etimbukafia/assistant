@@ -139,7 +139,7 @@ export default function DashboardScreen() {
           <ActivityIndicator size="small" color={Colors.accentPrimary} />
           <View style={styles.syncContent}>
             <DonnaText style={styles.syncTitle}>Syncing your world...</DonnaText>
-            <DonnaText style={styles.syncDesc}>Processing emails from the last 24 hours.</DonnaText>
+            <DonnaText style={styles.syncDesc}>Processing today's emails.</DonnaText>
           </View>
         </View>
       )}

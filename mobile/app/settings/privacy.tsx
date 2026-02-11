@@ -133,7 +133,11 @@ export default function PrivacyScreen() {
         mutationFn: deleteAllData,
         onSuccess: async () => {
             setShowDeleteModal(false);
-            await signOut();
+            try {
+                await signOut();
+            } catch (error) {
+                console.error('Sign out after delete error:', error);
+            }
             Alert.alert(
                 'Account Deleted',
                 'All your data has been permanently deleted.',

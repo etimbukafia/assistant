@@ -87,7 +87,7 @@ export function usePushNotificationSetup() {
     const { isAuthenticated } = useAuth();
     const router = useRouter();
     const queryClient = useQueryClient();
-    const responseListener = useRef<Notifications.Subscription>();
+    const responseListener = useRef<Notifications.Subscription | null>(null);
 
     useEffect(() => {
         if (!isAuthenticated) return;
@@ -125,7 +125,7 @@ export function usePushNotificationSetup() {
 
         return () => {
             if (responseListener.current) {
-                Notifications.removeNotificationSubscription(responseListener.current);
+                responseListener.current.remove();
             }
         };
     }, [isAuthenticated]);

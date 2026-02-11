@@ -74,7 +74,11 @@ export default function ProfileScreen() {
                 { text: 'Cancel', style: 'cancel' },
                 {
                     text: 'Sign Out', style: 'destructive', onPress: async () => {
-                        await signOut();
+                        try {
+                            await signOut();
+                        } catch (error) {
+                            console.error('Sign out error:', error);
+                        }
                         router.replace('/login');
                     }
                 },
