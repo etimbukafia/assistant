@@ -18,6 +18,7 @@ import { useAuth } from '../../src/context/AuthContext';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeOnboarding } from '../../src/services/onboarding';
 import { triggerInitialSync } from '../../src/services/billing';
+import { updateCalendarSettings } from '../../src/services/calendar';
 
 export default function SetupScreen() {
     const router = useRouter();
@@ -41,6 +42,12 @@ export default function SetupScreen() {
             // Only trigger email sync if user chose to connect Gmail
             if (selectedIntegrations.includes('gmail')) {
                 triggerInitialSync().catch(console.error);
+            }
+
+            // Configure calendar if user chose to connect it
+            if (selectedIntegrations.includes('calendar')) {
+                // Set primary calendar as the default - uses same Google OAuth as Gmail
+                updateCalendarSettings({ calendar_ids: ['primary'] }).catch(console.error);
             }
         },
         onSuccess: () => {

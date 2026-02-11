@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     StyleSheet,
     View,
@@ -20,6 +20,8 @@ import Animated, {
     useAnimatedStyle,
     withSpring,
     withTiming,
+    Easing,
+    runOnJS,
 } from 'react-native-reanimated';
 import { useChat, DisplayMessage } from '../../context/ChatContext';
 
@@ -75,14 +77,20 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
     } = useChat();
 
     const [inputText, setInputText] = useState('');
+    const [isMounted, setIsMounted] = useState(false);
 
     // Animation values - NOW SLIDES FROM TOP
     const translateY = useSharedValue(-OVERLAY_HEIGHT - 50); // Start above screen
     const opacity = useSharedValue(0);
     const shadowOpacity = useSharedValue(0);
 
+    const handleExitComplete = useCallback(() => {
+        setIsMounted(false);
+    }, []);
+
     useEffect(() => {
         if (isVisible) {
+            setIsMounted(true);
             // Slide DOWN from top with premium spring physics
             translateY.value = withSpring(0, {
                 damping: 18,      // Higher = less bouncy, more controlled
@@ -92,10 +100,15 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
             opacity.value = withTiming(1, { duration: 250 });
             shadowOpacity.value = withTiming(0.25, { duration: 400 });
         } else {
-            // Slide UP to hide
-            translateY.value = withSpring(-OVERLAY_HEIGHT - 50, {
-                damping: 22,
-                stiffness: 120,
+            // Slide UP to hide - use withTiming to prevent spring overshoot
+            // which caused the bottom of the overlay to peek at screen top
+            translateY.value = withTiming(-OVERLAY_HEIGHT - 50, {
+                duration: 280,
+                easing: Easing.in(Easing.cubic),
+            }, (finished) => {
+                if (finished) {
+                    runOnJS(handleExitComplete)();
+                }
             });
             opacity.value = withTiming(0, { duration: 200 });
             shadowOpacity.value = withTiming(0, { duration: 200 });
@@ -142,7 +155,7 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
         ? "How can I help you execute?"
         : "What's on your mind?";
 
-    if (!isVisible && translateY.value <= -OVERLAY_HEIGHT) {
+    if (!isVisible && !isMounted) {
         return null; // Don't render when fully hidden
     }
 
@@ -281,6 +294,7 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         zIndex: 1000,
+        overflow: 'hidden',
         pointerEvents: 'box-none',
     },
     monolithContainer: {

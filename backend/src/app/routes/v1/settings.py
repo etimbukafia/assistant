@@ -26,6 +26,9 @@ def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettin
         trial_ends_at=settings.trial_ends_at,
         is_active=settings.is_active,
         days_remaining=settings.days_remaining,
+        # Personalization & Onboarding
+        assistant_name=settings.assistant_name or "Donna",
+        onboarding_completed=settings.onboarding_completed or False,
         # Integration status (computed)
         initial_sync_completed=gmail_account.initial_sync_completed if gmail_account else False,
         gmail_connected=gmail_account is not None,

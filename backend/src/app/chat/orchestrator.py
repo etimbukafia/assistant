@@ -152,8 +152,13 @@ class ChatOrchestrator:
             tool_results = []
             for tool_call in tool_calls:
                 tool_name = tool_call.get("function", {}).get("name")
-                tool_args = json.loads(tool_call.get("function", {}).get("arguments", "{}"))
-                
+                args_str = tool_call.get("function", {}).get("arguments", "{}")
+                try:
+                    tool_args = json.loads(args_str)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse tool arguments: {e}, raw: {args_str[:100]}")
+                    tool_args = {}
+
                 result = self.tool_registry.execute_tool(tool_name, tool_args)
                 tool_results.append(result)
                 

@@ -110,7 +110,7 @@ export default function DashboardScreen() {
     <View style={styles.header}>
       {/* Title Row with Actions */}
       <View style={styles.titleRow}>
-        <DonnaText variant="h1" style={styles.greeting}>Good Afternoon, J.</DonnaText>
+        <DonnaText variant="h1" style={styles.greeting}>Inbox</DonnaText>
         <View style={styles.headerActions}>
           {/* Focus Mode Toggle */}
           <TouchableOpacity
