@@ -335,16 +335,39 @@ def get_user_settings(
     Get or create UserSettings for the authenticated user.
 
     Auto-creates profile on first authenticated request.
+
+    Raises HTTP 409 if email is already associated with a different user_id
+    (e.g., user deleted Supabase account and re-registered).
     """
+    # First, check if settings exist for this user_id
     settings = db.query(UserSettings).filter(
         UserSettings.user_id == user.user_id
     ).first()
 
-    if not settings:
-        settings = create_user_settings(user.user_id, user.email)
-        db.add(settings)
-        db.commit()
-        db.refresh(settings)
+    if settings:
+        return settings
+
+    # No settings for this user_id - check if email already exists
+    existing_by_email = db.query(UserSettings).filter(
+        UserSettings.user_email == user.email
+    ).first()
+
+    if existing_by_email:
+        # Email exists but with different user_id - data conflict
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "account_conflict",
+                "message": "An account with this email already exists. Please contact support to recover your account.",
+                "support_email": "support@teeks.ai"
+            }
+        )
+
+    # Safe to create new settings
+    settings = create_user_settings(user.user_id, user.email)
+    db.add(settings)
+    db.commit()
+    db.refresh(settings)
 
     return settings
 

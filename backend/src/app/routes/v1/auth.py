@@ -1,10 +1,99 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from app.infra.config import get_settings, Settings
-from app.security.auth import get_db_for_user, get_settings as get_app_settings # Watch out for name collision with config.get_settings
+from app.security.auth import get_db_for_user, get_current_user, AuthenticatedUser
+from app.security.auth import get_settings as get_app_settings # Watch out for name collision with config.get_settings
 from app.integrations.gmail import GmailClient, get_gmail_client
+from app.security.encryption import encrypt_token
+from app.data.models import GmailAccount
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+class ConnectGmailRequest(BaseModel):
+    """Request to connect Gmail using Supabase provider token"""
+    provider_token: str
+    provider_refresh_token: Optional[str] = None
+    email: str
+
+
+@router.post("/gmail/connect")
+def connect_gmail_with_provider_token(
+    request: ConnectGmailRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user)
+):
+    """
+    Connect Gmail using the Google provider token from Supabase OAuth.
+
+    This endpoint receives the provider_token that Supabase returns after
+    Google OAuth and stores it for Gmail API access.
+
+    Note: Supabase must be configured with Gmail scopes for this to work.
+    """
+    try:
+        # Verify the token works by making a test API call
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+
+        creds = Credentials(token=request.provider_token)
+        service = build('gmail', 'v1', credentials=creds)
+
+        # Verify we can access the Gmail API
+        profile = service.users().getProfile(userId='me').execute()
+        verified_email = profile.get('emailAddress')
+
+        if verified_email.lower() != request.email.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Email mismatch: token is for {verified_email}, not {request.email}"
+            )
+
+        # Encrypt tokens for storage
+        encrypted_access_token = encrypt_token(request.provider_token)
+        encrypted_refresh_token = encrypt_token(request.provider_refresh_token) if request.provider_refresh_token else None
+
+        # Token expiry - Google tokens typically last 1 hour
+        token_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        # Check if account exists
+        account = db.query(GmailAccount).filter(
+            GmailAccount.user_id == user.user_id
+        ).first()
+
+        if account:
+            # Update existing
+            account.email = verified_email
+            account.access_token = encrypted_access_token
+            account.refresh_token = encrypted_refresh_token
+            account.token_expiry = token_expiry
+            account.updated_at = datetime.now(timezone.utc)
+        else:
+            # Create new
+            account = GmailAccount(
+                email=verified_email,
+                user_id=user.user_id,
+                access_token=encrypted_access_token,
+                refresh_token=encrypted_refresh_token,
+                token_expiry=token_expiry
+            )
+            db.add(account)
+
+        db.commit()
+
+        return {
+            "status": "success",
+            "message": "Gmail connected successfully",
+            "email": verified_email
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to connect Gmail: {str(e)}")
 
 @router.get("/gmail")
 def start_gmail_auth(gmail_client: GmailClient = Depends(get_gmail_client)):

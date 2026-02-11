@@ -5,6 +5,7 @@
  * - Real-time message sending (sync/async support)
  * - Pending action approval/rejection
  * - Typing indicators
+ * - Session history drawer
  *
  * Uses real API via chat service and hooks.
  */
@@ -18,18 +19,23 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Modal,
+  Animated,
+  Dimensions,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { format } from 'date-fns';
+import { format, isToday, isYesterday } from 'date-fns';
 
 import { Colors, Spacing, Radius } from '@/src/theme/Theme';
 import { DonnaText } from '@/src/components/ui/DonnaText';
 import {
   useChatSession,
+  useChatSessions,
   useApproveAction,
   useRejectAction,
   useAddMessageToCache,
@@ -37,11 +43,15 @@ import {
   chatKeys,
 } from '@/src/hooks/useChat';
 import {
+  ChatSession,
   ChatMessage,
   PendingAction,
   sendMessageWithPolling,
 } from '@/src/services/chat';
 import { useQueryClient } from '@tanstack/react-query';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const DRAWER_WIDTH = SCREEN_WIDTH * 0.8;
 
 // =============================================================================
 // Types
@@ -165,6 +175,158 @@ const TypingIndicator: React.FC = () => (
 );
 
 // =============================================================================
+// Session Drawer Item
+// =============================================================================
+
+interface SessionDrawerItemProps {
+  session: ChatSession;
+  isActive: boolean;
+  onPress: () => void;
+}
+
+const SessionDrawerItem: React.FC<SessionDrawerItemProps> = ({
+  session,
+  isActive,
+  onPress,
+}) => {
+  const isReflection = session.session_type === 'reflection';
+  const accentColor = isReflection ? Colors.success : Colors.accentSecondary;
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    if (isToday(date)) return format(date, 'h:mm a');
+    if (isYesterday(date)) return 'Yesterday';
+    return format(date, 'MMM d');
+  };
+
+  return (
+    <TouchableOpacity
+      style={[styles.drawerItem, isActive && styles.drawerItemActive]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <View style={[styles.drawerItemIcon, { backgroundColor: `${accentColor}15` }]}>
+        <Ionicons
+          name={isReflection ? 'leaf' : 'flash'}
+          size={16}
+          color={accentColor}
+        />
+      </View>
+      <View style={styles.drawerItemContent}>
+        <DonnaText style={styles.drawerItemTitle} numberOfLines={1}>
+          {session.title || (isReflection ? 'Reflection' : 'Work Chat')}
+        </DonnaText>
+        <View style={styles.drawerItemMeta}>
+          <DonnaText style={styles.drawerItemType}>
+            {isReflection ? 'Reflection' : 'Action'}
+          </DonnaText>
+          {isReflection && (
+            <>
+              <View style={styles.drawerItemDot} />
+              <Ionicons name="hourglass-outline" size={10} color={Colors.textMuted} />
+            </>
+          )}
+        </View>
+      </View>
+      <DonnaText style={styles.drawerItemDate}>{formatDate(session.last_activity_at)}</DonnaText>
+    </TouchableOpacity>
+  );
+};
+
+// =============================================================================
+// Session Drawer Component
+// =============================================================================
+
+interface SessionDrawerProps {
+  visible: boolean;
+  onClose: () => void;
+  sessions: ChatSession[];
+  currentSessionId: string;
+  onSelectSession: (sessionId: string) => void;
+}
+
+const SessionDrawer: React.FC<SessionDrawerProps> = ({
+  visible,
+  onClose,
+  sessions,
+  currentSessionId,
+  onSelectSession,
+}) => {
+  const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(slideAnim, {
+          toValue: -DRAWER_WIDTH,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(fadeAnim, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [visible, slideAnim, fadeAnim]);
+
+  if (!visible) return null;
+
+  return (
+    <Modal transparent visible={visible} onRequestClose={onClose}>
+      <View style={styles.drawerContainer}>
+        <Pressable style={styles.drawerOverlay} onPress={onClose}>
+          <Animated.View style={[styles.drawerOverlayBg, { opacity: fadeAnim }]} />
+        </Pressable>
+        <Animated.View
+          style={[styles.drawer, { transform: [{ translateX: slideAnim }] }]}
+        >
+          <SafeAreaView style={styles.drawerSafe} edges={['top', 'left']}>
+            <View style={styles.drawerHeader}>
+              <DonnaText style={styles.drawerTitle}>Sessions</DonnaText>
+              <TouchableOpacity onPress={onClose} style={styles.drawerCloseBtn}>
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <FlashList
+              data={sessions}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <SessionDrawerItem
+                  session={item}
+                  isActive={item.id === currentSessionId}
+                  onPress={() => {
+                    onSelectSession(item.id);
+                    onClose();
+                  }}
+                />
+              )}
+              estimatedItemSize={60}
+              contentContainerStyle={styles.drawerList}
+            />
+          </SafeAreaView>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+};
+
+// =============================================================================
 // Main Screen
 // =============================================================================
 
@@ -179,18 +341,51 @@ export default function ChatSessionScreen() {
   const [localMessages, setLocalMessages] = useState<DisplayMessage[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+
+  // Refs for race condition protection
+  const currentSessionRef = useRef<string | null>(sessionId || null);
+  const pollingCleanupRef = useRef<(() => void) | null>(null);
+
+  // Update session ref when sessionId changes
+  useEffect(() => {
+    currentSessionRef.current = sessionId || null;
+    // Cleanup polling from previous session
+    if (pollingCleanupRef.current) {
+      pollingCleanupRef.current();
+      pollingCleanupRef.current = null;
+    }
+  }, [sessionId]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingCleanupRef.current) {
+        pollingCleanupRef.current();
+      }
+    };
+  }, []);
 
   // Queries
   const { data: sessionData, isLoading } = useChatSession(sessionId || null);
+  const { data: sessionsData } = useChatSessions({});
   const approveAction = useApproveAction(sessionId || '');
   const rejectAction = useRejectAction(sessionId || '');
+
+  const allSessions = sessionsData?.sessions || [];
 
   // Sync server messages to local state
   useEffect(() => {
     if (sessionData?.messages) {
-      setLocalMessages(
-        sessionData.messages.map((m) => ({ ...m, status: 'complete' as const }))
-      );
+      // Filter out system messages and ensure role type compatibility
+      const displayMessages = sessionData.messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({
+          ...m,
+          role: m.role as 'user' | 'assistant',
+          status: 'complete' as const,
+        }));
+      setLocalMessages(displayMessages);
     }
   }, [sessionData?.messages]);
 
@@ -209,6 +404,9 @@ export default function ChatSessionScreen() {
 
     setInputText('');
     setIsSending(true);
+
+    // Store session ID for race condition check
+    const targetSessionId = sessionId;
 
     // Add user message optimistically
     const userMessage: DisplayMessage = {
@@ -232,9 +430,24 @@ export default function ChatSessionScreen() {
     setLocalMessages((prev) => [...prev, placeholderMessage]);
     setIsTyping(true);
 
+    // Cleanup previous polling
+    if (pollingCleanupRef.current) {
+      pollingCleanupRef.current();
+      pollingCleanupRef.current = null;
+    }
+
+    // Track mount state for cleanup
+    let isMounted = true;
+
     // Send with polling support
-    await sendMessageWithPolling(sessionId, text, {
+    const cleanup = await sendMessageWithPolling(targetSessionId, text, {
       onComplete: (response, pendingActions) => {
+        // Race condition check: only update if still on same session
+        if (!isMounted || currentSessionRef.current !== targetSessionId) {
+          console.log('Ignoring response for different session');
+          return;
+        }
+
         setLocalMessages((prev) =>
           prev.map((m) =>
             m.id === placeholderId
@@ -243,11 +456,15 @@ export default function ChatSessionScreen() {
           )
         );
         // Invalidate to get updated pending actions
-        queryClient.invalidateQueries({ queryKey: chatKeys.session(sessionId) });
+        queryClient.invalidateQueries({ queryKey: chatKeys.session(targetSessionId) });
         setIsTyping(false);
         setIsSending(false);
       },
       onError: (error) => {
+        if (!isMounted || currentSessionRef.current !== targetSessionId) {
+          return;
+        }
+
         setLocalMessages((prev) =>
           prev.map((m) =>
             m.id === placeholderId
@@ -264,6 +481,10 @@ export default function ChatSessionScreen() {
         setIsSending(false);
       },
       onProcessing: (jobId, messageId) => {
+        if (!isMounted || currentSessionRef.current !== targetSessionId) {
+          return;
+        }
+
         setLocalMessages((prev) =>
           prev.map((m) =>
             m.id === placeholderId
@@ -273,6 +494,12 @@ export default function ChatSessionScreen() {
         );
       },
     });
+
+    // Store cleanup function
+    pollingCleanupRef.current = () => {
+      isMounted = false;
+      cleanup();
+    };
   }, [inputText, sessionId, isSending, queryClient]);
 
   // Handle action approval
@@ -311,6 +538,16 @@ export default function ChatSessionScreen() {
   const session = sessionData?.session;
   const isReflection = session?.session_type === 'reflection';
 
+  // Handle session switch from drawer
+  const handleSelectSession = useCallback(
+    (newSessionId: string) => {
+      if (newSessionId !== sessionId) {
+        router.replace(`/chat/${newSessionId}`);
+      }
+    },
+    [sessionId, router]
+  );
+
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -325,13 +562,29 @@ export default function ChatSessionScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
+      {/* Session Drawer */}
+      <SessionDrawer
+        visible={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        sessions={allSessions}
+        currentSessionId={sessionId || ''}
+        onSelectSession={handleSelectSession}
+      />
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <DonnaText style={styles.headerTitle}>Donna</DonnaText>
+        <TouchableOpacity
+          style={styles.headerCenter}
+          onPress={() => setIsDrawerOpen(true)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.headerTitleRow}>
+            <DonnaText style={styles.headerTitle}>Donna</DonnaText>
+            <Ionicons name="chevron-down" size={16} color={Colors.textMuted} />
+          </View>
           <View style={styles.headerSubtitleRow}>
             <Ionicons
               name={isReflection ? 'leaf' : 'flash'}
@@ -341,10 +594,20 @@ export default function ChatSessionScreen() {
             <DonnaText style={styles.headerSubtitle}>
               {isReflection ? 'Reflection Mode' : 'Action Mode'}
             </DonnaText>
+            {isReflection && (
+              <>
+                <View style={styles.headerDot} />
+                <Ionicons name="hourglass-outline" size={11} color={Colors.textMuted} />
+                <DonnaText style={styles.ephemeralText}>Temporary</DonnaText>
+              </>
+            )}
           </View>
-        </View>
-        <TouchableOpacity style={styles.menuButton}>
-          <Ionicons name="ellipsis-horizontal" size={24} color={Colors.textPrimary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.menuButton}
+          onPress={() => setIsDrawerOpen(true)}
+        >
+          <Ionicons name="menu-outline" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
       </View>
 
@@ -431,6 +694,11 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
   },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
@@ -443,6 +711,17 @@ const styles = StyleSheet.create({
   },
   headerSubtitle: {
     fontSize: 12,
+    color: Colors.textMuted,
+  },
+  headerDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: Colors.textMuted,
+    marginHorizontal: 2,
+  },
+  ephemeralText: {
+    fontSize: 11,
     color: Colors.textMuted,
   },
   menuButton: {
@@ -630,5 +909,100 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Colors.border,
+  },
+  // Drawer styles
+  drawerContainer: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  drawerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  drawerOverlayBg: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  drawer: {
+    width: DRAWER_WIDTH,
+    backgroundColor: Colors.bgBase,
+    height: '100%',
+    shadowColor: '#000',
+    shadowOffset: { width: 2, height: 0 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  drawerSafe: {
+    flex: 1,
+  },
+  drawerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    backgroundColor: Colors.bgElevated,
+  },
+  drawerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  drawerCloseBtn: {
+    padding: Spacing.xs,
+  },
+  drawerList: {
+    paddingVertical: Spacing.sm,
+  },
+  drawerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    gap: Spacing.sm,
+  },
+  drawerItemActive: {
+    backgroundColor: `${Colors.accentSecondary}10`,
+  },
+  drawerItemIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  drawerItemContent: {
+    flex: 1,
+  },
+  drawerItemTitle: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: Colors.textPrimary,
+  },
+  drawerItemMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  drawerItemType: {
+    fontSize: 11,
+    color: Colors.textMuted,
+  },
+  drawerItemDot: {
+    width: 2,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: Colors.textMuted,
+  },
+  drawerItemDate: {
+    fontSize: 11,
+    color: Colors.textMuted,
   },
 });

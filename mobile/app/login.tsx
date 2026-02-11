@@ -6,14 +6,44 @@ import { useAuth } from '../src/context/AuthContext';
 
 export default function LoginScreen() {
     const router = useRouter();
-    const { signInWithGoogle, isAuthenticated, profileLoaded, onboardingCompleted, isActive } = useAuth();
+    const {
+        signInWithGoogle,
+        signOut,
+        isAuthenticated,
+        profileLoaded,
+        onboardingCompleted,
+        isActive,
+        accountConflict,
+        accountConflictMessage
+    } = useAuth();
     const [isLoading, setIsLoading] = useState(false);
+
+    // Handle account conflict - show error and sign out
+    useEffect(() => {
+        if (isAuthenticated && profileLoaded && accountConflict) {
+            Alert.alert(
+                'Account Issue',
+                accountConflictMessage || 'An account with this email already exists with a different login. Please contact support@teeks.ai to recover your account.',
+                [
+                    {
+                        text: 'OK',
+                        onPress: async () => {
+                            // Sign out so they can try a different account or contact support
+                            await signOut();
+                        }
+                    }
+                ],
+                { cancelable: false }
+            );
+        }
+    }, [isAuthenticated, profileLoaded, accountConflict, accountConflictMessage, signOut]);
 
     // Redirect authenticated users to appropriate screen
     // Wait for profileLoaded to prevent race condition where we navigate
     // before settings are fetched (would always go to subscription)
     useEffect(() => {
-        if (isAuthenticated && profileLoaded) {
+        // Don't navigate if there's an account conflict
+        if (isAuthenticated && profileLoaded && !accountConflict) {
             if (onboardingCompleted) {
                 // Returning user - go to main app
                 router.replace('/(tabs)' as any);
@@ -25,7 +55,7 @@ export default function LoginScreen() {
                 router.replace('/auth/subscription' as any);
             }
         }
-    }, [isAuthenticated, profileLoaded, onboardingCompleted, isActive]);
+    }, [isAuthenticated, profileLoaded, onboardingCompleted, isActive, accountConflict]);
 
     const handleGoogleAuth = async () => {
         try {

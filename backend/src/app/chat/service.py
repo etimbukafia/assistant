@@ -597,8 +597,10 @@ class ChatService:
         user_msg = self.add_message(session_id, "user", content)
 
         # Auto-generate title from first message if not set
-        if not session.title and session.session_type == "command":
-            session.title = content[:50] + ("..." if len(content) > 50 else "")
+        if not session.title:
+            # Clean up the content for title: remove newlines, extra spaces
+            clean_content = " ".join(content.split())
+            session.title = clean_content[:50] + ("..." if len(clean_content) > 50 else "")
             self.db.commit()
 
         # REFLECTION MODE: Always synchronous

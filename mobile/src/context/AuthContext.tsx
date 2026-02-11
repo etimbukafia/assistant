@@ -28,6 +28,8 @@ WebBrowser.maybeCompleteAuthSession();
 interface ProfileState {
     profileLoaded: boolean;
     settingsError: boolean;
+    accountConflict: boolean; // True if email exists with different user_id
+    accountConflictMessage: string | null;
     // Subscription
     isActive: boolean;
     subscriptionTier: string;
@@ -45,6 +47,7 @@ type ProfileAction =
     | { type: 'LOADING' }
     | { type: 'LOADED'; payload: Partial<ProfileState> }
     | { type: 'ERROR' }
+    | { type: 'CONFLICT'; message: string }
     | { type: 'RESET' };
 
 interface AuthContextType {
@@ -58,6 +61,9 @@ interface AuthContextType {
     subscriptionTier: string;
     daysRemaining: number;
     settingsError: boolean;
+    // Account conflict state
+    accountConflict: boolean;
+    accountConflictMessage: string | null;
     // Personalization & Onboarding
     assistantName: string;
     onboardingCompleted: boolean;
@@ -78,6 +84,8 @@ interface AuthContextType {
 const initialProfileState: ProfileState = {
     profileLoaded: false,
     settingsError: false,
+    accountConflict: false,
+    accountConflictMessage: null,
     isActive: false,
     subscriptionTier: 'trial',
     daysRemaining: 0,
@@ -91,16 +99,26 @@ const initialProfileState: ProfileState = {
 function profileReducer(state: ProfileState, action: ProfileAction): ProfileState {
     switch (action.type) {
         case 'LOADING':
-            return { ...state, profileLoaded: false };
+            return { ...state, profileLoaded: false, accountConflict: false, accountConflictMessage: null };
         case 'LOADED':
             return {
                 ...state,
                 ...action.payload,
                 profileLoaded: true,
                 settingsError: false,
+                accountConflict: false,
+                accountConflictMessage: null,
             };
         case 'ERROR':
             return { ...state, profileLoaded: true, settingsError: true };
+        case 'CONFLICT':
+            return {
+                ...state,
+                profileLoaded: true,
+                settingsError: false,
+                accountConflict: true,
+                accountConflictMessage: action.message,
+            };
         case 'RESET':
             return initialProfileState;
         default:
@@ -143,6 +161,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 signal: abortControllerRef.current.signal,
                 validateStatus: (status: number) => status < 500 // Don't throw on 404
             });
+
+            // Check for 409 Conflict (account exists with different user_id)
+            if (response.status === 409) {
+                const errorData = response.data;
+                const message = errorData?.detail?.message ||
+                    'An account with this email already exists. Please contact support.';
+                dispatch({ type: 'CONFLICT', message });
+                return;
+            }
+
             const settings = response.data;
 
             // Single dispatch updates all profile state at once (reduces re-renders)
@@ -186,10 +214,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setUser(session?.user ?? null);
                 setIsLoading(false);
 
-                // On web/PWA: clean access tokens from URL hash after OAuth redirect
+                // On web/PWA: handle OAuth redirect
                 if (_event === 'SIGNED_IN' && Platform.OS === 'web' && typeof window !== 'undefined') {
-                    if (window.location.hash && window.location.hash.includes('access_token')) {
-                        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                    // Check for provider token in URL hash (from Google OAuth)
+                    if (window.location.hash) {
+                        const hashParams = new URLSearchParams(window.location.hash.substring(1));
+                        const providerToken = hashParams.get('provider_token');
+                        const providerRefreshToken = hashParams.get('provider_refresh_token');
+
+                        // Connect Gmail if we have a provider token
+                        if (providerToken && session?.user?.email) {
+                            try {
+                                const { connectGmail } = require('../services/gmail');
+                                await connectGmail({
+                                    provider_token: providerToken,
+                                    provider_refresh_token: providerRefreshToken || undefined,
+                                    email: session.user.email,
+                                });
+                                console.log('Gmail connected successfully (web)');
+                            } catch (gmailError) {
+                                console.error('Failed to connect Gmail (web):', gmailError);
+                            }
+                        }
+
+                        // Clean access tokens from URL hash
+                        if (window.location.hash.includes('access_token')) {
+                            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                        }
                     }
                 }
             }
@@ -238,6 +289,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     provider: 'google',
                     options: {
                         redirectTo: window.location.origin,
+                        scopes: 'email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
                         queryParams: {
                             access_type: 'offline',
                             prompt: 'consent',
@@ -261,6 +313,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 options: {
                     redirectTo: redirectUri,
                     skipBrowserRedirect: true,
+                    scopes: 'email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
                     queryParams: {
                         access_type: 'offline',
                         prompt: 'consent',
@@ -286,6 +339,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
                     const accessToken = params.get('access_token');
                     const refreshToken = params.get('refresh_token');
+                    const providerToken = params.get('provider_token');
+                    const providerRefreshToken = params.get('provider_refresh_token');
 
                     if (accessToken) {
                         const { error: sessionError } = await supabase.auth.setSession({
@@ -294,6 +349,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         });
 
                         if (sessionError) throw sessionError;
+
+                        // Connect Gmail if we have a provider token
+                        if (providerToken) {
+                            try {
+                                const { connectGmail } = require('../services/gmail');
+                                // Get email from the session
+                                const { data: { session: newSession } } = await supabase.auth.getSession();
+                                const email = newSession?.user?.email;
+                                if (email) {
+                                    await connectGmail({
+                                        provider_token: providerToken,
+                                        provider_refresh_token: providerRefreshToken || undefined,
+                                        email: email,
+                                    });
+                                    console.log('Gmail connected successfully');
+                                }
+                            } catch (gmailError) {
+                                console.error('Failed to connect Gmail:', gmailError);
+                                // Don't fail the login if Gmail connection fails
+                            }
+                        }
+
                         return true;
                     }
                 }

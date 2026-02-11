@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+/**
+ * OmniChat Overlay
+ *
+ * Quick chat widget that slides from top.
+ * Uses TanStack Query for session data (unified state management).
+ */
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     StyleSheet,
     View,
@@ -6,7 +13,6 @@ import {
     TouchableOpacity,
     KeyboardAvoidingView,
     Platform,
-    Dimensions,
     Pressable,
     ScrollView,
     ActivityIndicator,
@@ -24,6 +30,13 @@ import Animated, {
     runOnJS,
 } from 'react-native-reanimated';
 import { useChat, DisplayMessage } from '../../context/ChatContext';
+import {
+    useChatSession,
+    useCreateSession,
+    chatKeys,
+} from '../../hooks/useChat';
+import { sendMessageWithPolling, SessionType } from '../../services/chat';
+import { useQueryClient } from '@tanstack/react-query';
 
 const OVERLAY_HEIGHT = 420;
 
@@ -68,19 +81,62 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
 }) => {
     const {
         chatMode,
-        setChatMode,
-        messages,
-        isTyping,
-        sendMessage,
-        startNewSession,
-        currentSession,
+        switchModeAndClearSession,
+        currentSessionId,
+        setCurrentSessionId,
     } = useChat();
 
+    const queryClient = useQueryClient();
+
+    // TanStack Query hooks
+    const { data: sessionData } = useChatSession(currentSessionId);
+    const createSession = useCreateSession();
+
+    // Local state for optimistic updates
+    const [localMessages, setLocalMessages] = useState<DisplayMessage[]>([]);
     const [inputText, setInputText] = useState('');
     const [isMounted, setIsMounted] = useState(false);
+    const [isTyping, setIsTyping] = useState(false);
+    const [isSending, setIsSending] = useState(false);
 
-    // Animation values - NOW SLIDES FROM TOP
-    const translateY = useSharedValue(-OVERLAY_HEIGHT - 50); // Start above screen
+    // Track current session for race condition prevention
+    const currentSessionRef = useRef<string | null>(null);
+    const pollingCleanupRef = useRef<(() => void) | null>(null);
+
+    // Sync server messages to local state
+    useEffect(() => {
+        if (sessionData?.messages) {
+            // Filter out system messages and ensure role type compatibility
+            const displayMessages = sessionData.messages
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((m) => ({
+                    ...m,
+                    role: m.role as 'user' | 'assistant',
+                    status: 'complete' as const,
+                }));
+            setLocalMessages(displayMessages);
+        } else if (!currentSessionId) {
+            setLocalMessages([]);
+        }
+    }, [sessionData?.messages, currentSessionId]);
+
+    // Update session ref for race condition checks
+    useEffect(() => {
+        currentSessionRef.current = currentSessionId;
+    }, [currentSessionId]);
+
+    // Cleanup polling on unmount or session change
+    useEffect(() => {
+        return () => {
+            if (pollingCleanupRef.current) {
+                pollingCleanupRef.current();
+                pollingCleanupRef.current = null;
+            }
+        };
+    }, [currentSessionId]);
+
+    // Animation values - slides from top
+    const translateY = useSharedValue(-OVERLAY_HEIGHT - 50);
     const opacity = useSharedValue(0);
     const shadowOpacity = useSharedValue(0);
 
@@ -91,17 +147,14 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
     useEffect(() => {
         if (isVisible) {
             setIsMounted(true);
-            // Slide DOWN from top with premium spring physics
             translateY.value = withSpring(0, {
-                damping: 18,      // Higher = less bouncy, more controlled
-                stiffness: 90,   // Lower = slower, heavier feel
-                mass: 1.2,       // Heavier mass = weightier motion
+                damping: 18,
+                stiffness: 90,
+                mass: 1.2,
             });
             opacity.value = withTiming(1, { duration: 250 });
             shadowOpacity.value = withTiming(0.25, { duration: 400 });
         } else {
-            // Slide UP to hide - use withTiming to prevent spring overshoot
-            // which caused the bottom of the overlay to peek at screen top
             translateY.value = withTiming(-OVERLAY_HEIGHT - 50, {
                 duration: 280,
                 easing: Easing.in(Easing.cubic),
@@ -123,30 +176,134 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
         opacity: opacity.value,
     }));
 
-    // Dynamic shadow that intensifies as overlay descends
     const shadowStyle = useAnimatedStyle(() => ({
         opacity: shadowOpacity.value,
     }));
 
-    // Mode Toggle Logic
+    // Mode Toggle - clears session for proper isolation
     const toggleMode = () => {
         const newMode = chatMode === 'action' ? 'reflection' : 'action';
-        setChatMode(newMode);
+        switchModeAndClearSession(newMode);
     };
 
     // Handle send message
     const handleSend = async () => {
         const text = inputText.trim();
-        if (!text) return;
+        if (!text || isSending) return;
 
         setInputText('');
+        setIsSending(true);
 
-        // Create session if needed
-        if (!currentSession) {
-            await startNewSession(chatMode);
+        // Get or create session
+        let sessionId = currentSessionId;
+        if (!sessionId) {
+            try {
+                const sessionType: SessionType = chatMode === 'reflection' ? 'reflection' : 'command';
+                const newSession = await createSession.mutateAsync(sessionType);
+                sessionId = newSession.id;
+                setCurrentSessionId(sessionId);
+            } catch (error) {
+                console.error('Failed to create session:', error);
+                setIsSending(false);
+                return;
+            }
         }
 
-        await sendMessage(text);
+        // Store session ID for race condition check
+        const targetSessionId = sessionId;
+
+        // Add user message optimistically
+        const userMessage: DisplayMessage = {
+            id: Date.now(),
+            role: 'user',
+            content: text,
+            created_at: new Date().toISOString(),
+            status: 'complete',
+        };
+        setLocalMessages((prev) => [...prev, userMessage]);
+
+        // Add placeholder for assistant response
+        const placeholderId = Date.now() + 1;
+        const placeholderMessage: DisplayMessage = {
+            id: placeholderId,
+            role: 'assistant',
+            content: '',
+            created_at: new Date().toISOString(),
+            status: 'sending',
+        };
+        setLocalMessages((prev) => [...prev, placeholderMessage]);
+        setIsTyping(true);
+
+        // Cleanup previous polling
+        if (pollingCleanupRef.current) {
+            pollingCleanupRef.current();
+            pollingCleanupRef.current = null;
+        }
+
+        // Track mount state for cleanup
+        let isMountedLocal = true;
+
+        // Send with polling support
+        const cleanup = await sendMessageWithPolling(targetSessionId, text, {
+            onComplete: (response, pendingActions) => {
+                // Race condition check: only update if still on same session
+                if (!isMountedLocal || currentSessionRef.current !== targetSessionId) {
+                    console.log('Ignoring response for different session');
+                    return;
+                }
+
+                setLocalMessages((prev) =>
+                    prev.map((m) =>
+                        m.id === placeholderId
+                            ? { ...m, content: response, status: 'complete' as const }
+                            : m
+                    )
+                );
+                // Invalidate to sync pending actions
+                queryClient.invalidateQueries({ queryKey: chatKeys.session(targetSessionId) });
+                setIsTyping(false);
+                setIsSending(false);
+            },
+            onError: (error) => {
+                if (!isMountedLocal || currentSessionRef.current !== targetSessionId) {
+                    return;
+                }
+
+                setLocalMessages((prev) =>
+                    prev.map((m) =>
+                        m.id === placeholderId
+                            ? {
+                                ...m,
+                                content: 'Sorry, I encountered an error. Please try again.',
+                                status: 'error' as const,
+                                error,
+                            }
+                            : m
+                    )
+                );
+                setIsTyping(false);
+                setIsSending(false);
+            },
+            onProcessing: (jobId, messageId) => {
+                if (!isMountedLocal || currentSessionRef.current !== targetSessionId) {
+                    return;
+                }
+
+                setLocalMessages((prev) =>
+                    prev.map((m) =>
+                        m.id === placeholderId
+                            ? { ...m, id: messageId, status: 'processing' as const, jobId }
+                            : m
+                    )
+                );
+            },
+        });
+
+        // Store cleanup
+        pollingCleanupRef.current = () => {
+            isMountedLocal = false;
+            cleanup();
+        };
     };
 
     const isAction = chatMode === 'action';
@@ -156,7 +313,7 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
         : "What's on your mind?";
 
     if (!isVisible && !isMounted) {
-        return null; // Don't render when fully hidden
+        return null;
     }
 
     return (
@@ -166,7 +323,7 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
                 <Pressable style={styles.backdropTouch} onPress={onClose} />
             </Animated.View>
 
-            {/* The Shadow Layer - sits BELOW the overlay */}
+            {/* Shadow Layer */}
             <Animated.View style={[styles.shadowLayer, shadowStyle]} pointerEvents="none" />
 
             {/* The Monolith - slides from TOP */}
@@ -178,7 +335,7 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
                 <Animated.View style={[styles.monolithContainer, animatedOverlayStyle]}>
                     <BlurView intensity={95} tint="light" style={styles.blurView}>
 
-                        {/* Pull Handle at top */}
+                        {/* Pull Handle */}
                         <View style={styles.pullHandle}>
                             <View style={styles.handleBar} />
                         </View>
@@ -209,7 +366,7 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
 
                         {/* Chat Content Area */}
                         <View style={styles.contentArea}>
-                            {messages.length === 0 ? (
+                            {localMessages.length === 0 ? (
                                 <DonnaText style={styles.placeholderMessage}>
                                     {isAction
                                         ? "I'm ready to help you clear your inbox, schedule meetings, or organize tasks."
@@ -221,7 +378,7 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
                                     contentContainerStyle={styles.messagesContent}
                                     showsVerticalScrollIndicator={false}
                                 >
-                                    {messages.map((msg) => (
+                                    {localMessages.map((msg) => (
                                         <MessageBubble key={msg.id} message={msg} accentColor={accentColor} />
                                     ))}
                                     {isTyping && (
@@ -244,17 +401,21 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
                                 onChangeText={setInputText}
                                 multiline
                                 maxLength={500}
-                                editable={!isTyping}
+                                editable={!isSending}
                             />
                             <TouchableOpacity
                                 style={[
                                     styles.sendButton,
-                                    { backgroundColor: inputText.trim() && !isTyping ? accentColor : Colors.border }
+                                    { backgroundColor: inputText.trim() && !isSending ? accentColor : Colors.border }
                                 ]}
-                                disabled={!inputText.trim() || isTyping}
+                                disabled={!inputText.trim() || isSending}
                                 onPress={handleSend}
                             >
-                                <Ionicons name="arrow-up" size={20} color="#FFF" />
+                                {isSending ? (
+                                    <ActivityIndicator size="small" color="#FFF" />
+                                ) : (
+                                    <Ionicons name="arrow-up" size={20} color="#FFF" />
+                                )}
                             </TouchableOpacity>
                         </View>
 
@@ -283,14 +444,14 @@ const styles = StyleSheet.create({
         backgroundColor: 'transparent',
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 15 },
-        shadowOpacity: 1, // Controlled by animated opacity
+        shadowOpacity: 1,
         shadowRadius: 30,
         elevation: 15,
         zIndex: 999,
     },
     container: {
         position: 'absolute',
-        top: 0, // Anchor to TOP
+        top: 0,
         left: 0,
         right: 0,
         zIndex: 1000,
@@ -299,11 +460,10 @@ const styles = StyleSheet.create({
     },
     monolithContainer: {
         marginHorizontal: Spacing.md,
-        marginTop: 60, // Below status bar
+        marginTop: 60,
         borderRadius: Radius.xl,
         overflow: 'hidden',
         height: OVERLAY_HEIGHT,
-        // Drop shadow on the overlay itself
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 8 },
         shadowOpacity: 0.2,

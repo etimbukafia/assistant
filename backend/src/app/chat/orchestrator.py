@@ -21,8 +21,8 @@ from app.security.security_logger import log_injection_attempt
 
 logger = logging.getLogger(__name__)
 
-# Prompts directory
-PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+# Prompts directory (backend/prompts/)
+PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
 
 def _load_prompt(name: str) -> str:
