@@ -85,7 +85,7 @@ export const InlineTaskItem: React.FC<InlineTaskItemProps> = ({
                     isPendingApproval && styles.pendingCheckbox,
                 ]}>
                     {isCompleted && <Ionicons name="checkmark" size={14} color="#FFF" />}
-                    {isPendingApproval && <Ionicons name="sparkles" size={12} color={Colors.accentSecondary} />}
+                    {isPendingApproval && <Ionicons name="ellipse-outline" size={12} color={Colors.accentSecondary} />}
                 </View>
 
                 <View style={styles.textContainer}>

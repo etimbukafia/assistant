@@ -15,6 +15,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../utils/supabase';
+import { Platform } from 'react-native';
 import type { Session, User } from '@supabase/supabase-js';
 
 // Required for OAuth redirect handling
@@ -184,6 +185,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setSession(session);
                 setUser(session?.user ?? null);
                 setIsLoading(false);
+
+                // On web/PWA: clean access tokens from URL hash after OAuth redirect
+                if (_event === 'SIGNED_IN' && Platform.OS === 'web' && typeof window !== 'undefined') {
+                    if (window.location.hash && window.location.hash.includes('access_token')) {
+                        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                    }
+                }
             }
         );
 
@@ -221,28 +229,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      */
     const signInWithGoogle = useCallback(async (): Promise<boolean> => {
         try {
-            // Create redirect URI for OAuth callback
-            // NOTE: In Expo Go, this generates exp://... which Expo Go can intercept.
-            // For production builds, it uses teeks://...
-            // BOTH must be whitelisted in Supabase dashboard -> Authentication -> URL Configuration
+            if (Platform.OS === 'web') {
+                // Web/PWA: Use full-page redirect instead of popup.
+                // After Google OAuth, Supabase redirects back to the app URL
+                // with tokens in the hash. detectSessionInUrl (enabled for web
+                // in supabase.ts) auto-extracts them and triggers onAuthStateChange.
+                const { data, error } = await supabase.auth.signInWithOAuth({
+                    provider: 'google',
+                    options: {
+                        redirectTo: window.location.origin,
+                        queryParams: {
+                            access_type: 'offline',
+                            prompt: 'consent',
+                        },
+                    },
+                });
+
+                if (error) throw error;
+                // signInWithOAuth on web will redirect the page automatically
+                return true;
+            }
+
+            // Native: Use expo-auth-session popup flow
             const redirectUri = makeRedirectUri({
-                // Don't specify scheme in dev - let Expo pick the right one
-                // scheme: 'teeks',  // Uncomment for production build
                 path: 'auth/callback',
             });
-            console.log('=== IMPORTANT: Add this redirect URI to Supabase Dashboard ===');
             console.log('Redirect URI:', redirectUri);
-            console.log('============================================================');
 
-            // Initiate OAuth flow
             const { data, error } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
                     redirectTo: redirectUri,
-                    skipBrowserRedirect: true, // We'll handle the redirect manually
+                    skipBrowserRedirect: true,
                     queryParams: {
-                        access_type: 'offline', // Request refresh token
-                        prompt: 'consent', // Always show consent screen
+                        access_type: 'offline',
+                        prompt: 'consent',
                     },
                 },
             });
@@ -250,19 +271,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (error) throw error;
 
             if (data?.url) {
-                // Open browser for OAuth
                 const result = await WebBrowser.openAuthSessionAsync(
                     data.url,
                     redirectUri
                 );
 
-                // User cancelled the auth flow
                 if (result.type === 'cancel' || result.type === 'dismiss') {
                     return false;
                 }
 
                 if (result.type === 'success' && result.url) {
-                    // Extract tokens from URL and set session
                     const url = new URL(result.url);
                     const params = new URLSearchParams(url.hash.substring(1));
 

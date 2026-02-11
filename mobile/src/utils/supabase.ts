@@ -86,7 +86,10 @@ if (isSupabaseConfigured) {
             storage: SecureStoreAdapter,
             autoRefreshToken: true,
             persistSession: true,
-            detectSessionInUrl: false,
+            // On web/PWA, Supabase must detect the OAuth tokens in the URL hash
+            // and clean them up. On native, this must be false to avoid conflicts
+            // with Expo deep linking (tokens are handled by expo-auth-session).
+            detectSessionInUrl: Platform.OS === 'web',
         },
     });
 } else {

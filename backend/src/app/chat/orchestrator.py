@@ -82,6 +82,22 @@ class ChatOrchestrator:
         Returns:
             Dict with 'response', 'pending_actions', 'state_updates'
         """
+        try:
+            return await self._process_message_internal(session, user_message)
+        except Exception as e:
+            logger.error(f"Unexpected error in process_message: {e}", exc_info=True)
+            return {
+                "response": "I apologize, but I encountered an unexpected error. Please try again.",
+                "pending_actions": [],
+                "state": {}
+            }
+
+    async def _process_message_internal(
+        self,
+        session: ChatSession,
+        user_message: str
+    ) -> Dict[str, Any]:
+        """Internal message processing with full error context."""
         # Security: Check for injection patterns in user message
         injection_patterns = detect_injection_patterns(user_message)
         if injection_patterns:

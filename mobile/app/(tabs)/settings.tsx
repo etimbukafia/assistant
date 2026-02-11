@@ -5,53 +5,46 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius } from '@/src/theme/Theme';
 import { DonnaText } from '@/src/components/ui/DonnaText';
+import { SettingRow } from '@/src/components/ui/SettingRow';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '@/src/context/AuthContext';
 
-interface SettingRowProps {
-    icon: string;
-    iconColor?: string;
-    title: string;
-    subtitle?: string;
-    onPress?: () => void;
-    showArrow?: boolean;
-    rightElement?: React.ReactNode;
-    destructive?: boolean;
-}
-
-const SettingRow: React.FC<SettingRowProps> = ({
-    icon,
-    iconColor = Colors.textSecondary,
-    title,
-    subtitle,
-    onPress,
-    showArrow = true,
-    rightElement,
-    destructive,
-}) => (
-    <TouchableOpacity style={styles.settingRow} onPress={onPress} disabled={!onPress}>
-        <View style={[styles.iconContainer, { backgroundColor: iconColor + '15' }]}>
-            <Ionicons name={icon as any} size={20} color={iconColor} />
-        </View>
-        <View style={styles.settingTextContainer}>
-            <DonnaText style={[styles.settingTitle, destructive && { color: Colors.error }]}>
-                {title}
-            </DonnaText>
-            {subtitle && <DonnaText style={styles.settingSubtitle}>{subtitle}</DonnaText>}
-        </View>
-        {rightElement}
-        {showArrow && !rightElement && (
-            <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
-        )}
-    </TouchableOpacity>
-);
-
 export default function SettingsHubScreen() {
     const router = useRouter();
-    const { user, subscriptionTier } = useAuth();
+    const { user, signOut, subscriptionTier, isActive, daysRemaining } = useAuth();
 
     const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name;
     const initial = displayName?.[0]?.toUpperCase() || 'J';
+
+    const getSubscriptionSubtitle = () => {
+        if (subscriptionTier === 'pro' && isActive) {
+            return 'Active subscription';
+        }
+        if (daysRemaining > 0) {
+            return `${daysRemaining} days left in trial`;
+        }
+        return 'Trial expired';
+    };
+
+    const handleLogout = async () => {
+        Alert.alert(
+            'Sign Out',
+            'Are you sure you want to sign out?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Sign Out', style: 'destructive', onPress: async () => {
+                        try {
+                            await signOut();
+                        } catch (error) {
+                            console.error('Sign out error:', error);
+                        }
+                        router.replace('/login');
+                    }
+                },
+            ]
+        );
+    };
 
     return (
         <SafeAreaView style={styles.container}>
@@ -77,7 +70,24 @@ export default function SettingsHubScreen() {
                     <Ionicons name="chevron-forward" size={20} color={Colors.textMuted} />
                 </TouchableOpacity>
 
-                {/* Main Settings Sections */}
+                {/* Subscription Banner */}
+                <TouchableOpacity
+                    style={styles.subscriptionBanner}
+                    onPress={() => router.push('/settings/subscription' as any)}
+                >
+                    <View style={styles.subscriptionIcon}>
+                        <Ionicons name="diamond" size={20} color={Colors.accentSecondary} />
+                    </View>
+                    <View style={styles.subscriptionInfo}>
+                        <DonnaText style={styles.subscriptionTitle}>Teeks Pro</DonnaText>
+                        <DonnaText style={styles.subscriptionSubtitle}>{getSubscriptionSubtitle()}</DonnaText>
+                    </View>
+                    <DonnaText style={styles.upgradeText}>
+                        {subscriptionTier === 'pro' && isActive ? 'Manage →' : 'Upgrade →'}
+                    </DonnaText>
+                </TouchableOpacity>
+
+                {/* Preferences */}
                 <View style={styles.section}>
                     <DonnaText style={styles.sectionLabel}>PREFERENCES</DonnaText>
                     <View style={styles.sectionCard}>
@@ -112,6 +122,7 @@ export default function SettingsHubScreen() {
                     </View>
                 </View>
 
+                {/* Productivity */}
                 <View style={styles.section}>
                     <DonnaText style={styles.sectionLabel}>PRODUCTIVITY</DonnaText>
                     <View style={styles.sectionCard}>
@@ -132,6 +143,7 @@ export default function SettingsHubScreen() {
                     </View>
                 </View>
 
+                {/* Account */}
                 <View style={styles.section}>
                     <DonnaText style={styles.sectionLabel}>ACCOUNT</DonnaText>
                     <View style={styles.sectionCard}>
@@ -151,6 +163,12 @@ export default function SettingsHubScreen() {
                         />
                     </View>
                 </View>
+
+                {/* Sign Out */}
+                <TouchableOpacity style={styles.signOutButton} onPress={handleLogout}>
+                    <Ionicons name="log-out-outline" size={20} color={Colors.error} />
+                    <DonnaText style={styles.signOutText}>Sign Out</DonnaText>
+                </TouchableOpacity>
 
                 <DonnaText style={styles.versionText}>Teeks v1.0.0 (Build 42)</DonnaText>
             </ScrollView>
@@ -190,7 +208,7 @@ const styles = StyleSheet.create({
         padding: Spacing.md,
         backgroundColor: Colors.bgElevated,
         borderRadius: Radius.lg,
-        marginBottom: Spacing.xl,
+        marginBottom: Spacing.md,
         borderWidth: 1,
         borderColor: Colors.border,
     },
@@ -220,6 +238,42 @@ const styles = StyleSheet.create({
         color: Colors.textMuted,
         marginTop: 2,
     },
+    subscriptionBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: Spacing.md,
+        padding: Spacing.md,
+        backgroundColor: 'rgba(217, 119, 69, 0.08)',
+        borderRadius: Radius.lg,
+        borderWidth: 1,
+        borderColor: Colors.accentSecondary,
+        marginBottom: Spacing.xl,
+    },
+    subscriptionIcon: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'rgba(217, 119, 69, 0.15)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    subscriptionInfo: {
+        flex: 1,
+    },
+    subscriptionTitle: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: Colors.textPrimary,
+    },
+    subscriptionSubtitle: {
+        fontSize: 13,
+        color: Colors.accentSecondary,
+    },
+    upgradeText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: Colors.accentSecondary,
+    },
     section: {
         marginBottom: Spacing.lg,
     },
@@ -238,33 +292,21 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: Colors.border,
     },
-    settingRow: {
+    signOutButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: Spacing.md,
-        padding: Spacing.md,
-        borderBottomWidth: 1,
-        borderBottomColor: Colors.border,
-    },
-    iconContainer: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
         justifyContent: 'center',
-        alignItems: 'center',
+        gap: Spacing.sm,
+        paddingVertical: Spacing.md,
+        marginTop: Spacing.md,
+        borderRadius: Radius.component,
+        borderWidth: 1,
+        borderColor: Colors.error,
     },
-    settingTextContainer: {
-        flex: 1,
-    },
-    settingTitle: {
-        fontSize: 15,
-        fontWeight: '500',
-        color: Colors.textPrimary,
-    },
-    settingSubtitle: {
-        fontSize: 12,
-        color: Colors.textMuted,
-        marginTop: 1,
+    signOutText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: Colors.error,
     },
     versionText: {
         textAlign: 'center',
