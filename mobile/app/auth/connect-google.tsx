@@ -44,7 +44,7 @@ export default function ConnectGoogleScreen() {
             setIsLoading(true);
             const success = await signInWithGoogle();
             if (success) {
-                // Navigation handled by AuthContext after successful OAuth
+                // Navigation handled by useEffect after auth state updates
             }
         } catch (error: any) {
             console.error('Google auth error:', error);
@@ -54,17 +54,26 @@ export default function ConnectGoogleScreen() {
             if (errorData?.error === 'missing_scopes') {
                 Alert.alert(
                     'Permissions Required',
-                    `To use Teeks, please grant all requested permissions:\n\n${errorData.missing_permissions?.join('\n• ')}`,
+                    `To use Teeks, please grant all requested permissions:\n\n• ${errorData.missing_permissions?.join('\n• ')}`,
                     [
                         { text: 'Cancel', style: 'cancel' },
                         { text: 'Try Again', onPress: () => handleConnect() }
                     ]
                 );
+            } else if (errorData?.error === 'account_conflict') {
+                Alert.alert(
+                    'Account Issue',
+                    errorData.message || 'An account with this email already exists. Please contact support.',
+                    [{ text: 'OK' }]
+                );
             } else {
                 Alert.alert(
                     'Connection Failed',
-                    error?.message || 'Unable to connect with Google. Please try again.',
-                    [{ text: 'OK' }]
+                    'Unable to connect your Google account. Please try again.',
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Try Again', onPress: () => handleConnect() }
+                    ]
                 );
             }
         } finally {
