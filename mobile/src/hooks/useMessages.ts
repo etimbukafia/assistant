@@ -285,6 +285,7 @@ export function useProcessingStatus(enabled: boolean = false) {
         queryFn: fetchProcessingStatus,
         enabled,
         refetchInterval: enabled ? 3000 : false,
+        refetchIntervalInBackground: false,
         staleTime: 0,
     });
 }

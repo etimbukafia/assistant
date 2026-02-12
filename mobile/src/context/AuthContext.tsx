@@ -222,12 +222,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         const providerToken = hashParams.get('provider_token');
                         const providerRefreshToken = hashParams.get('provider_refresh_token');
 
-                        // Debug: log what tokens we received
-                        console.log('OAuth tokens received (web):', {
-                            hasProviderToken: !!providerToken,
-                            hasProviderRefreshToken: !!providerRefreshToken,
-                            hasEmail: !!session?.user?.email,
-                        });
+                        // Verify we received the required tokens
+                        if (__DEV__) {
+                            console.log('OAuth callback received (web)');
+                        }
 
                         // Provider token is REQUIRED to connect Google services
                         if (!providerToken) {
@@ -273,8 +271,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                             }
                         }
 
-                        // Clean access tokens from URL hash
-                        if (window.location.hash.includes('access_token')) {
+                        // Always clean tokens from URL hash after OAuth
+                        if (window.location.hash) {
                             window.history.replaceState(null, '', window.location.pathname + window.location.search);
                         }
                     }
@@ -386,13 +384,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
                         if (sessionError) throw sessionError;
 
-                        // Debug: log what tokens we received
-                        console.log('OAuth tokens received:', {
-                            hasAccessToken: !!accessToken,
-                            hasRefreshToken: !!refreshToken,
-                            hasProviderToken: !!providerToken,
-                            hasProviderRefreshToken: !!providerRefreshToken,
-                        });
+                        if (__DEV__) {
+                            console.log('OAuth callback received (native)');
+                        }
 
                         // Provider token is REQUIRED to connect Google services
                         if (!providerToken) {

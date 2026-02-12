@@ -346,8 +346,9 @@ export default function ChatSessionScreen() {
   // Refs for race condition protection
   const currentSessionRef = useRef<string | null>(sessionId || null);
   const pollingCleanupRef = useRef<(() => void) | null>(null);
+  const hardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Update session ref when sessionId changes
+  // Reset state when sessionId changes (e.g., switching via drawer)
   useEffect(() => {
     currentSessionRef.current = sessionId || null;
     // Cleanup polling from previous session
@@ -355,6 +356,13 @@ export default function ChatSessionScreen() {
       pollingCleanupRef.current();
       pollingCleanupRef.current = null;
     }
+    if (hardTimeoutRef.current) {
+      clearTimeout(hardTimeoutRef.current);
+      hardTimeoutRef.current = null;
+    }
+    // Reset send state so input is usable in the new session
+    setIsSending(false);
+    setIsTyping(false);
   }, [sessionId]);
 
   // Cleanup on unmount
@@ -362,6 +370,9 @@ export default function ChatSessionScreen() {
     return () => {
       if (pollingCleanupRef.current) {
         pollingCleanupRef.current();
+      }
+      if (hardTimeoutRef.current) {
+        clearTimeout(hardTimeoutRef.current);
       }
     };
   }, []);
@@ -384,7 +395,8 @@ export default function ChatSessionScreen() {
           ...m,
           role: m.role as 'user' | 'assistant',
           status: 'complete' as const,
-        }));
+        }))
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       setLocalMessages(displayMessages);
     }
   }, [sessionData?.messages]);
@@ -392,7 +404,7 @@ export default function ChatSessionScreen() {
   // Get pending action for a message
   const getPendingAction = useCallback(
     (messageId: number): PendingAction | undefined => {
-      return sessionData?.pending_actions.find((pa) => pa.message_id === messageId);
+      return sessionData?.pending_actions?.find((pa) => pa.message_id === messageId);
     },
     [sessionData?.pending_actions]
   );
@@ -500,6 +512,18 @@ export default function ChatSessionScreen() {
       isMounted = false;
       cleanup();
     };
+
+    // Hard timeout: reset UI state after 3 minutes regardless
+    if (hardTimeoutRef.current) {
+      clearTimeout(hardTimeoutRef.current);
+    }
+    hardTimeoutRef.current = setTimeout(() => {
+      if (isMounted) {
+        setIsTyping(false);
+        setIsSending(false);
+      }
+      hardTimeoutRef.current = null;
+    }, 180000);
   }, [inputText, sessionId, isSending, queryClient]);
 
   // Handle action approval

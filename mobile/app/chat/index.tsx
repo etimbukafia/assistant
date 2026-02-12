@@ -10,7 +10,7 @@
  */
 
 import React, { useCallback } from 'react';
-import { StyleSheet, View, TouchableOpacity, RefreshControl } from 'react-native';
+import { StyleSheet, View, TouchableOpacity, RefreshControl, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
@@ -156,6 +156,7 @@ export default function ChatSessionsScreen() {
         router.push(`/chat/${session.id}`);
       } catch (error) {
         console.error('Failed to create session:', error);
+        Alert.alert('Error', 'Failed to create chat session. Please try again.');
       }
     },
     [createSession, router]

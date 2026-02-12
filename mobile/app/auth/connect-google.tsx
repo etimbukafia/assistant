@@ -23,28 +23,34 @@ import { useAuth } from '../../src/context/AuthContext';
  */
 export default function ConnectGoogleScreen() {
     const router = useRouter();
-    const { signInWithGoogle, isAuthenticated, profileLoaded, onboardingCompleted, isActive } = useAuth();
+    const { signInWithGoogle, isAuthenticated, profileLoaded, onboardingCompleted, isActive, refreshProfile } = useAuth();
     const [isLoading, setIsLoading] = useState(false);
 
-    // Navigate after successful authentication
+    // Navigate returning users who are already authenticated
+    // (e.g., deep link back to this screen while logged in)
     useEffect(() => {
-        if (isAuthenticated && profileLoaded) {
+        if (!isLoading && isAuthenticated && profileLoaded) {
             if (onboardingCompleted) {
                 router.replace('/(tabs)' as any);
             } else if (isActive) {
                 router.replace('/auth/setup' as any);
-            } else {
-                router.replace('/auth/subscription' as any);
             }
+            // Don't auto-navigate to subscription — wait for explicit sign-in flow
+            // to complete (connectGmail must finish first)
         }
-    }, [isAuthenticated, profileLoaded, onboardingCompleted, isActive]);
+    }, [isAuthenticated, profileLoaded, onboardingCompleted, isActive, isLoading]);
 
     const handleConnect = async () => {
         try {
             setIsLoading(true);
             const success = await signInWithGoogle();
             if (success) {
-                // Navigation handled by useEffect after auth state updates
+                // signInWithGoogle completed — Gmail tokens are now stored.
+                // Refresh profile to get updated gmail_connected status,
+                // then navigate based on subscription state.
+                await refreshProfile();
+                router.replace('/auth/subscription' as any);
+                return;
             }
         } catch (error: any) {
             console.error('Google auth error:', error);

@@ -196,11 +196,20 @@ export function pollJobStatus(
       const result = await getJobStatus(jobId);
       onUpdate(result);
 
-      if (result.status === 'processing' && attempts < maxAttempts) {
-        attempts++;
-        // Adaptive backoff
-        interval = Math.min(interval * 1.2, maxInterval);
-        timeoutId = setTimeout(poll, interval);
+      if (result.status === 'processing') {
+        if (attempts < maxAttempts) {
+          attempts++;
+          // Adaptive backoff
+          interval = Math.min(interval * 1.2, maxInterval);
+          timeoutId = setTimeout(poll, interval);
+        } else {
+          // Max attempts reached - notify caller of timeout
+          onUpdate({
+            status: 'failed',
+            job_id: jobId,
+            error: 'Response timed out. Please try again.',
+          });
+        }
       }
     } catch (error) {
       console.error('Error polling job status:', error);

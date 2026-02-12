@@ -115,6 +115,12 @@ def connect_gmail_with_provider_token(
         profile = service.users().getProfile(userId='me').execute()
         verified_email = profile.get('emailAddress')
 
+        if not verified_email:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not retrieve email address from Google. Please try again."
+            )
+
         if verified_email.lower() != request.email.lower():
             raise HTTPException(
                 status_code=400,
@@ -226,7 +232,7 @@ def gmail_auth_status(gmail_client: GmailClient = Depends(get_gmail_client)):
     if is_authenticated:
         try:
             email = gmail_client.get_profile_email()
-        except:
+        except Exception:
             pass
             
     return {

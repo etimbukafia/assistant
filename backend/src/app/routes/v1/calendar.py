@@ -87,8 +87,8 @@ async def sync_calendar_events(
     db: Session = Depends(get_db_for_user)
 ):
     """Sync upcoming events from Google Calendar to database"""
- 
-    calendar_service = CalendarService(db)
+
+    calendar_service = CalendarService(db, user_id=user.user_id)
  
     try:
         results = await calendar_service.sync_upcoming_events(days_ahead=days_ahead)
@@ -106,6 +106,7 @@ async def check_calendar_availability(
     start_time: str,
     end_time: str,
     calendar_ids: str = None,
+    user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user)
 ):
     """Check calendar availability for a time range"""
@@ -118,7 +119,7 @@ async def check_calendar_availability(
 
     calendar_id_list = calendar_ids.split(',') if calendar_ids else None
 
-    calendar_service = CalendarService(db)
+    calendar_service = CalendarService(db, user_id=user.user_id)
 
     try:
         busy_slots = await calendar_service.get_availability(start, end, calendar_id_list)
@@ -141,10 +142,13 @@ async def check_calendar_availability(
 
 
 @router.get("/calendars")
-async def get_user_calendars(db: Session = Depends(get_db_for_user)):
+async def get_user_calendars(
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user)
+):
     """Get list of user's Google calendars"""
 
-    calendar_service = CalendarService(db)
+    calendar_service = CalendarService(db, user_id=user.user_id)
 
     try:
         calendars = await calendar_service.get_calendars()

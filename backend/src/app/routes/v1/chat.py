@@ -7,6 +7,8 @@ Processing Strategy: Optimistic Sync with Async Fallback
 - Reflection mode: Always synchronous (warm, immediate)
 - Action mode: Sync with timeout, falls back to async for tool-heavy requests
 """
+import time
+from collections import defaultdict
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
@@ -14,6 +16,27 @@ from sqlalchemy.orm import Session
 
 from app.security.auth import get_current_user, get_db_for_user, require_active_subscription, require_credits_available, AuthenticatedUser as User
 from app.chat.service import ChatService, ProcessingStatus
+
+
+# Simple in-memory rate limiter for chat messages
+# Tracks recent message timestamps per user
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_MAX = 20  # max messages per window
+
+
+def _check_rate_limit(user_id: str):
+    """Raise 429 if user exceeds message rate limit."""
+    now = time.time()
+    timestamps = _rate_limit_store[user_id]
+    # Prune old entries
+    _rate_limit_store[user_id] = [t for t in timestamps if now - t < _RATE_LIMIT_WINDOW]
+    if len(_rate_limit_store[user_id]) >= _RATE_LIMIT_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Maximum {_RATE_LIMIT_MAX} messages per minute."
+        )
+    _rate_limit_store[user_id].append(now)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -155,7 +178,7 @@ async def get_session(
                 "role": m.role,
                 "content": m.content,
                 "created_at": m.created_at.isoformat(),
-                "metadata": m.metadata
+                "metadata": m.message_metadata
             }
             for m in messages
         ],
@@ -213,6 +236,9 @@ async def send_message(
     2. If status="complete": display response immediately
     3. If status="processing": poll /jobs/{job_id} every 1-2s
     """
+    # Rate limit check
+    _check_rate_limit(user.user_id)
+
     service = ChatService(db, user.user_id)
 
     # Verify session exists
@@ -306,7 +332,7 @@ async def get_messages(
                 "role": m.role,
                 "content": m.content,
                 "created_at": m.created_at.isoformat(),
-                "metadata": m.metadata
+                "metadata": m.message_metadata
             }
             for m in messages
         ]

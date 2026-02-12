@@ -327,6 +327,8 @@ class ChatService:
             return {"success": True, "result": result}
         except Exception as e:
             logger.error(f"Error executing action {action_id}: {e}")
+            action.status = "failed"
+            self.db.commit()
             return {"success": False, "error": str(e)}
     
     def reject_action(self, action_id: str) -> Dict[str, Any]:
@@ -470,9 +472,18 @@ class ChatService:
     def _execute_add_calendar(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Create calendar event."""
         from app.data.models import CalendarEvent
-        
-        start_time = datetime.fromisoformat(data["start_time"].replace("Z", "+00:00"))
-        end_time = datetime.fromisoformat(data["end_time"].replace("Z", "+00:00"))
+
+        if not data.get("start_time") or not data.get("end_time"):
+            raise ValueError("start_time and end_time are required")
+
+        try:
+            start_time = datetime.fromisoformat(data["start_time"].replace("Z", "+00:00"))
+            end_time = datetime.fromisoformat(data["end_time"].replace("Z", "+00:00"))
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid datetime format: {e}")
+
+        if end_time <= start_time:
+            raise ValueError("end_time must be after start_time")
         
         event = CalendarEvent(
             user_id=self.user_id,
@@ -522,8 +533,20 @@ class ChatService:
         if not event:
             raise ValueError("Event not found")
         
-        event.start_time = datetime.fromisoformat(data["new_start_time"].replace("Z", "+00:00"))
-        event.end_time = datetime.fromisoformat(data["new_end_time"].replace("Z", "+00:00"))
+        if not data.get("new_start_time") or not data.get("new_end_time"):
+            raise ValueError("new_start_time and new_end_time are required")
+
+        try:
+            new_start = datetime.fromisoformat(data["new_start_time"].replace("Z", "+00:00"))
+            new_end = datetime.fromisoformat(data["new_end_time"].replace("Z", "+00:00"))
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid datetime format: {e}")
+
+        if new_end <= new_start:
+            raise ValueError("new_end_time must be after new_start_time")
+
+        event.start_time = new_start
+        event.end_time = new_end
         self.db.commit()
         
         return {"event_id": event_id, "new_start_time": data["new_start_time"]}
@@ -748,19 +771,21 @@ class ChatService:
         Returns:
             ChatResponse with current status and response if complete
         """
-        from sqlalchemy import cast, String
-
         # Find the message with this job_id
-        # Use text search since JSON queries vary by database
-        messages = self.db.query(ChatMessage).join(
+        # Filter by assistant role and recent creation to avoid scanning all messages.
+        # Then match job_id in Python for SQLite compatibility (no JSON queries).
+        timeout_window = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_TIMEOUT_MINUTES * 5)
+        recent_messages = self.db.query(ChatMessage).join(
             ChatSession, ChatMessage.session_id == ChatSession.id
         ).filter(
-            ChatSession.user_id == self.user_id
-        ).all()
+            ChatSession.user_id == self.user_id,
+            ChatMessage.role == "assistant",
+            ChatMessage.created_at >= timeout_window
+        ).order_by(ChatMessage.created_at.desc()).limit(50).all()
 
         # Find message with matching job_id in metadata
         message = None
-        for msg in messages:
+        for msg in recent_messages:
             metadata = msg.message_metadata or {}
             if metadata.get("job_id") == job_id:
                 message = msg

@@ -110,42 +110,40 @@ class GmailClient:
         try:
             flow.fetch_token(code=code)
             self.creds = flow.credentials
-            print(f"✓ Successfully fetched token")
-            print(f"  Token scopes: {self.creds.scopes if hasattr(self.creds, 'scopes') else 'N/A'}")
+            logger.info("Successfully fetched token")
+            logger.info(f"Token scopes: {self.creds.scopes if hasattr(self.creds, 'scopes') else 'N/A'}")
         except Exception as e:
-            print(f"✗ Failed to fetch token: {str(e)}")
+            logger.error(f"Failed to fetch token: {str(e)}")
             raise Exception(f"Failed to exchange code for token: {str(e)}")
 
         # Build Gmail service and get user email from profile
         # This is reliable and uses the scopes we already have
         try:
             self.service = build('gmail', 'v1', credentials=self.creds)
-            print(f"✓ Successfully built Gmail service")
+            logger.info("Successfully built Gmail service")
         except Exception as e:
-            print(f"✗ Failed to build Gmail service: {str(e)}")
+            logger.error(f"Failed to build Gmail service: {str(e)}")
             raise Exception(f"Failed to build Gmail service: {str(e)}")
 
         try:
             profile = self.service.users().getProfile(userId='me').execute()
             email = profile.get('emailAddress')
-            print(f"✓ Successfully got user email: {email}")
+            logger.info(f"Successfully got user email: {email}")
         except Exception as e:
-            print(f"✗ Failed to get user profile: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Failed to get user profile: {str(e)}", exc_info=True)
             raise Exception(f"Failed to get user email from Gmail API: {str(e)}")
 
         # Save credentials to database
         try:
             if self.db:
                 self._save_to_database(email)
-                print(f"✓ Successfully saved credentials to database")
+                logger.info("Successfully saved credentials to database")
             else:
                 # Fallback to file storage if no database session
                 self._save_to_file()
-                print(f"✓ Successfully saved credentials to file")
+                logger.info("Successfully saved credentials to file")
         except Exception as e:
-            print(f"✗ Failed to save credentials: {str(e)}")
+            logger.error(f"Failed to save credentials: {str(e)}")
             raise Exception(f"Failed to save credentials: {str(e)}")
 
         self._current_email = email
@@ -246,7 +244,7 @@ class GmailClient:
             access_token = decrypt_token(account.access_token)
             refresh_token = decrypt_token(account.refresh_token) if account.refresh_token else None
         except ValueError as e:
-            print(f"Failed to decrypt tokens: {e}")
+            logger.error(f"Failed to decrypt tokens: {e}. Encryption key may have changed.")
             return False
 
         # Google's auth library expects offset-naive datetimes
@@ -312,6 +310,42 @@ class GmailClient:
     def _get_client_secret(self) -> str:
         """Get client secret from environment"""
         return get_settings().GOOGLE_CLIENT_SECRET
+
+    def exchange_code_for_token(self, code: str) -> Credentials:
+        """
+        Exchange authorization code for credentials.
+        Wrapper around authenticate_with_code for backward compatibility.
+
+        Args:
+            code: Authorization code from Google callback
+
+        Returns:
+            Credentials object
+        """
+        state = self._flow_state
+        return self.authenticate_with_code(code, state)
+
+    def get_profile_email(self) -> Optional[str]:
+        """
+        Get the email address of the authenticated user.
+
+        Returns:
+            Email address string, or None if not available
+        """
+        if self._current_email:
+            return self._current_email
+
+        if not self.service:
+            if not self.load_credentials():
+                return None
+
+        try:
+            profile = self.service.users().getProfile(userId='me').execute()
+            self._current_email = profile.get('emailAddress')
+            return self._current_email
+        except Exception as e:
+            logger.error(f"Failed to get profile email: {e}")
+            return None
 
     def is_authenticated(self) -> bool:
         """Check if client has valid credentials"""
@@ -389,7 +423,7 @@ class GmailClient:
                     'sent_at': self._parse_date(date) if date else datetime.now(timezone.utc)
                 })
             except Exception as e:
-                print(f"Failed to get sent message {msg['id']}: {e}")
+                logger.warning(f"Failed to get sent message {msg['id']}: {e}")
                 continue
         
         return sent_messages
@@ -397,7 +431,8 @@ class GmailClient:
     def get_message_detail(self, message_id: str):
         """Get detailed message information including Gmail labels"""
         if not self.service:
-            self.authenticate()
+            if not self.load_credentials():
+                raise Exception("Not authenticated. Please authenticate first.")
 
         message = self.service.users().messages().get(
             userId='me',
@@ -405,7 +440,12 @@ class GmailClient:
             format='full'
         ).execute()
 
-        headers = message['payload']['headers']
+        payload = message.get('payload')
+        if not payload:
+            logger.warning(f"Message {message_id} has no payload")
+            return None
+
+        headers = payload.get('headers', [])
         subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
         sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
         recipient = next((h['value'] for h in headers if h['name'] == 'To'), 'Unknown')
@@ -416,20 +456,20 @@ class GmailClient:
         precedence = next((h['value'] for h in headers if h['name'].lower() == 'precedence'), None)
         auto_submitted = next((h['value'] for h in headers if h['name'].lower() == 'auto-submitted'), None)
 
-        body = self._get_message_body(message['payload'])
+        body = self._get_message_body(payload)
 
         # Extract Gmail labels (includes CATEGORY_* labels)
         gmail_labels = message.get('labelIds', [])
 
         return {
             'message_id': message['id'],
-            'thread_id': message['threadId'],
+            'thread_id': message.get('threadId', ''),
             'subject': subject,
             'sender': sender,
             'recipient': recipient,
             'body': body,
             'received_at': self._parse_date(date) if date else datetime.now(timezone.utc),
-            'attachments': self._get_attachment_metadata(message['payload'], message['id']),
+            'attachments': self._get_attachment_metadata(payload, message['id']),
             'gmail_labels': gmail_labels,
             'headers': {
                 'list_unsubscribe': list_unsubscribe,
@@ -493,7 +533,7 @@ class GmailClient:
             data = attachment.get('data', '')
             return base64.urlsafe_b64decode(data)
         except Exception as e:
-            print(f"Failed to download attachment: {e}")
+            logger.warning(f"Failed to download attachment: {e}")
             return None
 
     def _get_message_body(self, payload):
@@ -501,12 +541,20 @@ class GmailClient:
         body = ""
 
         if 'body' in payload and 'data' in payload['body']:
-            body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+            try:
+                body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+            except (UnicodeDecodeError, Exception) as e:
+                logger.warning(f"Failed to decode message body: {e}")
+                body = "[Message body could not be decoded]"
         elif 'parts' in payload:
             for part in payload['parts']:
-                if part['mimeType'] == 'text/plain':
-                    if 'data' in part['body']:
-                        body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                if part.get('mimeType') == 'text/plain':
+                    if 'data' in part.get('body', {}):
+                        try:
+                            body += base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                        except (UnicodeDecodeError, Exception) as e:
+                            logger.warning(f"Failed to decode message part: {e}")
+                            continue
                 elif 'parts' in part:
                     body += self._get_message_body(part)
 
@@ -517,7 +565,8 @@ class GmailClient:
         from email.utils import parsedate_to_datetime
         try:
             return parsedate_to_datetime(date_str)
-        except:
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.warning(f"Failed to parse date '{date_str}': {e}")
             return datetime.now(timezone.utc)
 
     def send_message(
@@ -582,7 +631,7 @@ class GmailClient:
             profile = self.service.users().getProfile(userId='me').execute()
             return profile.get('historyId')
         except Exception as e:
-            print(f"Failed to get history ID: {e}")
+            logger.error(f"Failed to get history ID: {e}")
             return None
 
     def get_deleted_message_ids(self, start_history_id: str) -> tuple[list, Optional[str]]:
@@ -641,12 +690,12 @@ class GmailClient:
         except Exception as e:
             # Handle case where history ID is too old (404 error)
             if 'notFound' in str(e) or '404' in str(e):
-                print(f"History ID too old, need to re-sync: {e}")
+                logger.warning(f"History ID too old, need to re-sync: {e}")
                 # Return empty list and current history ID to reset tracking
                 current_id = self.get_current_history_id()
                 return [], current_id or start_history_id
 
-            print(f"Failed to get deleted messages: {e}")
+            logger.error(f"Failed to get deleted messages: {e}")
             return [], start_history_id
 
 
@@ -709,11 +758,11 @@ class GmailClient:
 
         except Exception as e:
             if 'notFound' in str(e) or '404' in str(e):
-                print(f"History ID too old, resetting: {e}")
+                logger.warning(f"History ID too old, resetting: {e}")
                 current_id = self.get_current_history_id()
                 return [], current_id or start_history_id
 
-            print(f"Failed to get new messages from history: {e}")
+            logger.error(f"Failed to get new messages from history: {e}")
             return [], start_history_id
 
 
