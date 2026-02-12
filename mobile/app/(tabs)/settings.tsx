@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, View, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { StyleSheet, View, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,23 +27,31 @@ export default function SettingsHubScreen() {
     };
 
     const handleLogout = async () => {
-        Alert.alert(
-            'Sign Out',
-            'Are you sure you want to sign out?',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Sign Out', style: 'destructive', onPress: async () => {
-                        try {
-                            await signOut();
-                        } catch (error) {
-                            console.error('Sign out error:', error);
-                        }
-                        router.replace('/login');
-                    }
-                },
-            ]
-        );
+        const doSignOut = async () => {
+            try {
+                await signOut();
+            } catch (error) {
+                console.error('Sign out error:', error);
+            }
+            router.replace('/login');
+        };
+
+        // Alert.alert doesn't work on web, use confirm() instead
+        if (Platform.OS === 'web') {
+            const confirmed = window.confirm('Are you sure you want to sign out?');
+            if (confirmed) {
+                await doSignOut();
+            }
+        } else {
+            Alert.alert(
+                'Sign Out',
+                'Are you sure you want to sign out?',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Sign Out', style: 'destructive', onPress: doSignOut },
+                ]
+            );
+        }
     };
 
     return (

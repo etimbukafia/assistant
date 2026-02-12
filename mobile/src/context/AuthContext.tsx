@@ -222,8 +222,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         const providerToken = hashParams.get('provider_token');
                         const providerRefreshToken = hashParams.get('provider_refresh_token');
 
-                        // Connect Gmail if we have a provider token
-                        if (providerToken && session?.user?.email) {
+                        // Debug: log what tokens we received
+                        console.log('OAuth tokens received (web):', {
+                            hasProviderToken: !!providerToken,
+                            hasProviderRefreshToken: !!providerRefreshToken,
+                            hasEmail: !!session?.user?.email,
+                        });
+
+                        // Provider token is REQUIRED to connect Google services
+                        if (!providerToken) {
+                            console.error('No provider_token received from OAuth (web)');
+                            const { Alert } = require('react-native');
+                            Alert.alert(
+                                'Connection Failed',
+                                'Google did not return access to Gmail/Calendar. Please try again and grant all permissions.',
+                                [{ text: 'OK' }]
+                            );
+                            await supabase.auth.signOut();
+                        } else if (session?.user?.email) {
+                            // Connect Google services
                             try {
                                 const { connectGmail } = require('../services/gmail');
                                 await connectGmail({
@@ -369,28 +386,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
                         if (sessionError) throw sessionError;
 
-                        // Connect Gmail if we have a provider token
-                        if (providerToken) {
-                            try {
-                                const { connectGmail } = require('../services/gmail');
-                                // Get email from the session
-                                const { data: { session: newSession } } = await supabase.auth.getSession();
-                                const email = newSession?.user?.email;
-                                if (email) {
-                                    await connectGmail({
-                                        provider_token: providerToken,
-                                        provider_refresh_token: providerRefreshToken || undefined,
-                                        email: email,
-                                    });
-                                    console.log('Google connected successfully');
-                                }
-                            } catch (gmailError: any) {
-                                console.error('Failed to connect Google:', gmailError);
-                                // Sign out to clean up partial state - can't proceed without Google connection
-                                await supabase.auth.signOut();
-                                // Re-throw so UI can handle it
-                                throw gmailError;
+                        // Debug: log what tokens we received
+                        console.log('OAuth tokens received:', {
+                            hasAccessToken: !!accessToken,
+                            hasRefreshToken: !!refreshToken,
+                            hasProviderToken: !!providerToken,
+                            hasProviderRefreshToken: !!providerRefreshToken,
+                        });
+
+                        // Provider token is REQUIRED to connect Google services
+                        if (!providerToken) {
+                            console.error('No provider_token received from OAuth');
+                            await supabase.auth.signOut();
+                            throw new Error('Google did not return access to Gmail/Calendar. Please try again and grant all permissions.');
+                        }
+
+                        // Connect Google services
+                        try {
+                            const { connectGmail } = require('../services/gmail');
+                            const { data: { session: newSession } } = await supabase.auth.getSession();
+                            const email = newSession?.user?.email;
+                            if (email) {
+                                await connectGmail({
+                                    provider_token: providerToken,
+                                    provider_refresh_token: providerRefreshToken || undefined,
+                                    email: email,
+                                });
+                                console.log('Google connected successfully');
                             }
+                        } catch (gmailError: any) {
+                            console.error('Failed to connect Google:', gmailError);
+                            // Sign out to clean up partial state - can't proceed without Google connection
+                            await supabase.auth.signOut();
+                            // Re-throw so UI can handle it
+                            throw gmailError;
                         }
 
                         return true;
