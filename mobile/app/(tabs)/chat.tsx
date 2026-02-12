@@ -67,6 +67,13 @@ const SessionCard: React.FC<SessionCardProps> = ({ session, onPress, onDelete })
             <DonnaText style={styles.sessionType}>
               {isReflection ? 'Reflection' : 'Action'}
             </DonnaText>
+            {isReflection && (
+              <>
+                <View style={styles.metaDot} />
+                <Ionicons name="hourglass-outline" size={10} color={Colors.textMuted} />
+                <DonnaText style={styles.ephemeralLabel}>Temporary</DonnaText>
+              </>
+            )}
             <View style={styles.metaDot} />
             <DonnaText style={styles.sessionDate}>
               {formatDate(session.last_activity_at)}
@@ -357,6 +364,10 @@ const styles = StyleSheet.create({
   },
   sessionType: {
     fontSize: 12,
+    color: Colors.textMuted,
+  },
+  ephemeralLabel: {
+    fontSize: 11,
     color: Colors.textMuted,
   },
   metaDot: {

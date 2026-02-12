@@ -60,7 +60,7 @@ export default function FocusScreen() {
             {/* Filter Chips (matching frontend TaskHub.jsx) */}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
                 <TouchableOpacity
-                    style={[styles.filterChip, activeTab === 'all' && styles.filterChipActive]}
+                    style={[styles.filterChip, activeTab === 'all' && styles.filterChipActiveNeutral]}
                     onPress={() => setActiveTab('all')}
                 >
                     <DonnaText style={[styles.filterChipText, activeTab === 'all' && styles.filterChipTextActive]}>
@@ -76,7 +76,7 @@ export default function FocusScreen() {
                     </DonnaText>
                 </TouchableOpacity>
                 <TouchableOpacity
-                    style={[styles.filterChip, activeTab === 'active' && styles.filterChipActive]}
+                    style={[styles.filterChip, activeTab === 'active' && styles.filterChipActiveGreen]}
                     onPress={() => setActiveTab('active')}
                 >
                     <DonnaText style={[styles.filterChipText, activeTab === 'active' && styles.filterChipTextActive]}>
@@ -100,7 +100,7 @@ export default function FocusScreen() {
                     <DonnaText style={[styles.statText, { color: Colors.error }]}>Urgent ({urgentTasks.length})</DonnaText>
                 </View>
                 <View style={[styles.statBadge, { backgroundColor: 'rgba(217, 119, 69, 0.1)', borderColor: 'rgba(217, 119, 69, 0.2)' }]}>
-                    <Ionicons name="sparkles" size={12} color={Colors.accentSecondary} />
+                    <Ionicons name="hourglass-outline" size={12} color={Colors.accentSecondary} />
                     <DonnaText style={[styles.statText, { color: Colors.accentSecondary }]}>Pending ({pendingApprovalTasks.length})</DonnaText>
                 </View>
                 <View style={[styles.statBadge, { backgroundColor: 'rgba(138, 154, 91, 0.1)', borderColor: 'rgba(138, 154, 91, 0.2)' }]}>
@@ -132,12 +132,12 @@ export default function FocusScreen() {
                         {filtered.pending.map(task => (
                             <View key={task.id} style={styles.taskContainer}>
                                 <InlineTaskItem
-                                            task={task}
-                                            onApprove={approve}
-                                            onComplete={complete}
-                                            onStart={start}
-                                            onDismiss={dismiss}
-                                        />
+                                    task={task}
+                                    onApprove={approve}
+                                    onComplete={complete}
+                                    onStart={start}
+                                    onDismiss={dismiss}
+                                />
                             </View>
                         ))}
                     </View>
@@ -153,12 +153,12 @@ export default function FocusScreen() {
                         {urgentTasks.map(task => (
                             <View key={task.id} style={styles.taskContainer}>
                                 <InlineTaskItem
-                                            task={task}
-                                            onApprove={approve}
-                                            onComplete={complete}
-                                            onStart={start}
-                                            onDismiss={dismiss}
-                                        />
+                                    task={task}
+                                    onApprove={approve}
+                                    onComplete={complete}
+                                    onStart={start}
+                                    onDismiss={dismiss}
+                                />
                             </View>
                         ))}
                     </View>
@@ -174,12 +174,12 @@ export default function FocusScreen() {
                         {filtered.active.filter(t => t.priority !== 'urgent').map(task => (
                             <View key={task.id} style={styles.taskContainer}>
                                 <InlineTaskItem
-                                            task={task}
-                                            onApprove={approve}
-                                            onComplete={complete}
-                                            onStart={start}
-                                            onDismiss={dismiss}
-                                        />
+                                    task={task}
+                                    onApprove={approve}
+                                    onComplete={complete}
+                                    onStart={start}
+                                    onDismiss={dismiss}
+                                />
                             </View>
                         ))}
                     </View>
@@ -195,12 +195,12 @@ export default function FocusScreen() {
                         {filtered.waiting.map(task => (
                             <View key={task.id} style={styles.taskContainer}>
                                 <InlineTaskItem
-                                            task={task}
-                                            onApprove={approve}
-                                            onComplete={complete}
-                                            onStart={start}
-                                            onDismiss={dismiss}
-                                        />
+                                    task={task}
+                                    onApprove={approve}
+                                    onComplete={complete}
+                                    onStart={start}
+                                    onDismiss={dismiss}
+                                />
                             </View>
                         ))}
                     </View>
@@ -226,12 +226,12 @@ export default function FocusScreen() {
                 {showCompleted && completedTasks.map(task => (
                     <View key={task.id} style={styles.taskContainer}>
                         <InlineTaskItem
-                                            task={task}
-                                            onApprove={approve}
-                                            onComplete={complete}
-                                            onStart={start}
-                                            onDismiss={dismiss}
-                                        />
+                            task={task}
+                            onApprove={approve}
+                            onComplete={complete}
+                            onStart={start}
+                            onDismiss={dismiss}
+                        />
                     </View>
                 ))}
             </ScrollView>
@@ -265,17 +265,21 @@ const styles = StyleSheet.create({
         borderColor: Colors.border,
         marginRight: Spacing.sm,
     },
-    filterChipActive: {
-        backgroundColor: Colors.accentPrecision,
-        borderColor: Colors.accentPrecision,
+    filterChipActiveNeutral: {
+        backgroundColor: Colors.textPrimary,
+        borderColor: Colors.textPrimary,
     },
     filterChipActiveAmber: {
         backgroundColor: Colors.accentSecondary,
         borderColor: Colors.accentSecondary,
     },
+    filterChipActiveGreen: {
+        backgroundColor: Colors.success,
+        borderColor: Colors.success,
+    },
     filterChipActivePurple: {
-        backgroundColor: Colors.accentPrecision,
-        borderColor: Colors.accentPrecision,
+        backgroundColor: '#7B68A8',
+        borderColor: '#7B68A8',
     },
     filterChipText: {
         fontSize: 13,

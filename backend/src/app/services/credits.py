@@ -88,9 +88,12 @@ def add_credit_usage(
     current_used = settings.credits_used or 0.0
     settings.credits_used = current_used + cost_usd
 
-    logger.debug(
+    # Flush to ensure the update is included in the caller's next commit
+    db.flush()
+
+    logger.info(
         f"Credit usage updated for user {user_id}: "
-        f"{current_used:.4f} -> {settings.credits_used:.4f} USD"
+        f"{current_used:.6f} -> {settings.credits_used:.6f} USD (added {cost_usd:.6f})"
     )
 
 
@@ -189,6 +192,10 @@ def is_gemini_model(model_name: str) -> bool:
         return False
 
     model_lower = model_name.lower()
+
+    # Handle "models/gemini-..." prefix from API responses
+    if "/" in model_lower:
+        model_lower = model_lower.rsplit("/", 1)[-1]
 
     # Gemma models are free - don't count
     if model_lower.startswith("gemma"):

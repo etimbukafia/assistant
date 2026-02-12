@@ -110,7 +110,7 @@ export default function DashboardScreen() {
     <View style={styles.header}>
       {/* Title Row with Actions */}
       <View style={styles.titleRow}>
-        <DonnaText variant="h1" style={styles.greeting}>Good Afternoon, J.</DonnaText>
+        <DonnaText variant="h1" style={styles.greeting}>Inbox</DonnaText>
         <View style={styles.headerActions}>
           {/* Focus Mode Toggle */}
           <TouchableOpacity
@@ -139,7 +139,7 @@ export default function DashboardScreen() {
           <ActivityIndicator size="small" color={Colors.accentPrimary} />
           <View style={styles.syncContent}>
             <DonnaText style={styles.syncTitle}>Syncing your world...</DonnaText>
-            <DonnaText style={styles.syncDesc}>Processing emails from the last 24 hours.</DonnaText>
+            <DonnaText style={styles.syncDesc}>Processing today's emails.</DonnaText>
           </View>
         </View>
       )}

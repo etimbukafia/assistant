@@ -1,10 +1,10 @@
 /**
  * API service configured to use Supabase authentication
- * 
+ *
  * Automatically attaches JWT tokens from Supabase auth to all requests.
  */
 
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { Platform } from 'react-native';
 import { supabase } from '../utils/supabase';
 
@@ -15,6 +15,7 @@ const DEV_API_URL = Platform.OS === 'android'
 
 export const api = axios.create({
     baseURL: process.env.EXPO_PUBLIC_API_URL || DEV_API_URL,
+    timeout: 30000,
     headers: {
         'Content-Type': 'application/json',
     },
@@ -34,13 +35,25 @@ api.interceptors.request.use(async (config) => {
     return config;
 });
 
-// Handle 401 responses - try to refresh session
+// Handle errors - refresh on 401, detect network issues
 api.interceptors.response.use(
     (response) => response,
-    async (error) => {
-        const originalRequest = error.config;
+    async (error: AxiosError) => {
+        const originalRequest = error.config as any;
 
-        if (error.response?.status === 401 && !originalRequest._retry) {
+        // Network error detection (no response = offline or server unreachable)
+        if (!error.response && error.code !== 'ERR_CANCELED') {
+            const networkError = new AxiosError(
+                'Unable to connect. Please check your internet connection.',
+                'NETWORK_ERROR',
+                error.config,
+                error.request
+            );
+            return Promise.reject(networkError);
+        }
+
+        // Handle 401 - try to refresh session
+        if (error.response?.status === 401 && !originalRequest?._retry) {
             originalRequest._retry = true;
 
             try {

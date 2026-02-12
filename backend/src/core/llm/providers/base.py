@@ -133,6 +133,10 @@ class BaseLLMProvider(ABC):
         """
         text = text.strip()
 
+        # Pre-process: Fix malformed unicode escapes (e.g., \u without 4 hex digits)
+        # This handles cases like "C:\users" which creates invalid \u escape
+        text = re.sub(r'\\u(?![0-9a-fA-F]{4})', r'\\\\u', text)
+
         # Strategy 1: Direct parse
         try:
             result = json.loads(text)
@@ -194,6 +198,14 @@ class BaseLLMProvider(ABC):
         """
         Attempt to repair common JSON issues from small models.
         """
+        # Strategy 0: Fix malformed unicode escapes (e.g., \u without 4 hex digits)
+        # This handles cases like "C:\users" which creates invalid \u escape
+        def fix_unicode_escapes(s: str) -> str:
+            # Replace \u not followed by 4 hex digits with \\u (escaped backslash)
+            return re.sub(r'\\u(?![0-9a-fA-F]{4})', r'\\\\u', s)
+
+        text = fix_unicode_escapes(text)
+
         # Strategy 1: Remove trailing commas
         cleaned = re.sub(r",\s*([}\]])", r"\1", text)
         try:

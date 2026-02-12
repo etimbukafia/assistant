@@ -12,10 +12,16 @@ Security:
 - Never trust client-side identity
 - All user identity comes from verified JWT claims
 - RLS policies enforce data isolation at database level
+
+JWT Algorithm Support:
+- HS256: Uses SUPABASE_JWT_SECRET (older Supabase projects)
+- ES256: Uses JWKS public key from Supabase (newer projects)
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from functools import lru_cache
 from typing import Optional
+import logging
 
 from fastapi import Depends, HTTPException, Header, status
 from sqlalchemy import text
@@ -26,6 +32,24 @@ from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 from app.infra.config import get_settings, Settings
 from app.infra.database import get_db
 from app.data.models import UserSettings
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# JWKS Support for ES256 tokens
+# =============================================================================
+
+@lru_cache(maxsize=1)
+def get_jwks_client(supabase_url: str) -> jwt.PyJWKClient:
+    """
+    Get cached JWKS client for Supabase project.
+
+    Supabase exposes JWKS at: {supabase_url}/auth/v1/.well-known/jwks.json
+    """
+    jwks_url = f"{supabase_url}/auth/v1/.well-known/jwks.json"
+    logger.info(f"Initializing JWKS client from: {jwks_url}")
+    return jwt.PyJWKClient(jwks_url, cache_keys=True)
 
 
 # =============================================================================
@@ -115,40 +139,88 @@ def extract_token_from_header(authorization: Optional[str]) -> Optional[str]:
     return None
 
 
-def verify_jwt(token: str, jwt_secret: str) -> dict:
+def get_token_algorithm(token: str) -> str:
+    """Extract algorithm from JWT header without verifying."""
+    try:
+        header = jwt.get_unverified_header(token)
+        return header.get("alg", "HS256")
+    except Exception:
+        return "HS256"
+
+
+def verify_jwt(token: str, jwt_secret: str, supabase_url: str = "") -> dict:
     """
     Verify a Supabase JWT and return decoded claims.
 
-    Pure function: (token, secret) -> claims dict
+    Supports both:
+    - HS256: Uses jwt_secret (older Supabase projects)
+    - ES256: Uses JWKS public key (newer Supabase projects)
 
     Raises:
         HTTPException: If token is invalid or expired
     """
-    if not jwt_secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server configuration error: JWT secret not configured"
-        )
+    alg = get_token_algorithm(token)
+    logger.info(f"AUTH_DEBUG: Token algorithm: {alg}, first 20 chars: {token[:20]}...")
 
     try:
-        return jwt.decode(
-            token,
-            jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-            options={
-                "verify_exp": True,
-                "verify_aud": True,
-                "require": ["sub", "email", "exp", "aud"]
-            }
-        )
+        if alg == "ES256":
+            # ES256 requires JWKS public key verification
+            if not supabase_url:
+                logger.error("AUTH_DEBUG: ES256 token but SUPABASE_URL not configured")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server configuration error: SUPABASE_URL required for ES256 tokens"
+                )
+
+            jwks_client = get_jwks_client(supabase_url)
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            logger.info(f"AUTH_DEBUG: Got signing key from JWKS, kid: {signing_key.key_id}")
+
+            result = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["ES256"],
+                audience="authenticated",
+                options={
+                    "verify_exp": True,
+                    "verify_aud": True,
+                    "require": ["sub", "email", "exp", "aud"]
+                }
+            )
+        else:
+            # HS256 uses shared secret
+            if not jwt_secret:
+                logger.error("AUTH_DEBUG: HS256 token but JWT secret not configured")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server configuration error: JWT secret not configured"
+                )
+
+            logger.info(f"AUTH_DEBUG: Using HS256 with secret (first 10 chars): {jwt_secret[:10]}...")
+            result = jwt.decode(
+                token,
+                jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+                options={
+                    "verify_exp": True,
+                    "verify_aud": True,
+                    "require": ["sub", "email", "exp", "aud"]
+                }
+            )
+
+        logger.info(f"AUTH_DEBUG: Token verified successfully for user: {result.get('sub', 'unknown')}")
+        return result
+
     except ExpiredSignatureError:
+        logger.warning("AUTH_DEBUG: Token expired")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expired. Please refresh your session.",
             headers={"WWW-Authenticate": "Bearer"}
         )
     except InvalidTokenError as e:
+        logger.warning(f"AUTH_DEBUG: Invalid token error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}",
@@ -188,13 +260,14 @@ async def get_current_user(
     token = extract_token_from_header(authorization)
 
     if not token:
+        logger.warning(f"AUTH_DEBUG: No token in request. Authorization header: {authorization[:50] if authorization else 'None'}...")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated. Please sign in.",
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    payload = verify_jwt(token, settings.SUPABASE_JWT_SECRET)
+    payload = verify_jwt(token, settings.SUPABASE_JWT_SECRET, settings.SUPABASE_URL)
 
     try:
         return AuthenticatedUser.from_jwt_payload(payload)
@@ -221,7 +294,7 @@ async def get_current_user_optional(
         return None
 
     try:
-        payload = verify_jwt(token, settings.SUPABASE_JWT_SECRET)
+        payload = verify_jwt(token, settings.SUPABASE_JWT_SECRET, settings.SUPABASE_URL)
         return AuthenticatedUser.from_jwt_payload(payload)
     except (HTTPException, ValueError):
         return None
@@ -262,16 +335,39 @@ def get_user_settings(
     Get or create UserSettings for the authenticated user.
 
     Auto-creates profile on first authenticated request.
+
+    Raises HTTP 409 if email is already associated with a different user_id
+    (e.g., user deleted Supabase account and re-registered).
     """
+    # First, check if settings exist for this user_id
     settings = db.query(UserSettings).filter(
         UserSettings.user_id == user.user_id
     ).first()
 
-    if not settings:
-        settings = create_user_settings(user.user_id, user.email)
-        db.add(settings)
-        db.commit()
-        db.refresh(settings)
+    if settings:
+        return settings
+
+    # No settings for this user_id - check if email already exists
+    existing_by_email = db.query(UserSettings).filter(
+        UserSettings.user_email == user.email
+    ).first()
+
+    if existing_by_email:
+        # Email exists but with different user_id - data conflict
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "account_conflict",
+                "message": "An account with this email already exists. Please contact support to recover your account.",
+                "support_email": "support@teeks.ai"
+            }
+        )
+
+    # Safe to create new settings
+    settings = create_user_settings(user.user_id, user.email)
+    db.add(settings)
+    db.commit()
+    db.refresh(settings)
 
     return settings
 

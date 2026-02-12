@@ -1,70 +1,21 @@
 import React from 'react';
-import { StyleSheet, View, ScrollView, TouchableOpacity, Switch, Alert } from 'react-native';
+import { StyleSheet, View, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius } from '@/src/theme/Theme';
 import { DonnaText } from '@/src/components/ui/DonnaText';
+import { SettingRow } from '@/src/components/ui/SettingRow';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '@/src/context/AuthContext';
 
-interface SettingRowProps {
-    icon: string;
-    iconColor?: string;
-    title: string;
-    subtitle?: string;
-    onPress?: () => void;
-    showArrow?: boolean;
-    rightElement?: React.ReactNode;
-    destructive?: boolean;
-}
-
-const SettingRow: React.FC<SettingRowProps> = ({
-    icon,
-    iconColor = Colors.textSecondary,
-    title,
-    subtitle,
-    onPress,
-    showArrow = true,
-    rightElement,
-    destructive,
-}) => (
-    <TouchableOpacity style={styles.settingRow} onPress={onPress} disabled={!onPress}>
-        <View style={[styles.iconContainer, { backgroundColor: iconColor + '15' }]}>
-            <Ionicons name={icon as any} size={20} color={iconColor} />
-        </View>
-        <View style={styles.settingTextContainer}>
-            <DonnaText style={[styles.settingTitle, destructive && { color: Colors.error }]}>
-                {title}
-            </DonnaText>
-            {subtitle && <DonnaText style={styles.settingSubtitle}>{subtitle}</DonnaText>}
-        </View>
-        {rightElement}
-        {showArrow && !rightElement && (
-            <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
-        )}
-    </TouchableOpacity>
-);
-
 export default function ProfileScreen() {
     const router = useRouter();
-    const { user, signOut, subscriptionTier, isActive, daysRemaining } = useAuth();
+    const { user, signOut } = useAuth();
 
-    // Get display name from Supabase user_metadata (populated by Google OAuth)
     const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name;
     const displayEmail = user?.email;
     const initial = displayName?.[0]?.toUpperCase() || 'J';
-
-    // Generate subscription subtitle from AuthContext data
-    const getSubscriptionSubtitle = () => {
-        if (subscriptionTier === 'pro' && isActive) {
-            return 'Active subscription';
-        }
-        if (daysRemaining > 0) {
-            return `${daysRemaining} days left in trial`;
-        }
-        return 'Trial expired';
-    };
 
     const handleLogout = async () => {
         Alert.alert(
@@ -74,7 +25,11 @@ export default function ProfileScreen() {
                 { text: 'Cancel', style: 'cancel' },
                 {
                     text: 'Sign Out', style: 'destructive', onPress: async () => {
-                        await signOut();
+                        try {
+                            await signOut();
+                        } catch (error) {
+                            console.error('Sign out error:', error);
+                        }
                         router.replace('/login');
                     }
                 },
@@ -91,7 +46,7 @@ export default function ProfileScreen() {
                 <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
                     <Ionicons name="close" size={28} color={Colors.textPrimary} />
                 </TouchableOpacity>
-                <DonnaText style={styles.headerTitle}>Settings</DonnaText>
+                <DonnaText style={styles.headerTitle}>Profile</DonnaText>
                 <View style={styles.placeholder} />
             </View>
 
@@ -99,110 +54,38 @@ export default function ProfileScreen() {
                 {/* Profile Card */}
                 <View style={styles.profileCard}>
                     <View style={styles.avatar}>
-                        <DonnaText style={styles.avatarText}>
-                            {initial}
-                        </DonnaText>
+                        <DonnaText style={styles.avatarText}>{initial}</DonnaText>
                     </View>
                     <View style={styles.profileInfo}>
-                        <DonnaText variant="h2" style={styles.profileName}>
-                            {displayName}
-                        </DonnaText>
-                        <DonnaText style={styles.profileEmail}>
-                            {displayEmail}
-                        </DonnaText>
+                        <DonnaText variant="h2" style={styles.profileName}>{displayName}</DonnaText>
+                        <DonnaText style={styles.profileEmail}>{displayEmail}</DonnaText>
                     </View>
                     <TouchableOpacity style={styles.editButton}>
                         <Ionicons name="pencil" size={16} color={Colors.accentSecondary} />
                     </TouchableOpacity>
                 </View>
 
-                {/* Subscription Banner */}
-                <TouchableOpacity
-                    style={styles.subscriptionBanner}
-                    onPress={() => router.push('/settings/subscription' as any)}
-                >
-                    <View style={styles.subscriptionIcon}>
-                        <Ionicons name="diamond" size={20} color={Colors.accentSecondary} />
-                    </View>
-                    <View style={styles.subscriptionInfo}>
-                        <DonnaText style={styles.subscriptionTitle}>Teeks Pro</DonnaText>
-                        <DonnaText style={styles.subscriptionSubtitle}>{getSubscriptionSubtitle()}</DonnaText>
-                    </View>
-                    <DonnaText style={styles.upgradeText}>
-                        {subscriptionTier === 'pro' && isActive ? 'Manage →' : 'Upgrade →'}
-                    </DonnaText>
-                </TouchableOpacity>
-
-                {/* General Section */}
+                {/* Account Actions */}
                 <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>PREFERENCES</DonnaText>
-                    <View style={styles.sectionCard}>
-                        <SettingRow
-                            icon="settings-outline"
-                            iconColor={Colors.accentSecondary}
-                            title="General"
-                            subtitle="AI behavior & notification settings"
-                            onPress={() => router.push('/settings/general' as any)}
-                        />
-                        <SettingRow
-                            icon="people-outline"
-                            iconColor={Colors.accentPrecision}
-                            title="Contacts"
-                            subtitle="Relationship intelligence & VIPs"
-                            onPress={() => router.push('/settings/contacts' as any)}
-                        />
-                        <SettingRow
-                            icon="brain-outline"
-                            iconColor="#9B59B6"
-                            title="Memory & Preferences"
-                            subtitle="What Donna remembers"
-                            onPress={() => router.push('/settings/memory' as any)}
-                        />
-                    </View>
-                </View>
-
-                {/* Calendar Section */}
-                <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>PRODUCTIVITY</DonnaText>
-                    <View style={styles.sectionCard}>
-                        <SettingRow
-                            icon="calendar-outline"
-                            iconColor={Colors.accentPrecision}
-                            title="Calendar Settings"
-                            subtitle="Working hours, buffers, timezone"
-                            onPress={() => router.push('/settings/calendar' as any)}
-                        />
-                        <SettingRow
-                            icon="mail-outline"
-                            iconColor={Colors.accentSecondary}
-                            title="Digests"
-                            subtitle="Morning briefing & summaries"
-                            onPress={() => router.push('/settings/digests' as any)}
-                        />
-                    </View>
-                </View>
-
-                {/* Data & Privacy Section */}
-                <View style={styles.section}>
-                    <DonnaText style={styles.sectionLabel}>DATA & PRIVACY</DonnaText>
+                    <DonnaText style={styles.sectionLabel}>ACCOUNT</DonnaText>
                     <View style={styles.sectionCard}>
                         <SettingRow
                             icon="shield-checkmark-outline"
                             iconColor={Colors.accentPrecision}
                             title="Data & Privacy"
-                            subtitle="Export, revoke access, delete data"
+                            subtitle="Export, revoke access, delete account"
                             onPress={() => router.push('/settings/privacy' as any)}
                         />
                     </View>
                 </View>
 
-                {/* Sign Out Button */}
+                {/* Sign Out */}
                 <TouchableOpacity style={styles.signOutButton} onPress={handleLogout}>
                     <Ionicons name="log-out-outline" size={20} color={Colors.error} />
                     <DonnaText style={styles.signOutText}>Sign Out</DonnaText>
                 </TouchableOpacity>
 
-                {/* App Version */}
+                {/* Version */}
                 <DonnaText style={styles.versionText}>Teeks v1.0.0 (Build 42)</DonnaText>
             </ScrollView>
         </SafeAreaView>
@@ -245,24 +128,24 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: Spacing.md,
-        padding: Spacing.md,
+        padding: Spacing.lg,
         backgroundColor: Colors.bgElevated,
         borderRadius: Radius.lg,
-        marginBottom: Spacing.md,
+        marginBottom: Spacing.xl,
         borderWidth: 1,
         borderColor: Colors.border,
     },
     avatar: {
-        width: 56,
-        height: 56,
-        borderRadius: 28,
+        width: 64,
+        height: 64,
+        borderRadius: 32,
         backgroundColor: Colors.accentPrecision,
         justifyContent: 'center',
         alignItems: 'center',
     },
     avatarText: {
         color: '#FFF',
-        fontSize: 22,
+        fontSize: 24,
         fontWeight: '600',
     },
     profileInfo: {
@@ -283,42 +166,6 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    subscriptionBanner: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: Spacing.md,
-        padding: Spacing.md,
-        backgroundColor: 'rgba(217, 119, 69, 0.08)',
-        borderRadius: Radius.lg,
-        borderWidth: 1,
-        borderColor: Colors.accentSecondary,
-        marginBottom: Spacing.xl,
-    },
-    subscriptionIcon: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: 'rgba(217, 119, 69, 0.15)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    subscriptionInfo: {
-        flex: 1,
-    },
-    subscriptionTitle: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: Colors.textPrimary,
-    },
-    subscriptionSubtitle: {
-        fontSize: 13,
-        color: Colors.accentSecondary,
-    },
-    upgradeText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: Colors.accentSecondary,
-    },
     section: {
         marginBottom: Spacing.xl,
     },
@@ -336,34 +183,6 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
         borderWidth: 1,
         borderColor: Colors.border,
-    },
-    settingRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: Spacing.md,
-        padding: Spacing.md,
-        borderBottomWidth: 1,
-        borderBottomColor: Colors.border,
-    },
-    iconContainer: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    settingTextContainer: {
-        flex: 1,
-    },
-    settingTitle: {
-        fontSize: 15,
-        fontWeight: '500',
-        color: Colors.textPrimary,
-    },
-    settingSubtitle: {
-        fontSize: 13,
-        color: Colors.textMuted,
-        marginTop: 1,
     },
     signOutButton: {
         flexDirection: 'row',

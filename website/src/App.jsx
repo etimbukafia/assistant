@@ -352,8 +352,8 @@ const App = () => {
             <span className="text-white/60 text-sm">Teeks</span>
           </div>
           <div className="flex items-center gap-6">
-            <a href="/terms" className="text-white/40 text-xs hover:text-white/60 transition-colors">Terms of Service</a>
-            <a href="/privacy" className="text-white/40 text-xs hover:text-white/60 transition-colors">Privacy Policy</a>
+            {/* <a href="/terms" className="text-white/40 text-xs hover:text-white/60 transition-colors">Terms of Service</a> */}
+            {/* <a href="/privacy" className="text-white/40 text-xs hover:text-white/60 transition-colors">Privacy Policy</a> */}
             <p className="text-white/30 text-xs">
               © 2025 Teeks. All rights reserved.
             </p>

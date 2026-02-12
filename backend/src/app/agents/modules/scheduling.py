@@ -159,7 +159,7 @@ class SchedulingModule(BaseModule):
                     "timezone": "UTC"
                 }
 
-            calendar_service = CalendarService(db)
+            calendar_service = CalendarService(db, user_id=user_id)
 
             # Parse dates
             start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
@@ -645,7 +645,7 @@ class SchedulingModule(BaseModule):
             db.refresh(calendar_event)
 
             # Create in Google Calendar
-            calendar_service = CalendarService(db)
+            calendar_service = CalendarService(db, user_id=user_id)
 
             import asyncio
             

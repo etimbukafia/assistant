@@ -285,7 +285,7 @@ class ChatToolRegistry:
             else:
                 return ToolResult(success=False, error=f"No handler for tool: {name}")
         except Exception as e:
-            logger.error(f"Error executing tool {name}: {e}")
+            logger.error(f"Error executing tool {name}: {e}", exc_info=True)
             return ToolResult(success=False, error=str(e))
     
     # =========================================================================
@@ -304,16 +304,20 @@ class ChatToolRegistry:
 
         # Parse simple query syntax
         if "from:" in query:
-            sender = query.split("from:")[1].split()[0]
-            safe_sender = escape_like(sender)
-            db_query = db_query.filter(Message.sender.ilike(f"%{safe_sender}%", escape="\\"))
-            query = query.replace(f"from:{sender}", "").strip()
-        
+            from_parts = query.split("from:")[1].split()
+            if from_parts:
+                sender = from_parts[0]
+                safe_sender = escape_like(sender)
+                db_query = db_query.filter(Message.sender.ilike(f"%{safe_sender}%", escape="\\"))
+                query = query.replace(f"from:{sender}", "").strip()
+
         if "subject:" in query:
-            subject = query.split("subject:")[1].split()[0]
-            safe_subject = escape_like(subject)
-            db_query = db_query.filter(Message.subject.ilike(f"%{safe_subject}%", escape="\\"))
-            query = query.replace(f"subject:{subject}", "").strip()
+            subject_parts = query.split("subject:")[1].split()
+            if subject_parts:
+                subject = subject_parts[0]
+                safe_subject = escape_like(subject)
+                db_query = db_query.filter(Message.subject.ilike(f"%{safe_subject}%", escape="\\"))
+                query = query.replace(f"subject:{subject}", "").strip()
         
         # Remaining text is keyword search
         if query.strip():

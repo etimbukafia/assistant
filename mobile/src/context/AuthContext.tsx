@@ -15,6 +15,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../utils/supabase';
+import { Platform } from 'react-native';
 import type { Session, User } from '@supabase/supabase-js';
 
 // Required for OAuth redirect handling
@@ -27,6 +28,8 @@ WebBrowser.maybeCompleteAuthSession();
 interface ProfileState {
     profileLoaded: boolean;
     settingsError: boolean;
+    accountConflict: boolean; // True if email exists with different user_id
+    accountConflictMessage: string | null;
     // Subscription
     isActive: boolean;
     subscriptionTier: string;
@@ -44,6 +47,7 @@ type ProfileAction =
     | { type: 'LOADING' }
     | { type: 'LOADED'; payload: Partial<ProfileState> }
     | { type: 'ERROR' }
+    | { type: 'CONFLICT'; message: string }
     | { type: 'RESET' };
 
 interface AuthContextType {
@@ -57,6 +61,9 @@ interface AuthContextType {
     subscriptionTier: string;
     daysRemaining: number;
     settingsError: boolean;
+    // Account conflict state
+    accountConflict: boolean;
+    accountConflictMessage: string | null;
     // Personalization & Onboarding
     assistantName: string;
     onboardingCompleted: boolean;
@@ -77,6 +84,8 @@ interface AuthContextType {
 const initialProfileState: ProfileState = {
     profileLoaded: false,
     settingsError: false,
+    accountConflict: false,
+    accountConflictMessage: null,
     isActive: false,
     subscriptionTier: 'trial',
     daysRemaining: 0,
@@ -90,16 +99,26 @@ const initialProfileState: ProfileState = {
 function profileReducer(state: ProfileState, action: ProfileAction): ProfileState {
     switch (action.type) {
         case 'LOADING':
-            return { ...state, profileLoaded: false };
+            return { ...state, profileLoaded: false, accountConflict: false, accountConflictMessage: null };
         case 'LOADED':
             return {
                 ...state,
                 ...action.payload,
                 profileLoaded: true,
                 settingsError: false,
+                accountConflict: false,
+                accountConflictMessage: null,
             };
         case 'ERROR':
             return { ...state, profileLoaded: true, settingsError: true };
+        case 'CONFLICT':
+            return {
+                ...state,
+                profileLoaded: true,
+                settingsError: false,
+                accountConflict: true,
+                accountConflictMessage: action.message,
+            };
         case 'RESET':
             return initialProfileState;
         default:
@@ -137,9 +156,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
             // Dynamically import api to avoid circular dependencies if any
             const { api } = require('../services/api');
-            const response = await api.get('/settings', {
-                signal: abortControllerRef.current.signal
+            // Fetch latest settings from backend
+            const response = await api.get('/settings/', {
+                signal: abortControllerRef.current.signal,
+                validateStatus: (status: number) => status < 500 // Don't throw on 404
             });
+
+            // Check for 409 Conflict (account exists with different user_id)
+            if (response.status === 409) {
+                const errorData = response.data;
+                const message = errorData?.detail?.message ||
+                    'An account with this email already exists. Please contact support.';
+                dispatch({ type: 'CONFLICT', message });
+                return;
+            }
+
             const settings = response.data;
 
             // Single dispatch updates all profile state at once (reduces re-renders)
@@ -182,6 +213,70 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setSession(session);
                 setUser(session?.user ?? null);
                 setIsLoading(false);
+
+                // On web/PWA: handle OAuth redirect
+                if (_event === 'SIGNED_IN' && Platform.OS === 'web' && typeof window !== 'undefined') {
+                    // Check for provider token in URL hash (from Google OAuth)
+                    if (window.location.hash) {
+                        const hashParams = new URLSearchParams(window.location.hash.substring(1));
+                        const providerToken = hashParams.get('provider_token');
+                        const providerRefreshToken = hashParams.get('provider_refresh_token');
+
+                        // Verify we received the required tokens
+                        if (__DEV__) {
+                            console.log('OAuth callback received (web)');
+                        }
+
+                        // Provider token is REQUIRED to connect Google services
+                        if (!providerToken) {
+                            console.error('No provider_token received from OAuth (web)');
+                            const { Alert } = require('react-native');
+                            Alert.alert(
+                                'Connection Failed',
+                                'Google did not return access to Gmail/Calendar. Please try again and grant all permissions.',
+                                [{ text: 'OK' }]
+                            );
+                            await supabase.auth.signOut();
+                        } else if (session?.user?.email) {
+                            // Connect Google services
+                            try {
+                                const { connectGmail } = require('../services/gmail');
+                                await connectGmail({
+                                    provider_token: providerToken,
+                                    provider_refresh_token: providerRefreshToken || undefined,
+                                    email: session.user.email,
+                                });
+                                console.log('Google connected successfully (web)');
+                            } catch (gmailError: any) {
+                                console.error('Failed to connect Google (web):', gmailError);
+                                // Sign out to clean up partial state - can't proceed without Google connection
+                                await supabase.auth.signOut();
+
+                                // Show appropriate error message
+                                const { Alert } = require('react-native');
+                                const errorDetail = gmailError?.response?.data?.detail;
+                                if (errorDetail?.error === 'missing_scopes') {
+                                    Alert.alert(
+                                        'Permissions Required',
+                                        `To use Teeks, please grant all requested permissions:\n\n• ${errorDetail.missing_permissions?.join('\n• ')}`,
+                                        [{ text: 'OK' }]
+                                    );
+                                } else {
+                                    Alert.alert(
+                                        'Connection Failed',
+                                        'Unable to connect your Google account. Please try again.',
+                                        [{ text: 'OK' }]
+                                    );
+                                }
+                            }
+                        }
+
+                        // Always clean tokens from URL hash after OAuth
+                        if (window.location.hash) {
+                            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                        }
+                    }
+                }
             }
         );
 
@@ -219,28 +314,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
      */
     const signInWithGoogle = useCallback(async (): Promise<boolean> => {
         try {
-            // Create redirect URI for OAuth callback
-            // NOTE: In Expo Go, this generates exp://... which Expo Go can intercept.
-            // For production builds, it uses teeks://...
-            // BOTH must be whitelisted in Supabase dashboard -> Authentication -> URL Configuration
+            if (Platform.OS === 'web') {
+                // Web/PWA: Use full-page redirect instead of popup.
+                // After Google OAuth, Supabase redirects back to the app URL
+                // with tokens in the hash. detectSessionInUrl (enabled for web
+                // in supabase.ts) auto-extracts them and triggers onAuthStateChange.
+                const { data, error } = await supabase.auth.signInWithOAuth({
+                    provider: 'google',
+                    options: {
+                        redirectTo: window.location.origin,
+                        scopes: 'email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
+                        queryParams: {
+                            access_type: 'offline',
+                            prompt: 'consent',
+                        },
+                    },
+                });
+
+                if (error) throw error;
+                // signInWithOAuth on web will redirect the page automatically
+                return true;
+            }
+
+            // Native: Use expo-auth-session popup flow
             const redirectUri = makeRedirectUri({
-                // Don't specify scheme in dev - let Expo pick the right one
-                // scheme: 'teeks',  // Uncomment for production build
                 path: 'auth/callback',
             });
-            console.log('=== IMPORTANT: Add this redirect URI to Supabase Dashboard ===');
             console.log('Redirect URI:', redirectUri);
-            console.log('============================================================');
 
-            // Initiate OAuth flow
             const { data, error } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
                     redirectTo: redirectUri,
-                    skipBrowserRedirect: true, // We'll handle the redirect manually
+                    skipBrowserRedirect: true,
+                    scopes: 'email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events',
                     queryParams: {
-                        access_type: 'offline', // Request refresh token
-                        prompt: 'consent', // Always show consent screen
+                        access_type: 'offline',
+                        prompt: 'consent',
                     },
                 },
             });
@@ -248,24 +358,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (error) throw error;
 
             if (data?.url) {
-                // Open browser for OAuth
                 const result = await WebBrowser.openAuthSessionAsync(
                     data.url,
                     redirectUri
                 );
 
-                // User cancelled the auth flow
                 if (result.type === 'cancel' || result.type === 'dismiss') {
                     return false;
                 }
 
                 if (result.type === 'success' && result.url) {
-                    // Extract tokens from URL and set session
                     const url = new URL(result.url);
                     const params = new URLSearchParams(url.hash.substring(1));
 
                     const accessToken = params.get('access_token');
                     const refreshToken = params.get('refresh_token');
+                    const providerToken = params.get('provider_token');
+                    const providerRefreshToken = params.get('provider_refresh_token');
 
                     if (accessToken) {
                         const { error: sessionError } = await supabase.auth.setSession({
@@ -274,6 +383,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         });
 
                         if (sessionError) throw sessionError;
+
+                        if (__DEV__) {
+                            console.log('OAuth callback received (native)');
+                        }
+
+                        // Provider token is REQUIRED to connect Google services
+                        if (!providerToken) {
+                            console.error('No provider_token received from OAuth');
+                            await supabase.auth.signOut();
+                            throw new Error('Google did not return access to Gmail/Calendar. Please try again and grant all permissions.');
+                        }
+
+                        // Connect Google services
+                        try {
+                            const { connectGmail } = require('../services/gmail');
+                            const { data: { session: newSession } } = await supabase.auth.getSession();
+                            const email = newSession?.user?.email;
+                            if (email) {
+                                await connectGmail({
+                                    provider_token: providerToken,
+                                    provider_refresh_token: providerRefreshToken || undefined,
+                                    email: email,
+                                });
+                                console.log('Google connected successfully');
+                            }
+                        } catch (gmailError: any) {
+                            console.error('Failed to connect Google:', gmailError);
+                            // Sign out to clean up partial state - can't proceed without Google connection
+                            await supabase.auth.signOut();
+                            // Re-throw so UI can handle it
+                            throw gmailError;
+                        }
+
                         return true;
                     }
                 }

@@ -62,6 +62,8 @@ app.add_middleware(CloudflareGateMiddleware)
 @app.on_event("startup")
 def startup_event():
     setup_logging(level="INFO", structured=False)
+    from app.infra.config import get_settings
+    print(f"Startup Config: ENV={get_settings().ENV}")
     init_db()
     schedule_cleanup_job_if_needed()
     schedule_chat_cleanup_job_if_needed()
@@ -175,24 +177,24 @@ def schedule_gmail_watch_renewal_if_needed():
     finally:
         db.close()
 
-# Include Routers
-app.include_router(auth.router)
-app.include_router(messages.router)
-app.include_router(tasks.router)
-app.include_router(settings.router)
-app.include_router(digests.router)
-app.include_router(scheduling.router)
-app.include_router(calendar.router)
-app.include_router(memory.router)
-app.include_router(gdpr.router)
-app.include_router(system.router)
-app.include_router(chat.router)
-app.include_router(subscription.router)
-app.include_router(billing.router)
-app.include_router(billing_router)  # Polar webhooks
-app.include_router(webhooks.router)  # Gmail Pub/Sub
-app.include_router(notifications.router)
-app.include_router(onboarding.router)
+# Include Routers under /v1 prefix
+app.include_router(auth.router, prefix="/v1")
+app.include_router(messages.router, prefix="/v1")
+app.include_router(tasks.router, prefix="/v1")
+app.include_router(settings.router, prefix="/v1")
+app.include_router(digests.router, prefix="/v1")
+app.include_router(scheduling.router, prefix="/v1")
+app.include_router(calendar.router, prefix="/v1")
+app.include_router(memory.router, prefix="/v1")
+app.include_router(gdpr.router, prefix="/v1")
+app.include_router(system.router, prefix="/v1")
+app.include_router(chat.router, prefix="/v1")
+app.include_router(subscription.router, prefix="/v1")
+app.include_router(billing.router, prefix="/v1")
+app.include_router(billing_router, prefix="/v1")  # Polar webhooks
+app.include_router(webhooks.router, prefix="/v1")  # Gmail Pub/Sub
+app.include_router(notifications.router, prefix="/v1")
+app.include_router(onboarding.router, prefix="/v1")
 
 
 @app.get("/")

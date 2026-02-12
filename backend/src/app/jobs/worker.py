@@ -87,20 +87,21 @@ async def handle_process_email_batch(user_id: str, tasks: List[Dict[str, Any]]):
             logger.warning(f"No valid message IDs to process for user {user_id}")
             return
 
-        # Verify ownership: Only process messages that actually belong to this user
-        # This prevents cross-user data leakage if queue grouping has bugs
+        # Verify ownership and skip already-processed messages (idempotency)
+        # This prevents cross-user data leakage and duplicate processing on retries
         verified_messages = db.query(Message.id).filter(
             Message.id.in_(candidate_ids),
-            Message.user_id == user_id  # Security: explicit ownership check
+            Message.user_id == user_id,  # Security: explicit ownership check
+            Message.processed == False  # Idempotency: skip already processed
         ).all()
         message_ids = [m.id for m in verified_messages]
 
-        # Log if any messages were rejected
-        rejected_count = len(candidate_ids) - len(message_ids)
-        if rejected_count > 0:
-            logger.error(
-                f"SECURITY: Rejected {rejected_count} messages that don't belong to user {user_id}. "
-                f"This may indicate a queue service bug or attack attempt."
+        # Log if any messages were skipped (could be already processed or wrong user)
+        skipped_count = len(candidate_ids) - len(message_ids)
+        if skipped_count > 0:
+            logger.info(
+                f"Skipped {skipped_count} messages for user {user_id} "
+                f"(already processed or ownership mismatch)"
             )
 
         if not message_ids:
@@ -1286,17 +1287,28 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
             _update_message_failed(db, assistant_message_id, "Session not found")
             return
 
+        # Idempotency check: skip if already processed (retry safety)
+        existing_msg = db.query(ChatMessage).filter(
+            ChatMessage.id == assistant_message_id
+        ).first()
+        if existing_msg and existing_msg.message_metadata:
+            existing_status = existing_msg.message_metadata.get("status")
+            if existing_status == "complete":
+                logger.info(f"Chat message {assistant_message_id} already processed, skipping (idempotent)")
+                return
+
         # Process through orchestrator
         orchestrator = ChatOrchestrator(db, user_id)
         result = await orchestrator.process_message(session, content)
 
-        # Get the placeholder message
+        # Get the placeholder message - verify it belongs to this session
         assistant_msg = db.query(ChatMessage).filter(
-            ChatMessage.id == assistant_message_id
+            ChatMessage.id == assistant_message_id,
+            ChatMessage.session_id == session_id
         ).first()
 
         if not assistant_msg:
-            logger.error(f"Assistant message {assistant_message_id} not found")
+            logger.error(f"Assistant message {assistant_message_id} not found for session {session_id}")
             return
 
         # Update with actual response
@@ -1375,17 +1387,20 @@ async def handle_cleanup_stuck_chat_messages(task_id: int, task_type: str, paylo
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=BACKGROUND_TIMEOUT_MINUTES)
 
-        # Find all assistant messages with role='assistant'
-        # Filter status in Python for SQLite compatibility (used in tests)
+        # Find recent assistant messages that could be stuck
+        # Only look at messages created in the last 24 hours to avoid scanning entire table
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         assistant_messages = db.query(ChatMessage).filter(
-            ChatMessage.role == "assistant"
-        ).all()
+            ChatMessage.role == "assistant",
+            ChatMessage.created_at > recent_cutoff,
+            ChatMessage.created_at < cutoff
+        ).limit(500).all()
 
-        # Filter for stuck processing messages older than cutoff
+        # Filter status in Python for SQLite compatibility (used in tests)
         expired_count = 0
         for msg in assistant_messages:
             metadata = msg.message_metadata or {}
-            if (metadata.get("status") == "processing" and msg.created_at < cutoff):
+            if metadata.get("status") == "processing":
                 msg.content = "I apologize, my response timed out. Please try again."
                 msg.message_metadata = {
                     **metadata,

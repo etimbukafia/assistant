@@ -21,8 +21,8 @@ from app.security.security_logger import log_injection_attempt
 
 logger = logging.getLogger(__name__)
 
-# Prompts directory
-PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+# Prompts directory (backend/prompts/)
+PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
 
 def _load_prompt(name: str) -> str:
@@ -82,6 +82,22 @@ class ChatOrchestrator:
         Returns:
             Dict with 'response', 'pending_actions', 'state_updates'
         """
+        try:
+            return await self._process_message_internal(session, user_message)
+        except Exception as e:
+            logger.error(f"Unexpected error in process_message: {e}", exc_info=True)
+            return {
+                "response": "I apologize, but I encountered an unexpected error. Please try again.",
+                "pending_actions": [],
+                "state": {}
+            }
+
+    async def _process_message_internal(
+        self,
+        session: ChatSession,
+        user_message: str
+    ) -> Dict[str, Any]:
+        """Internal message processing with full error context."""
         # Security: Check for injection patterns in user message
         injection_patterns = detect_injection_patterns(user_message)
         if injection_patterns:
@@ -152,8 +168,13 @@ class ChatOrchestrator:
             tool_results = []
             for tool_call in tool_calls:
                 tool_name = tool_call.get("function", {}).get("name")
-                tool_args = json.loads(tool_call.get("function", {}).get("arguments", "{}"))
-                
+                args_str = tool_call.get("function", {}).get("arguments", "{}")
+                try:
+                    tool_args = json.loads(args_str)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse tool arguments: {e}, raw: {args_str[:100]}")
+                    tool_args = {}
+
                 result = self.tool_registry.execute_tool(tool_name, tool_args)
                 tool_results.append(result)
                 

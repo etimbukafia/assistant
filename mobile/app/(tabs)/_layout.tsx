@@ -149,7 +149,6 @@ export default function TabLayout() {
             headerRight: () => (
               <View style={{ flexDirection: 'row', marginRight: 16, gap: 12, alignItems: 'center' }}>
                 <TrialBadge />
-                <TouchableOpacity><Ionicons name="search" size={22} color={Colors.textPrimary} /></TouchableOpacity>
                 <TouchableOpacity onPress={() => router.push('/notifications' as any)}>
                   <Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} />
                   {unreadCount > 0 && (

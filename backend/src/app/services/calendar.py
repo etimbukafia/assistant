@@ -63,14 +63,16 @@ class CalendarService:
     Uses the same OAuth credentials stored for Gmail.
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, user_id: Optional[str] = None):
         """
         Initialize CalendarService with database session.
 
         Args:
             db: SQLAlchemy database session for loading credentials
+            user_id: Authenticated user's ID for credential isolation
         """
         self.db = db
+        self.user_id = user_id
         self.service = None
 
     def _load_credentials(self, email: Optional[str] = None) -> Optional[Credentials]:
@@ -86,12 +88,13 @@ class CalendarService:
         from app.data.models import GmailAccount
         import json
 
-        # Get account from database
+        # Get account from database - always filter by user_id when available
         query = self.db.query(GmailAccount)
+        if self.user_id:
+            query = query.filter(GmailAccount.user_id == self.user_id)
         if email:
-            account = query.filter(GmailAccount.email == email).first()
-        else:
-            account = query.first()
+            query = query.filter(GmailAccount.email == email)
+        account = query.first()
 
         if not account:
             logger.warning("No Gmail account found in database")
@@ -218,9 +221,14 @@ class CalendarService:
             busy_slots = []
             for cal_id, cal_data in result.get('calendars', {}).items():
                 for busy in cal_data.get('busy', []):
+                    busy_start = busy.get('start')
+                    busy_end = busy.get('end')
+                    if not busy_start or not busy_end:
+                        logger.warning(f"Skipping busy slot with missing start/end for calendar {cal_id}")
+                        continue
                     busy_slots.append(BusySlot(
-                        start=datetime.fromisoformat(busy['start'].replace('Z', '+00:00')),
-                        end=datetime.fromisoformat(busy['end'].replace('Z', '+00:00')),
+                        start=datetime.fromisoformat(busy_start.replace('Z', '+00:00')),
+                        end=datetime.fromisoformat(busy_end.replace('Z', '+00:00')),
                         calendar_id=cal_id
                     ))
 
@@ -531,6 +539,16 @@ class CalendarService:
         start = event.get('start', {})
         end = event.get('end', {})
 
+        # Handle dateTime (timed events) or date (all-day events)
+        start_dt_str = start.get('dateTime') or start.get('date')
+        end_dt_str = end.get('dateTime') or end.get('date')
+
+        if not start_dt_str or not end_dt_str:
+            raise ValueError(f"Event {event.get('id')} missing start/end dateTime")
+
+        start_time = datetime.fromisoformat(start_dt_str.replace('Z', '+00:00'))
+        end_time = datetime.fromisoformat(end_dt_str.replace('Z', '+00:00'))
+
         attendees = [
             {
                 'email': att.get('email'),
@@ -545,8 +563,8 @@ class CalendarService:
             'calendar_id': calendar_id,
             'title': event.get('summary', 'No Title'),
             'description': event.get('description'),
-            'start_time': datetime.fromisoformat(start.get('dateTime').replace('Z', '+00:00')),
-            'end_time': datetime.fromisoformat(end.get('dateTime').replace('Z', '+00:00')),
+            'start_time': start_time,
+            'end_time': end_time,
             'timezone': start.get('timeZone', 'UTC'),
             'location': event.get('location'),
             'organizer': event.get('organizer', {}).get('email'),
