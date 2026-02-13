@@ -14,8 +14,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 
+import logging
 from app.security.auth import get_current_user, get_db_for_user, require_active_subscription, require_credits_available, AuthenticatedUser as User
 from app.chat.service import ChatService, ProcessingStatus
+
+logger = logging.getLogger(__name__)
 
 
 # Simple in-memory rate limiter for chat messages
@@ -99,6 +102,7 @@ async def create_session(
     db: Session = Depends(get_db_for_user)
 ):
     """Create a new chat session."""
+    logger.info(f"Creating chat session: type={request.session_type}, user={user.user_id}")
     service = ChatService(db, user.user_id)
     
     # Extract first name from display_name for personalization
@@ -107,7 +111,7 @@ async def create_session(
         first_name = user.display_name.split()[0]
     
     session = service.create_session(request.session_type, user_first_name=first_name)
-
+    logger.info(f"Chat session created: id={session.id}, type={session.session_type}, user={user.user_id}")
     
     return SessionResponse(
         id=session.id,
@@ -239,17 +243,24 @@ async def send_message(
     # Rate limit check
     _check_rate_limit(user.user_id)
 
+    logger.info(f"Chat message: session={session_id}, user={user.user_id}, length={len(request.content)}")
     service = ChatService(db, user.user_id)
 
     # Verify session exists
     session = service.get_session(session_id)
     if not session:
+        logger.warning(f"Chat session not found: session={session_id}, user={user.user_id}")
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Process message
-    result = await service.send_message(session_id, request.content)
+    try:
+        result = await service.send_message(session_id, request.content)
+    except Exception as e:
+        logger.error(f"Chat send_message failed: session={session_id}, user={user.user_id}, error={e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to process message")
 
     if result.status == ProcessingStatus.FAILED:
+        logger.error(f"Chat processing failed: session={session_id}, error={result.error}")
         raise HTTPException(status_code=500, detail=result.error or "Failed to process message")
 
     # Return unified response format
@@ -261,10 +272,12 @@ async def send_message(
     if result.status == ProcessingStatus.PROCESSING:
         # Async path - return job_id for polling
         response["job_id"] = result.job_id
+        logger.info(f"Chat async: session={session_id}, job_id={result.job_id}")
     else:
         # Sync path - return response immediately
         response["response"] = result.response
         response["pending_actions"] = result.pending_actions or []
+        logger.info(f"Chat sync complete: session={session_id}, response_length={len(result.response or '')}")
 
     return response
 

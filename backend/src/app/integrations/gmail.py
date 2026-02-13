@@ -156,7 +156,7 @@ class GmailClient:
         Args:
             email: User's Gmail address
         """
-        from .models import GmailAccount
+        from app.data.models import GmailAccount
 
         # Encrypt tokens before storing
         encrypted_access_token = encrypt_token(self.creds.token)
@@ -226,7 +226,7 @@ class GmailClient:
         Returns:
             bool: True if loaded successfully
         """
-        from .models import GmailAccount
+        from app.data.models import GmailAccount
 
         # Get account from database, filtered by user_id
         query = self.db.query(GmailAccount)

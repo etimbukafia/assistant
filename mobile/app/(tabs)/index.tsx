@@ -18,7 +18,7 @@ type FilterType = 'all' | 'needs_reply' | 'today';
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { isActive, subscriptionTier, initialSyncCompleted, refreshProfile } = useAuth();
+  const { isActive, subscriptionTier, initialSyncCompleted, initialSyncFailed, refreshProfile } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
   const [focusMode, setFocusMode] = useState(false);
   const [processingActive, setProcessingActive] = useState(false);
@@ -26,16 +26,16 @@ export default function DashboardScreen() {
   // Fetch messages
   const { data: messagesResponse, isLoading, isRefetching, refetch } = useMessages();
 
-  // Poll for initial sync completion — stops once done
+  // Poll for initial sync completion — stops once done or failed
   useEffect(() => {
-    if (!isActive || initialSyncCompleted) return;
+    if (!isActive || initialSyncCompleted || initialSyncFailed) return;
 
     const interval = setInterval(() => {
       refreshProfile();
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isActive, initialSyncCompleted, refreshProfile]);
+  }, [isActive, initialSyncCompleted, initialSyncFailed, refreshProfile]);
 
   // When sync completes, auto-refresh messages and start processing poll
   const prevSyncCompleted = useRef(initialSyncCompleted);
@@ -155,12 +155,23 @@ export default function DashboardScreen() {
       )}
 
       {/* Initial Sync Progress Banner (When active and syncing) */}
-      {isActive && !initialSyncCompleted && (
+      {isActive && !initialSyncCompleted && !initialSyncFailed && (
         <View style={styles.syncBanner}>
           <ActivityIndicator size="small" color={Colors.accentPrimary} />
           <View style={styles.syncContent}>
             <DonnaText style={styles.syncTitle}>Syncing your world...</DonnaText>
             <DonnaText style={styles.syncDesc}>Processing today's emails.</DonnaText>
+          </View>
+        </View>
+      )}
+
+      {/* Initial Sync Failed Banner */}
+      {isActive && !initialSyncCompleted && initialSyncFailed && (
+        <View style={[styles.syncBanner, styles.syncFailedBanner]}>
+          <Ionicons name="alert-circle" size={24} color={Colors.accentPrimary} />
+          <View style={styles.syncContent}>
+            <DonnaText style={styles.syncTitle}>Initial sync didn't complete</DonnaText>
+            <DonnaText style={styles.syncDesc}>Some earlier emails may be missing, but new emails will continue to appear as they arrive.</DonnaText>
           </View>
         </View>
       )}
@@ -352,6 +363,10 @@ const styles = StyleSheet.create({
   },
   syncContent: {
     flex: 1,
+  },
+  syncFailedBanner: {
+    borderColor: 'rgba(163, 64, 52, 0.2)',
+    backgroundColor: 'rgba(163, 64, 52, 0.06)',
   },
   syncTitle: {
     fontWeight: '600',

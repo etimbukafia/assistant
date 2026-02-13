@@ -93,6 +93,7 @@ class UserSettingsResponse(BaseModel):
 
     # Integration status
     initial_sync_completed: bool = False
+    initial_sync_failed: bool = False
     gmail_connected: bool = False
     calendar_connected: bool = False
     created_at: datetime

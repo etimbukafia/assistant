@@ -40,7 +40,17 @@ export default function SubscriptionSelectionScreen() {
             if (selectedPlan === 'trial') {
                 console.log('[SUB] Calling activateTrial...');
                 await activateTrial();
-                console.log('[SUB] Trial activated, refreshing profile...');
+                console.log('[SUB] Trial activated, triggering initial sync...');
+                // Trigger email backfill now that subscription is active
+                try {
+                    const { triggerInitialSync } = require('../../src/services/billing');
+                    await triggerInitialSync();
+                    console.log('[SUB] Initial sync triggered successfully');
+                } catch (syncError: any) {
+                    // Non-fatal: sync can be retried from settings
+                    console.warn('[SUB] Initial sync trigger failed:', syncError?.message);
+                }
+                console.log('[SUB] Refreshing profile...');
                 await refreshProfile();
                 console.log('[SUB] Profile refreshed, navigating to setup...');
                 router.replace('/auth/setup' as any);

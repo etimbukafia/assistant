@@ -23,6 +23,8 @@ import {
   Animated,
   Dimensions,
   Pressable,
+  NativeSyntheticEvent,
+  TextInputKeyPressEventData,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -36,6 +38,7 @@ import { DonnaText } from '@/src/components/ui/DonnaText';
 import {
   useChatSession,
   useChatSessions,
+  useCreateSession,
   useApproveAction,
   useRejectAction,
   useAddMessageToCache,
@@ -47,6 +50,7 @@ import {
   ChatMessage,
   PendingAction,
   sendMessageWithPolling,
+  SessionType,
 } from '@/src/services/chat';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -243,6 +247,7 @@ interface SessionDrawerProps {
   sessions: ChatSession[];
   currentSessionId: string;
   onSelectSession: (sessionId: string) => void;
+  onNewChat: (type: SessionType) => void;
 }
 
 const SessionDrawer: React.FC<SessionDrawerProps> = ({
@@ -251,6 +256,7 @@ const SessionDrawer: React.FC<SessionDrawerProps> = ({
   sessions,
   currentSessionId,
   onSelectSession,
+  onNewChat,
 }) => {
   const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -301,6 +307,23 @@ const SessionDrawer: React.FC<SessionDrawerProps> = ({
               <DonnaText style={styles.drawerTitle}>Sessions</DonnaText>
               <TouchableOpacity onPress={onClose} style={styles.drawerCloseBtn}>
                 <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            {/* New Chat Buttons */}
+            <View style={styles.drawerNewChatRow}>
+              <TouchableOpacity
+                style={[styles.drawerNewChatBtn, { borderColor: Colors.accentSecondary }]}
+                onPress={() => { onNewChat('command'); onClose(); }}
+              >
+                <Ionicons name="flash" size={16} color={Colors.accentSecondary} />
+                <DonnaText style={[styles.drawerNewChatText, { color: Colors.accentSecondary }]}>Action</DonnaText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.drawerNewChatBtn, { borderColor: Colors.success }]}
+                onPress={() => { onNewChat('reflection'); onClose(); }}
+              >
+                <Ionicons name="leaf" size={16} color={Colors.success} />
+                <DonnaText style={[styles.drawerNewChatText, { color: Colors.success }]}>Reflection</DonnaText>
               </TouchableOpacity>
             </View>
             <FlashList<ChatSession>
@@ -380,6 +403,7 @@ export default function ChatSessionScreen() {
   // Queries
   const { data: sessionData, isLoading } = useChatSession(sessionId || null);
   const { data: sessionsData } = useChatSessions({});
+  const createSession = useCreateSession();
   const approveAction = useApproveAction(sessionId || '');
   const rejectAction = useRejectAction(sessionId || '');
 
@@ -414,6 +438,7 @@ export default function ChatSessionScreen() {
     const text = inputText.trim();
     if (!text || !sessionId || isSending) return;
 
+    console.log(`[Chat] Sending message to session ${sessionId}, length=${text.length}`);
     setInputText('');
     setIsSending(true);
 
@@ -456,10 +481,11 @@ export default function ChatSessionScreen() {
       onComplete: (response, pendingActions) => {
         // Race condition check: only update if still on same session
         if (!isMounted || currentSessionRef.current !== targetSessionId) {
-          console.log('Ignoring response for different session');
+          console.log('[Chat] Ignoring response for different session');
           return;
         }
 
+        console.log(`[Chat] Response received for session ${targetSessionId}, length=${response.length}, actions=${pendingActions.length}`);
         setLocalMessages((prev) =>
           prev.map((m) =>
             m.id === placeholderId
@@ -467,8 +493,9 @@ export default function ChatSessionScreen() {
               : m
           )
         );
-        // Invalidate to get updated pending actions
+        // Invalidate to get updated pending actions + title
         queryClient.invalidateQueries({ queryKey: chatKeys.session(targetSessionId) });
+        queryClient.invalidateQueries({ queryKey: chatKeys.sessions() });
         setIsTyping(false);
         setIsSending(false);
       },
@@ -477,6 +504,7 @@ export default function ChatSessionScreen() {
           return;
         }
 
+        console.error(`[Chat] Error in session ${targetSessionId}:`, error);
         setLocalMessages((prev) =>
           prev.map((m) =>
             m.id === placeholderId
@@ -497,6 +525,7 @@ export default function ChatSessionScreen() {
           return;
         }
 
+        console.log(`[Chat] Processing async job=${jobId} message=${messageId} in session ${targetSessionId}`);
         setLocalMessages((prev) =>
           prev.map((m) =>
             m.id === placeholderId
@@ -519,12 +548,39 @@ export default function ChatSessionScreen() {
     }
     hardTimeoutRef.current = setTimeout(() => {
       if (isMounted) {
+        console.warn(`[Chat] Hard timeout reached for session ${targetSessionId}`);
         setIsTyping(false);
         setIsSending(false);
       }
       hardTimeoutRef.current = null;
     }, 180000);
   }, [inputText, sessionId, isSending, queryClient]);
+
+  // Handle Enter key on web
+  const handleKeyPress = useCallback(
+    (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+      if (Platform.OS === 'web' && e.nativeEvent.key === 'Enter' && !(e as any).shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    },
+    [handleSend]
+  );
+
+  // Handle creating new chat from drawer
+  const handleNewChat = useCallback(
+    async (type: SessionType) => {
+      try {
+        console.log(`[Chat] Creating new ${type} session from drawer`);
+        const session = await createSession.mutateAsync(type);
+        console.log(`[Chat] Created session ${session.id}, navigating`);
+        router.replace(`/chat/${session.id}`);
+      } catch (error) {
+        console.error('[Chat] Failed to create session from drawer:', error);
+      }
+    },
+    [createSession, router]
+  );
 
   // Handle action approval
   const handleApprove = useCallback(
@@ -593,6 +649,7 @@ export default function ChatSessionScreen() {
         sessions={allSessions}
         currentSessionId={sessionId || ''}
         onSelectSession={handleSelectSession}
+        onNewChat={handleNewChat}
       />
 
       {/* Header */}
@@ -600,15 +657,8 @@ export default function ChatSessionScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.headerCenter}
-          onPress={() => setIsDrawerOpen(true)}
-          activeOpacity={0.7}
-        >
-          <View style={styles.headerTitleRow}>
-            <DonnaText style={styles.headerTitle}>Donna</DonnaText>
-            <Ionicons name="chevron-down" size={16} color={Colors.textMuted} />
-          </View>
+        <View style={styles.headerCenter}>
+          <DonnaText style={styles.headerTitle}>Donna</DonnaText>
           <View style={styles.headerSubtitleRow}>
             <Ionicons
               name={isReflection ? 'leaf' : 'flash'}
@@ -626,7 +676,7 @@ export default function ChatSessionScreen() {
               </>
             )}
           </View>
-        </TouchableOpacity>
+        </View>
         <TouchableOpacity
           style={styles.menuButton}
           onPress={() => setIsDrawerOpen(true)}
@@ -667,6 +717,9 @@ export default function ChatSessionScreen() {
             multiline
             maxLength={500}
             editable={!isSending}
+            onSubmitEditing={handleSend}
+            blurOnSubmit={false}
+            onKeyPress={handleKeyPress}
           />
           <TouchableOpacity
             style={[
@@ -980,6 +1033,28 @@ const styles = StyleSheet.create({
   },
   drawerCloseBtn: {
     padding: Spacing.xs,
+  },
+  drawerNewChatRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  drawerNewChatBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+  },
+  drawerNewChatText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
   drawerList: {
     paddingVertical: Spacing.sm,

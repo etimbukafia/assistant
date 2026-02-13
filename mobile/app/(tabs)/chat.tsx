@@ -161,10 +161,12 @@ export default function ChatScreen() {
   const handleCreateSession = useCallback(
     async (type: 'command' | 'reflection') => {
       try {
+        console.log(`[Chat] Creating new ${type} session from chat tab`);
         const session = await createSession.mutateAsync(type);
+        console.log(`[Chat] Session created: ${session.id}, navigating`);
         router.push(`/chat/${session.id}`);
       } catch (error) {
-        console.error('Failed to create session:', error);
+        console.error('[Chat] Failed to create session:', error);
       }
     },
     [createSession, router]
@@ -185,10 +187,9 @@ export default function ChatScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" />
 
-      {/* Header - simplified for tab context */}
+      {/* Header */}
       <View style={styles.header}>
         <DonnaText style={styles.headerTitle}>Conversations</DonnaText>
-        {/* Only show create button when subscription is active */}
         {isActive && (
           <TouchableOpacity
             style={styles.newChatButton}
@@ -262,23 +263,6 @@ export default function ChatScreen() {
         </View>
       )}
 
-      {/* FAB for new session - only when active subscription and has sessions */}
-      {isActive && actualSessions.length > 0 && (
-        <View style={styles.fabContainer}>
-          <TouchableOpacity
-            style={[styles.fab, styles.fabSecondary]}
-            onPress={() => handleCreateSession('reflection')}
-          >
-            <Ionicons name="leaf" size={22} color={Colors.success} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.fab, styles.fabPrimary]}
-            onPress={() => handleCreateSession('command')}
-          >
-            <Ionicons name="add" size={28} color="#FFF" />
-          </TouchableOpacity>
-        </View>
-      )}
     </SafeAreaView>
   );
 }

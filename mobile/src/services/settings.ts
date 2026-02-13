@@ -45,6 +45,7 @@ export interface UserSettings {
     onboarding_completed: boolean;
     // Integration status
     initial_sync_completed: boolean;
+    initial_sync_failed: boolean;
     gmail_connected: boolean;
     calendar_connected: boolean;
     created_at: string;

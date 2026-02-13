@@ -42,6 +42,7 @@ interface ProfileState {
     assistantName: string;
     onboardingCompleted: boolean;
     initialSyncCompleted: boolean;
+    initialSyncFailed: boolean;
     gmailConnected: boolean;
     calendarConnected: boolean;
 }
@@ -68,6 +69,7 @@ interface AuthContextType {
     assistantName: string;
     onboardingCompleted: boolean;
     initialSyncCompleted: boolean;
+    initialSyncFailed: boolean;
     gmailConnected: boolean;
     calendarConnected: boolean;
     signInWithGoogle: () => Promise<boolean>;
@@ -90,6 +92,7 @@ const initialProfileState: ProfileState = {
     assistantName: 'Donna',
     onboardingCompleted: false,
     initialSyncCompleted: false,
+    initialSyncFailed: false,
     gmailConnected: false,
     calendarConnected: false,
 };
@@ -199,6 +202,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     assistantName: settings.assistant_name || 'Donna',
                     onboardingCompleted: !!settings.onboarding_completed,
                     initialSyncCompleted: !!settings.initial_sync_completed,
+                    initialSyncFailed: !!settings.initial_sync_failed,
                     gmailConnected: !!settings.gmail_connected,
                     calendarConnected: !!settings.calendar_connected,
                 },
@@ -242,7 +246,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
                 setSession(session);
                 setUser(session?.user ?? null);
-                setIsLoading(false);
+
+                // Don't clear isLoading during the initial SIGNED_IN that includes
+                // a provider_token — this is the OAuth flow mid-redirect.
+                // Let checkSubscription/settings load clear it instead to avoid
+                // premature navigation to subscription screen.
+                if (!(_event === 'SIGNED_IN' && session?.provider_token)) {
+                    setIsLoading(false);
+                }
 
                 // Clean URL hash on web
                 if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.hash) {
@@ -275,11 +286,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 }, pending.accessToken);
                 console.log('[Auth] connectGmail success:', result);
 
-                // Trigger initial sync now that GmailAccount exists
+                // Only trigger initial sync if user already has an active subscription
+                // (new sign-ups won't have subscribed yet — sync will be triggered
+                //  after they activate their trial via the subscription screen)
                 try {
                     const { triggerInitialSync } = require('../services/billing');
-                    await triggerInitialSync();
-                    console.log('[Auth] Initial sync triggered successfully');
+                    // Check current profile state for active subscription
+                    const { api } = require('../services/api');
+                    const settingsResp = await api.get('/settings/');
+                    if (settingsResp.data?.is_active) {
+                        await triggerInitialSync();
+                        console.log('[Auth] Initial sync triggered successfully');
+                    } else {
+                        console.log('[Auth] Skipping initial sync — no active subscription yet');
+                    }
                 } catch (syncError: any) {
                     // Non-fatal: sync can be retried later
                     console.warn('[Auth] Initial sync trigger failed:', syncError?.message);

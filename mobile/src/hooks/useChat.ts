@@ -98,6 +98,7 @@ export function useChatSession(sessionId: string | null) {
     queryFn: () => (sessionId ? getSession(sessionId) : null),
     enabled: !!sessionId,
     staleTime: 1000 * 10, // 10 seconds
+    retry: false, // Don't retry 404s from stale persisted IDs
   });
 }
 
@@ -142,9 +143,12 @@ export function useCreateSession() {
       return session;
     },
     onSuccess: (newSession) => {
-      // Add to sessions list
-      queryClient.setQueryData<ChatSession[]>(chatKeys.sessions(), (old) =>
-        old ? [newSession, ...old] : [newSession]
+      // Add to sessions list (cache is { sessions, total } shape)
+      queryClient.setQueryData<{ sessions: ChatSession[]; total: number }>(
+        chatKeys.sessions(),
+        (old) => old
+          ? { sessions: [newSession, ...old.sessions], total: old.total + 1 }
+          : { sessions: [newSession], total: 1 }
       );
       // Update current session ID cache
       queryClient.setQueryData(chatKeys.currentSessionId(), newSession.id);
@@ -169,9 +173,12 @@ export function useDeleteSession() {
       return sessionId;
     },
     onSuccess: (deletedId) => {
-      // Remove from sessions list
-      queryClient.setQueryData<ChatSession[]>(chatKeys.sessions(), (old) =>
-        old ? old.filter((s) => s.id !== deletedId) : []
+      // Remove from sessions list (cache is { sessions, total } shape)
+      queryClient.setQueryData<{ sessions: ChatSession[]; total: number }>(
+        chatKeys.sessions(),
+        (old) => old
+          ? { sessions: old.sessions.filter((s) => s.id !== deletedId), total: Math.max(0, old.total - 1) }
+          : { sessions: [], total: 0 }
       );
       // Clear session cache
       queryClient.removeQueries({ queryKey: chatKeys.session(deletedId) });

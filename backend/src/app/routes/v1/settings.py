@@ -13,7 +13,24 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettingsResponse:
     """Build enriched settings response with computed fields."""
     from app.data.models import GmailAccount
+
     gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == settings.user_id).first()
+    
+    initial_sync_completed = gmail_account.initial_sync_completed if gmail_account else False
+    initial_sync_failed = False
+    
+    # If Gmail is connected but sync hasn't completed, check if the backfill task permanently failed
+    if gmail_account and not initial_sync_completed:
+        try:
+            from app.data.models import TaskQueue
+            failed_task = db.query(TaskQueue).filter(
+                TaskQueue.task_type == "email_backfill",
+                TaskQueue.status == "failed",
+                TaskQueue.user_id == settings.user_id,
+            ).first()
+            initial_sync_failed = failed_task is not None
+        except Exception as e:
+            logger.warning(f"Could not check sync failure status: {e}")
 
     return UserSettingsResponse(
         id=settings.id,
@@ -33,7 +50,8 @@ def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettin
         assistant_name=settings.assistant_name or "Donna",
         onboarding_completed=settings.onboarding_completed or False,
         # Integration status (computed)
-        initial_sync_completed=gmail_account.initial_sync_completed if gmail_account else False,
+        initial_sync_completed=initial_sync_completed,
+        initial_sync_failed=initial_sync_failed,
         gmail_connected=gmail_account is not None,
         calendar_connected=bool(settings.calendar_ids),
         created_at=settings.created_at,

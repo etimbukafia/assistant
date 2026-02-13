@@ -72,10 +72,17 @@ export interface JobStatusResponse {
  * @param sessionType - 'command' for work tasks, 'reflection' for supportive chat
  */
 export async function createSession(sessionType: SessionType = 'command'): Promise<ChatSession> {
-  const response = await api.post<ChatSession>('/chat/sessions', {
-    session_type: sessionType,
-  });
-  return response.data;
+  console.log(`[ChatService] Creating session, type=${sessionType}`);
+  try {
+    const response = await api.post<ChatSession>('/chat/sessions', {
+      session_type: sessionType,
+    });
+    console.log(`[ChatService] Session created: ${response.data.id}`);
+    return response.data;
+  } catch (error) {
+    console.error(`[ChatService] Failed to create session:`, error);
+    throw error;
+  }
 }
 
 /**
@@ -125,11 +132,18 @@ export async function sendMessage(
   sessionId: string,
   content: string
 ): Promise<SendMessageResponse> {
-  const response = await api.post<SendMessageResponse>(
-    `/chat/sessions/${sessionId}/messages`,
-    { content }
-  );
-  return response.data;
+  console.log(`[ChatService] Sending message to session=${sessionId}, length=${content.length}`);
+  try {
+    const response = await api.post<SendMessageResponse>(
+      `/chat/sessions/${sessionId}/messages`,
+      { content }
+    );
+    console.log(`[ChatService] Send response: status=${response.data.status}, messageId=${response.data.message_id}, jobId=${response.data.job_id || 'none'}`);
+    return response.data;
+  } catch (error) {
+    console.error(`[ChatService] Failed to send message to session=${sessionId}:`, error);
+    throw error;
+  }
 }
 
 /**
@@ -157,8 +171,14 @@ export async function getMessages(
  * Use this when sendMessage returns status="processing".
  */
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
-  const response = await api.get<JobStatusResponse>(`/chat/jobs/${jobId}`);
-  return response.data;
+  try {
+    const response = await api.get<JobStatusResponse>(`/chat/jobs/${jobId}`);
+    console.log(`[ChatService] Job ${jobId} status=${response.data.status}`);
+    return response.data;
+  } catch (error) {
+    console.error(`[ChatService] Failed to get job status for ${jobId}:`, error);
+    throw error;
+  }
 }
 
 /**
@@ -290,7 +310,7 @@ export async function sendMessageWithPolling(
     if (result.status === 'complete') {
       // Sync response - done immediately
       callbacks.onComplete(result.response || '', result.pending_actions || []);
-      return () => {};
+      return () => { };
     }
 
     if (result.status === 'processing' && result.job_id) {
@@ -311,7 +331,7 @@ export async function sendMessageWithPolling(
 
     // Unexpected status
     callbacks.onError(result.error || 'Unexpected response');
-    return () => {};
+    return () => { };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Network error';
     callbacks.onError(message);

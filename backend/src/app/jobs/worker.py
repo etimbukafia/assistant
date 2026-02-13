@@ -870,7 +870,9 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
         # Mark sync as completed
         gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
         if gmail_account:
-            gmail_account.initial_sync_completed = True
+            if not gmail_account.initial_sync_completed:
+                gmail_account.initial_sync_completed = True
+                logger.info(f"Marked initial_sync_completed=True for user {user_id}")
             gmail_account.last_sync = datetime.now(timezone.utc)
             db.commit()
 
@@ -1569,6 +1571,49 @@ def schedule_cleanup_jobs_if_needed(db):
                 db=db
             )
             logger.info(f"Scheduled {task_type} for {next_run}")
+
+
+def _notify_permanent_failure(task_id: int, task_type: str, payload: Dict[str, Any], error: str, user_id: str):
+    """
+    Callback fired when a task permanently fails (exhausted all retries).
+    Creates an in-app notification + push so the user knows.
+    """
+    from app.infra.database import SessionLocal
+    from app.services.notification import NotificationService
+
+    if not user_id:
+        logger.warning(f"Cannot notify permanent failure for task {task_id}: no user_id")
+        return
+
+    # Map task types to user-friendly messages
+    FAILURE_MESSAGES = {
+        "email_backfill": {
+            "title": "Initial sync didn't complete",
+            "body": "Some earlier emails may be missing, but new emails will continue to appear as they arrive.",
+        },
+    }
+
+    msg = FAILURE_MESSAGES.get(task_type, {
+        "title": "Something went wrong",
+        "body": f"A background task ({task_type}) failed after multiple attempts.",
+    })
+
+    db = SessionLocal()
+    try:
+        db.execute(text(f"SET app.current_user_id = '{user_id}'"))
+        svc = NotificationService(db=db, user_id=user_id)
+        svc.create_notification(
+            title=msg["title"],
+            body=msg["body"],
+            category="system",
+            priority="high",
+            send_push=True,
+        )
+        logger.info(f"Notified user {user_id} of permanent failure for task {task_type} (id={task_id})")
+    except Exception as e:
+        logger.error(f"Failed to create permanent failure notification: {e}", exc_info=True)
+    finally:
+        db.close()
 
 
 def run_worker(poll_interval: int = 2):

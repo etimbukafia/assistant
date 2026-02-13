@@ -217,7 +217,7 @@ class QueueService:
         error: str,
         retry: bool = True,
         db: Optional[Session] = None
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """
         Mark a task as failed
 
@@ -228,7 +228,7 @@ class QueueService:
             db: Optional database session
 
         Returns:
-            True if task was updated
+            Dict with: updated (bool), permanent (bool), user_id (str|None)
         """
         should_close_db = False
         if db is None:
@@ -239,9 +239,10 @@ class QueueService:
             task = db.query(self.TaskQueue).filter(self.TaskQueue.id == task_id).first()
 
             if not task:
-                return False
+                return {"updated": False, "permanent": False, "user_id": None}
 
             task.last_error = error
+            permanent = False
 
             # Retry logic with exponential backoff
             if retry and task.attempts < task.max_attempts:
@@ -261,6 +262,7 @@ class QueueService:
                 )
             else:
                 task.status = "failed"
+                permanent = True
 
                 logger.error(
                     f"Task failed permanently: {task.task_type} (id={task.id})",
@@ -273,7 +275,7 @@ class QueueService:
                 )
 
             db.commit()
-            return True
+            return {"updated": True, "permanent": permanent, "user_id": getattr(task, 'user_id', None)}
 
         finally:
             if should_close_db:
