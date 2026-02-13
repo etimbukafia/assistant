@@ -67,6 +67,19 @@ class LLMOrchestrator:
         """
         return self.provider.generate(prompt, system_prompt)
 
+    async def agenerate_text(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """
+        Async generate raw text (no JSON parsing).
+
+        For chat/conversational use where the response is natural language.
+        Uses native async I/O when the provider supports it (e.g. Gemini).
+        """
+        return await self.provider.agenerate_text(prompt, system_prompt)
+
     def generate_batch(
         self,
         prompts: List[str],

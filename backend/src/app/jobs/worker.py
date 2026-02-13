@@ -789,8 +789,7 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
 
         client = GmailClient(db=db, user_id=user_id)
         if not client.load_credentials():
-            logger.error(f"Failed to load credentials for user {user_id}")
-            return
+            raise RuntimeError(f"Failed to load Gmail credentials for user {user_id}")
 
         # Fetch messages
         messages = client.get_messages(max_results=500, query=query)
@@ -1255,7 +1254,7 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
 
     Updates the placeholder message with the actual response.
     """
-    from app.data.models import ChatSession, ChatMessage, ChatPendingAction
+    from app.data.models import ChatSession, ChatMessage, ChatPendingAction, UserSettings
     from app.chat.orchestrator import ChatOrchestrator
     from app.infra.database import SessionLocal
     import uuid
@@ -1297,8 +1296,20 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
                 logger.info(f"Chat message {assistant_message_id} already processed, skipping (idempotent)")
                 return
 
+        # Get user's assistant name and first name for personalization
+        user_settings = db.query(UserSettings).filter(
+            UserSettings.user_id == user_id
+        ).first()
+        assistant_name = user_settings.assistant_name if user_settings else "Donna"
+        session_state = session.state or {}
+        user_name = session_state.get("user_first_name")
+
         # Process through orchestrator
-        orchestrator = ChatOrchestrator(db, user_id)
+        orchestrator = ChatOrchestrator(
+            db, user_id,
+            assistant_name=assistant_name,
+            user_name=user_name,
+        )
         result = await orchestrator.process_message(session, content)
 
         # Get the placeholder message - verify it belongs to this session
@@ -1612,6 +1623,7 @@ def run_email_batch_worker(poll_interval: int = 2, limit_per_user: int = 30, max
     worker = BatchWorker(
         queue_service=queue_service,
         handlers=BATCH_HANDLERS,
+        single_task_handlers=TASK_HANDLERS,
         poll_interval=poll_interval,
         limit_per_user=limit_per_user,
         max_users=max_users,

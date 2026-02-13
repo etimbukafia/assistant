@@ -29,7 +29,7 @@ from .orchestrator import ChatOrchestrator
 logger = logging.getLogger(__name__)
 
 # Timeout for synchronous processing (seconds)
-SYNC_TIMEOUT_SECONDS = 8.0
+SYNC_TIMEOUT_SECONDS = 30.0
 
 # Timeout for async messages stuck in "processing" state (TTL on read)
 PROCESSING_TIMEOUT_MINUTES = 2
@@ -666,7 +666,15 @@ class ChatService:
             ).first()
             assistant_name = user_settings.assistant_name if user_settings else "Donna"
 
-            orchestrator = ChatOrchestrator(self.db, self.user_id, assistant_name=assistant_name)
+            # Get user's first name from session state
+            session_state = session.state or {}
+            user_name = session_state.get("user_first_name")
+
+            orchestrator = ChatOrchestrator(
+                self.db, self.user_id,
+                assistant_name=assistant_name,
+                user_name=user_name,
+            )
             result = await orchestrator.process_message(session, content)
 
             # Save assistant response

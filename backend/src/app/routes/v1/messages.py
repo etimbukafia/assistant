@@ -1,8 +1,11 @@
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.security.auth import get_current_user, get_db, get_db_for_user, AuthenticatedUser, require_active_subscription
 from app.security.encryption import encrypt_body
@@ -728,13 +731,16 @@ def trigger_initial_sync(
     - First Gmail connection after trial activation
     - Returning subscriber after lapsed subscription
     """
+    logger.info(f"Initial sync request for user_id={user.user_id}")
     gmail_account = db.query(GmailAccount).filter(
         GmailAccount.user_id == user.user_id
     ).first()
 
     if not gmail_account:
+        logger.error(f"No GmailAccount found for user_id={user.user_id} — connectGmail may have failed")
         raise HTTPException(404, "No Gmail account connected")
 
+    logger.info(f"GmailAccount found: email={gmail_account.email}, initial_sync_completed={gmail_account.initial_sync_completed}")
     if gmail_account.initial_sync_completed:
         # Already synced, use incremental
         return {"status": "already_completed", "sync_type": "incremental"}

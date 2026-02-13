@@ -18,13 +18,34 @@ type FilterType = 'all' | 'needs_reply' | 'today';
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { isActive, subscriptionTier, initialSyncCompleted } = useAuth();
+  const { isActive, subscriptionTier, initialSyncCompleted, refreshProfile } = useAuth();
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
   const [focusMode, setFocusMode] = useState(false);
   const [processingActive, setProcessingActive] = useState(false);
 
   // Fetch messages
   const { data: messagesResponse, isLoading, isRefetching, refetch } = useMessages();
+
+  // Poll for initial sync completion — stops once done
+  useEffect(() => {
+    if (!isActive || initialSyncCompleted) return;
+
+    const interval = setInterval(() => {
+      refreshProfile();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [isActive, initialSyncCompleted, refreshProfile]);
+
+  // When sync completes, auto-refresh messages and start processing poll
+  const prevSyncCompleted = useRef(initialSyncCompleted);
+  useEffect(() => {
+    if (initialSyncCompleted && !prevSyncCompleted.current) {
+      refetch();
+      setProcessingActive(true);
+    }
+    prevSyncCompleted.current = initialSyncCompleted;
+  }, [initialSyncCompleted, refetch]);
 
   // Processing status polling - starts on pull-to-refresh
   const { data: processingData } = useProcessingStatus(isActive && processingActive);

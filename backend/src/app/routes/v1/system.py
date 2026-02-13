@@ -166,5 +166,4 @@ def debug_auth_config():
         "supabase_jwt_secret_configured": bool(settings.SUPABASE_JWT_SECRET),
         "supabase_jwt_secret_length": len(settings.SUPABASE_JWT_SECRET) if settings.SUPABASE_JWT_SECRET else 0,
         "supabase_jwt_secret_preview": settings.SUPABASE_JWT_SECRET[:10] + "..." if settings.SUPABASE_JWT_SECRET else None,
-        "cloudflare_gate_enabled": bool(settings.CF_ACCESS_CLIENT_ID and settings.CF_ACCESS_CLIENT_SECRET),
     }

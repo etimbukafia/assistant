@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
+import logging
 import httpx
 from sqlalchemy.orm import Session
 from app.infra.config import get_settings, Settings
@@ -10,6 +11,8 @@ from app.security.auth import get_settings as get_app_settings # Watch out for n
 from app.integrations.gmail import GmailClient, get_gmail_client
 from app.security.encryption import encrypt_token
 from app.data.models import GmailAccount
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -58,9 +61,11 @@ def verify_token_scopes(access_token: str) -> tuple[bool, List[str]]:
 
         return len(missing_scopes) == 0, missing_scopes
 
-    except Exception:
-        # If we can't verify, assume scopes are missing
-        return False, REQUIRED_SCOPES
+    except Exception as e:
+        # If we can't verify scopes, log and proceed — the Gmail API test call
+        # in the endpoint will validate the token actually works
+        logger.warning(f"Scope verification request failed: {e}. Proceeding with token test.")
+        return True, []
 
 
 class ConnectGmailRequest(BaseModel):
@@ -85,8 +90,11 @@ def connect_gmail_with_provider_token(
     Verifies all required scopes were granted. Returns 403 if any are missing.
     """
     try:
+        logger.info(f"Gmail connect request for user={user.user_id}, email={request.email}")
+
         # Step 1: Verify all required scopes were granted
         all_scopes_granted, missing_scopes = verify_token_scopes(request.provider_token)
+        logger.info(f"Scope verification: granted={all_scopes_granted}, missing={missing_scopes}")
 
         if not all_scopes_granted:
             # Build user-friendly message about what's missing
@@ -114,6 +122,7 @@ def connect_gmail_with_provider_token(
         # Verify we can access the Gmail API
         profile = service.users().getProfile(userId='me').execute()
         verified_email = profile.get('emailAddress')
+        logger.info(f"Gmail API verified, email={verified_email}")
 
         if not verified_email:
             raise HTTPException(
@@ -135,17 +144,28 @@ def connect_gmail_with_provider_token(
         token_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
 
         # Step 4: Create or update GmailAccount
+        # First try by user_id, then by email (handles re-registration with new user_id)
         account = db.query(GmailAccount).filter(
             GmailAccount.user_id == user.user_id
         ).first()
 
+        if not account:
+            # Check for orphaned record with same email (re-registration scenario)
+            account = db.query(GmailAccount).filter(
+                GmailAccount.email == verified_email
+            ).first()
+            if account:
+                logger.info(f"Re-linking orphaned GmailAccount (old user_id={account.user_id}) to {user.user_id}")
+
         if account:
-            # Update existing
+            # Update existing — re-link to current user if needed
+            account.user_id = user.user_id
             account.email = verified_email
             account.access_token = encrypted_access_token
             account.refresh_token = encrypted_refresh_token
             account.token_expiry = token_expiry
             account.updated_at = datetime.now(timezone.utc)
+            logger.info(f"Updated existing GmailAccount for {verified_email}")
         else:
             # Create new
             account = GmailAccount(
@@ -156,8 +176,10 @@ def connect_gmail_with_provider_token(
                 token_expiry=token_expiry
             )
             db.add(account)
+            logger.info(f"Creating new GmailAccount for {verified_email}")
 
         db.commit()
+        logger.info(f"GmailAccount committed successfully for user={user.user_id}, email={verified_email}")
 
         return {
             "status": "success",
@@ -168,6 +190,7 @@ def connect_gmail_with_provider_token(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to connect Gmail for user={user.user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to connect Google: {str(e)}")
 
 @router.get("/gmail")

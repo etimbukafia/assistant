@@ -30,9 +30,11 @@ export const notificationKeys = {
  * Polls every 30 seconds.
  */
 export function useUnreadCount() {
+    const { isAuthenticated } = useAuth();
     const query = useQuery({
         queryKey: notificationKeys.unreadCount(),
         queryFn: fetchUnreadCount,
+        enabled: isAuthenticated,
         refetchInterval: 30_000,
         staleTime: 15_000,
     });

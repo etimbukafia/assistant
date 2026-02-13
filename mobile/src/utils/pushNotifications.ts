@@ -24,6 +24,10 @@ Notifications.setNotificationHandler({
  * Returns null if permissions denied or not a physical device.
  */
 export async function getExpoPushToken(): Promise<string | null> {
+    if (Platform.OS === 'web') {
+        return null;
+    }
+
     if (!Device.isDevice) {
         console.log('Push notifications require a physical device');
         return null;

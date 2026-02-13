@@ -23,6 +23,7 @@ const TABS: Tab[] = [
     { name: 'Inbox', icon: 'mail', route: 'index' },
     { name: 'Focus', icon: 'flash', route: 'focus' },
     { name: 'Schedule', icon: 'calendar', route: 'calendar' },
+    { name: 'Chat', icon: 'chatbubbles', route: 'chat' },
 ];
 
 interface AdaptivePillNavProps {

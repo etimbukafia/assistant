@@ -237,7 +237,10 @@ class GmailClient:
         account = query.first()
 
         if not account:
+            logger.warning(f"No GmailAccount found for user_id={self.user_id}, email={email}")
             return False
+
+        logger.info(f"Loaded GmailAccount for user_id={self.user_id}, email={account.email}")
 
         # Decrypt tokens
         try:

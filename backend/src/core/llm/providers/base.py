@@ -283,6 +283,36 @@ class BaseLLMProvider(ABC):
 
         return None
 
+    async def agenerate_text(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """
+        Async generate raw text (no JSON parsing).
+
+        For chat/conversational use where the response is natural language,
+        not structured JSON. Skips JSON_INSTRUCTION and _parse_json.
+
+        Providers with native async support (e.g. Gemini) override
+        _raw_agenerate for true async I/O. Others fall back to
+        asyncio.to_thread.
+        """
+        self.ensure_initialized()
+        return await self._raw_agenerate(prompt, system_prompt)
+
+    async def _raw_agenerate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """
+        Async raw text generation. Default: run sync version in thread pool.
+        Override in providers with native async support.
+        """
+        import asyncio
+        return await asyncio.to_thread(self._raw_generate, prompt, system_prompt)
+
     def ensure_initialized(self) -> None:
         """Ensure provider is initialized before use"""
         if not self._initialized:

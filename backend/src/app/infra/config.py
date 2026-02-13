@@ -58,11 +58,6 @@ class Settings:
     # Trial
     TRIAL_DURATION_DAYS: int = int(os.getenv("TRIAL_DURATION_DAYS", "7"))
 
-    # Cloudflare Zero Trust Service Token
-    # When set, all requests must include matching CF-Access-Client-Id/Secret headers.
-    # Leave empty to disable (e.g. in production behind Cloudflare tunnel).
-    CF_ACCESS_CLIENT_ID: str = os.getenv("CF_ACCESS_CLIENT_ID", "")
-    CF_ACCESS_CLIENT_SECRET: str = os.getenv("CF_ACCESS_CLIENT_SECRET", "")
 
     def validate(self) -> list[str]:
         """

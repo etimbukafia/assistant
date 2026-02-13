@@ -77,6 +77,29 @@ class GeminiProvider(BaseLLMProvider):
 
         return response.text.strip()
 
+    async def _raw_agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """Async raw text generation using google.genai async client."""
+        self.ensure_initialized()
+
+        if system_prompt:
+            full_prompt = f"{system_prompt}\n\n{prompt}"
+        else:
+            full_prompt = prompt
+
+        response = await self.client.aio.models.generate_content(
+            model=self.config.gemini_model,
+            contents=[full_prompt],
+        )
+
+        # Track token usage
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            usage = response.usage_metadata
+            input_tokens = getattr(usage, 'prompt_token_count', 0) or 0
+            output_tokens = getattr(usage, 'candidates_token_count', 0) or 0
+            self._accumulate_tokens(input_tokens, output_tokens)
+
+        return response.text.strip()
+
     def _accumulate_tokens(self, input_tokens: int, output_tokens: int) -> None:
         """Accumulate token counts in thread-local storage."""
         if not hasattr(_token_usage, 'input_tokens'):

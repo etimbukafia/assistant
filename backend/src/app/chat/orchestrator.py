@@ -5,6 +5,7 @@ Main orchestration layer for AI Chat.
 Routes messages through LLM, executes tools, manages state.
 """
 from typing import Dict, Any, List, Optional
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
@@ -21,24 +22,98 @@ from app.security.security_logger import log_injection_attempt
 
 logger = logging.getLogger(__name__)
 
+# Module-level cached LLM orchestrator (avoids re-init per request)
+_chat_llm = None
+
+
+def _get_chat_llm():
+    """Get or create a cached LLM orchestrator for chat."""
+    global _chat_llm
+    if _chat_llm is None:
+        from core.llm.orchestrator import LLMOrchestrator
+        from core.llm.config import LLMConfig
+        _chat_llm = LLMOrchestrator(config=LLMConfig.for_chat())
+    return _chat_llm
+
 # Prompts directory (backend/prompts/)
 PROMPTS_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
+# Prompt template cache (loaded once per process)
+_prompt_cache: Dict[str, str] = {}
+
 
 def _load_prompt(name: str) -> str:
-    """Load a prompt template from the prompts directory."""
-    prompt_path = PROMPTS_DIR / f"{name}.md"
-    try:
-        return prompt_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        logger.warning(f"Prompt file not found: {prompt_path}")
-        return ""
+    """Load a prompt template from the prompts directory (cached)."""
+    if name not in _prompt_cache:
+        prompt_path = PROMPTS_DIR / f"{name}.md"
+        try:
+            _prompt_cache[name] = prompt_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            logger.warning(f"Prompt file not found: {prompt_path}")
+            _prompt_cache[name] = ""
+    return _prompt_cache[name]
 
+
+# =========================================================================
+# Mode Configuration
+# =========================================================================
+
+@dataclass
+class ModeConfig:
+    """Resolved configuration for a chat mode. No branching needed downstream."""
+    system_prompt: str
+    context_type: str
+    tools: List[Dict[str, Any]] = field(default_factory=list)
+    use_tools: bool = False
+
+
+def resolve_mode(
+    session_type: str,
+    assistant_name: str,
+    user_name: Optional[str],
+    context: str,
+    tool_registry: ChatToolRegistry,
+) -> ModeConfig:
+    """
+    Resolve all mode-specific config upfront.
+
+    Returns a ModeConfig that the orchestrator can use without
+    checking session_type again.
+    """
+    # Identity preamble — tells the LLM its name and who it's talking to
+    identity = f"Your name is {assistant_name}."
+    if user_name:
+        identity += f" You are speaking with {user_name}."
+
+    if session_type == "reflection":
+        base_prompt = _load_prompt("chat_reflection")
+        return ModeConfig(
+            system_prompt=f"{identity}\n\n{base_prompt}\n\n## Current Context\n{context}",
+            context_type="task_review",
+            tools=[],
+            use_tools=False,
+        )
+
+    # Action / command mode
+    base_prompt = _load_prompt("chat_system").format(assistant_name=assistant_name)
+    tool_names = ", ".join(tool_registry._tools.keys())
+    tools = tool_registry.get_tool_definitions()
+    return ModeConfig(
+        system_prompt=f"{identity}\n\n{base_prompt}\n\n## Current Context\n{context}\n\nAvailable tools: {tool_names}",
+        context_type="drafting",
+        tools=tools,
+        use_tools=True,
+    )
+
+
+# =========================================================================
+# Orchestrator
+# =========================================================================
 
 class ChatOrchestrator:
     """
     Orchestrates chat conversations.
-    
+
     Responsibilities:
     - Build prompts with context
     - Route to LLM
@@ -46,31 +121,21 @@ class ChatOrchestrator:
     - Create pending actions for approval-gated tools
     - Persist state after each turn
     """
-    
-    def __init__(self, db: Session, user_id: str, assistant_name: str = "Donna"):
+
+    def __init__(
+        self,
+        db: Session,
+        user_id: str,
+        assistant_name: str = "Donna",
+        user_name: Optional[str] = None,
+    ):
         self.db = db
         self.user_id = user_id
         self.assistant_name = assistant_name
+        self.user_name = user_name
         self.context_manager = ChatContextManager(db, user_id)
         self.tool_registry = ChatToolRegistry(db, user_id)
-        self._command_prompt_template: Optional[str] = None
-        self._reflection_prompt_template: Optional[str] = None
 
-    @property
-    def command_system_prompt(self) -> str:
-        """Lazy-load and format command mode system prompt."""
-        if self._command_prompt_template is None:
-            self._command_prompt_template = _load_prompt("chat_system")
-        return self._command_prompt_template.format(assistant_name=self.assistant_name)
-
-    @property
-    def reflection_system_prompt(self) -> str:
-        """Lazy-load reflection mode system prompt."""
-        if self._reflection_prompt_template is None:
-            self._reflection_prompt_template = _load_prompt("chat_reflection")
-        return self._reflection_prompt_template
-
-    
     async def process_message(
         self,
         session: ChatSession,
@@ -107,49 +172,36 @@ class ChatOrchestrator:
                 pattern_matched=", ".join(injection_patterns),
                 content_preview=user_message[:100]
             )
-            # Note: We log but don't block - the system prompt instructs the LLM
-            # to not follow instructions from users. Blocking could affect legitimate
-            # users who happen to use certain phrases.
 
         # Load current state
         state = self.context_manager.get_session_state(session)
-        
+
         # Get conversation history
         history = self.context_manager.get_recent_messages(session.id)
-        
-        # Build context
+
+        # Resolve mode config upfront — no more session_type branching below
         context = self.context_manager.build_prompt_context(
             session=session,
             state=state,
             context_type="drafting" if session.session_type == "command" else "task_review"
         )
-        
-        # Build system prompt based on session type
-        if session.session_type == "reflection":
-            base_prompt = self.reflection_system_prompt
-            # Append context at the end of the prompt
-            system_prompt = f"{base_prompt}\n\n## Current Context\n{context}"
-            tools = []  # No tools in reflection mode
-        else:
-            base_prompt = self.command_system_prompt
-            tool_names = ", ".join(self.tool_registry._tools.keys())
-            # Append context and tool info to the prompt
-            system_prompt = f"{base_prompt}\n\n## Current Context\n{context}\n\nAvailable tools: {tool_names}"
-            tools = self.tool_registry.get_tool_definitions()
-        
+        mode = resolve_mode(
+            session_type=session.session_type,
+            assistant_name=self.assistant_name,
+            user_name=self.user_name,
+            context=context,
+            tool_registry=self.tool_registry,
+        )
+
         # Build messages for LLM
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # Add history
+        messages = [{"role": "system", "content": mode.system_prompt}]
         for msg in history:
             messages.append({"role": msg["role"], "content": msg["content"]})
-        
-        # Add current user message
         messages.append({"role": "user", "content": user_message})
-        
+
         # Call LLM
         try:
-            response = await self._call_llm(messages, tools)
+            response = await self._call_llm(messages, mode.tools)
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
             return {
@@ -157,14 +209,14 @@ class ChatOrchestrator:
                 "pending_actions": [],
                 "error": str(e)
             }
-        
+
         # Process response
         assistant_message = response.get("content", "")
         tool_calls = response.get("tool_calls", [])
         pending_actions = []
-        
-        # Execute any tool calls
-        if tool_calls:
+
+        # Execute tool calls (only possible in action mode)
+        if tool_calls and mode.use_tools:
             tool_results = []
             for tool_call in tool_calls:
                 tool_name = tool_call.get("function", {}).get("name")
@@ -177,27 +229,23 @@ class ChatOrchestrator:
 
                 result = self.tool_registry.execute_tool(tool_name, tool_args)
                 tool_results.append(result)
-                
-                # Apply state updates
+
                 if result.state_updates:
                     for key, value in result.state_updates.items():
                         setattr(state, key, value)
-                
-                # Collect pending actions
+
                 if result.pending_action:
                     pending_actions.append(result.pending_action)
-            
-            # If we have tool results, get a follow-up response
+
             if tool_results and not assistant_message:
                 assistant_message = self._format_tool_results(tool_results)
-        
-        # If still no response, provide a default
+
         if not assistant_message:
             assistant_message = "I've processed your request."
-        
+
         # Save state
         self.context_manager.save_session_state(session, state)
-        
+
         return {
             "response": assistant_message,
             "pending_actions": pending_actions,
@@ -212,13 +260,12 @@ class ChatOrchestrator:
         """
         Call the LLM with messages and optional tools.
 
-        Uses LLMOrchestrator with structured JSON prompting for tool calls.
+        Uses async text generation (no JSON parsing) for natural language
+        chat responses. Tool calls are extracted from the raw text.
         """
-        from core.llm.orchestrator import LLMOrchestrator
-        from core.llm.config import LLMConfig
         from core.llm.token_tracking import record_token_usage
 
-        orchestrator = LLMOrchestrator(config=LLMConfig.for_chat())
+        orchestrator = _get_chat_llm()
 
         # Build prompt from messages
         prompt_parts = []
@@ -239,8 +286,8 @@ class ChatOrchestrator:
             tool_desc = self._build_tool_prompt(tools)
             prompt = tool_desc + "\n\n" + prompt
 
-        # Call LLM
-        result = orchestrator.generate(
+        # Async text generation — no JSON parsing, no event loop blocking
+        raw_text = await orchestrator.agenerate_text(
             prompt=prompt,
             system_prompt=system_content
         )
@@ -258,12 +305,18 @@ class ChatOrchestrator:
             )
         orchestrator.reset_token_usage()
 
-        # Parse response for tool calls
-        content = result.get("text", result.get("content", ""))
-        tool_calls = self._extract_tool_calls_from_response(result, content)
+        # Extract tool calls from raw text
+        tool_calls = self._extract_tool_calls_from_response({}, raw_text)
+
+        # If tool calls found, strip the JSON blocks from content
+        content = raw_text
+        if tool_calls:
+            import re as _re
+            content = _re.sub(r'```json\s*.*?\s*```', '', content, flags=_re.DOTALL).strip()
+            content = _re.sub(r'\{"tool_call"\s*:\s*\{[^}]+\}\s*\}', '', content).strip()
 
         return {
-            "content": content if not tool_calls else "",
+            "content": content,
             "tool_calls": tool_calls
         }
     

@@ -13,8 +13,11 @@ const DEV_API_URL = Platform.OS === 'android'
     ? 'http://10.0.2.2:8000/v1'
     : 'http://localhost:8000/v1';
 
+const resolvedBaseURL = process.env.EXPO_PUBLIC_API_URL || DEV_API_URL;
+console.log('[API] baseURL:', resolvedBaseURL);
+
 export const api = axios.create({
-    baseURL: process.env.EXPO_PUBLIC_API_URL || DEV_API_URL,
+    baseURL: resolvedBaseURL,
     timeout: 30000,
     headers: {
         'Content-Type': 'application/json',

@@ -18,7 +18,7 @@ import { useFocusEffect } from 'expo-router';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.25; // 25% of screen width
 
-const TAB_ROUTES = ['index', 'focus', 'calendar'];
+const TAB_ROUTES = ['index', 'focus', 'calendar', 'chat'];
 
 function TabBarIcon(props: {
   name: React.ComponentProps<typeof Ionicons>['name'];
@@ -68,12 +68,6 @@ export default function TabLayout() {
   const handleTabChange = useCallback((index: number) => {
     const route = TAB_ROUTES[index];
 
-    // If Chat tab selected (not in routes anymore but just for safety)
-    if (route === 'chat') {
-      openChat();
-      return;
-    }
-
     setCurrentIndex(index);
     // For index (Inbox), navigate to root of tabs group
     if (route === 'index') {
@@ -81,7 +75,7 @@ export default function TabLayout() {
     } else {
       router.replace(`/(tabs)/${route}` as any);
     }
-  }, [openChat, router]);
+  }, [router]);
 
   // Handle swipe to navigate between tabs
   const handleSwipe = useCallback((direction: 'left' | 'right') => {
@@ -207,8 +201,7 @@ export default function TabLayout() {
             name="chat"
             options={{
               title: 'Chat',
-              tabBarIcon: ({ color }) => <TabBarIcon name="chatbubbles-outline" color={color} />,
-              href: null, // Hide from tab bar
+              tabBarIcon: ({ color }) => <TabBarIcon name="chatbubbles" color={color} />,
             }}
           />
         </Tabs>

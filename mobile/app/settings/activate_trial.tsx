@@ -30,8 +30,8 @@ export default function ActivateTrialScreen() {
         mutationFn: async () => {
             // 1. Activate Trial with Assistant Name
             await activateTrial({ assistant_name: assistantName.trim() || 'Donna' });
-            // 2. Trigger Initial Sync
-            await triggerInitialSync();
+            // 2. Trigger Initial Sync (may fail if GmailAccount not yet created — AuthContext handles it)
+            await triggerInitialSync().catch((e: any) => console.warn('Initial sync skipped:', e?.message));
         },
         onSuccess: async () => {
             // 3. Invalidate subscription queries

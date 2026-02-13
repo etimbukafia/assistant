@@ -20,8 +20,11 @@ export default function SettingsHubScreen() {
         if (subscriptionTier === 'pro' && isActive) {
             return 'Active subscription';
         }
-        if (daysRemaining > 0) {
+        if (isActive && daysRemaining > 0) {
             return `${daysRemaining} days left in trial`;
+        }
+        if (isActive) {
+            return 'Trial active';
         }
         return 'Trial expired';
     };

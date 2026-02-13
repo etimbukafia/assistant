@@ -17,7 +17,6 @@ import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeOnboarding } from '../../src/services/onboarding';
-import { triggerInitialSync } from '../../src/services/billing';
 import { updateCalendarSettings } from '../../src/services/calendar';
 
 export default function SetupScreen() {
@@ -30,9 +29,8 @@ export default function SetupScreen() {
         mutationFn: async () => {
             await completeOnboarding({ assistant_name: assistantName.trim() || 'Donna' });
 
-            // User granted all scopes during OAuth - enable full product
-            // Trigger initial email sync
-            triggerInitialSync().catch(console.error);
+            // Initial sync is triggered by AuthContext after connectGmail succeeds
+            // (guarantees GmailAccount exists before sync starts)
 
             // Set primary calendar as default
             updateCalendarSettings({ calendar_ids: ['primary'] }).catch(console.error);

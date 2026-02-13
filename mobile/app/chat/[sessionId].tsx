@@ -303,10 +303,10 @@ const SessionDrawer: React.FC<SessionDrawerProps> = ({
                 <Ionicons name="close" size={24} color={Colors.textPrimary} />
               </TouchableOpacity>
             </View>
-            <FlashList
+            <FlashList<ChatSession>
               data={sessions}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
+              keyExtractor={(item: ChatSession) => item.id}
+              renderItem={({ item }: { item: ChatSession }) => (
                 <SessionDrawerItem
                   session={item}
                   isActive={item.id === currentSessionId}
@@ -481,11 +481,11 @@ export default function ChatSessionScreen() {
           prev.map((m) =>
             m.id === placeholderId
               ? {
-                  ...m,
-                  content: 'Sorry, I encountered an error. Please try again.',
-                  status: 'error' as const,
-                  error,
-                }
+                ...m,
+                content: 'Sorry, I encountered an error. Please try again.',
+                status: 'error' as const,
+                error,
+              }
               : m
           )
         );
@@ -642,7 +642,7 @@ export default function ChatSessionScreen() {
         keyboardVerticalOffset={90}
       >
         <View style={styles.listContainer}>
-          <FlashList
+          <FlashList<DisplayMessage>
             ref={listRef}
             data={localMessages}
             keyExtractor={(item: DisplayMessage) => String(item.id)}

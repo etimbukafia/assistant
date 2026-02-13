@@ -9,13 +9,19 @@
  * State Management:
  * - Uses useReducer for profile state to batch updates and reduce re-renders
  * - Auth state (session/user) kept separate as it changes independently
+ *
+ * Gmail Connect Strategy:
+ * - provider_token is ephemeral — only available during SIGNED_IN event
+ * - onAuthStateChange captures it into a ref (no async work, no race conditions)
+ * - A separate useEffect picks it up after session state settles and calls connectGmail
+ * - Native flow handles connectGmail inline in signInWithGoogle (no race there)
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../utils/supabase';
-import { Platform } from 'react-native';
+import { Platform, Alert } from 'react-native';
 import type { Session, User } from '@supabase/supabase-js';
 
 // Required for OAuth redirect handling
@@ -28,16 +34,13 @@ WebBrowser.maybeCompleteAuthSession();
 interface ProfileState {
     profileLoaded: boolean;
     settingsError: boolean;
-    accountConflict: boolean; // True if email exists with different user_id
+    accountConflict: boolean;
     accountConflictMessage: string | null;
-    // Subscription
     isActive: boolean;
     subscriptionTier: string;
     daysRemaining: number;
-    // Personalization & Onboarding
     assistantName: string;
     onboardingCompleted: boolean;
-    // Integration state
     initialSyncCompleted: boolean;
     gmailConnected: boolean;
     calendarConnected: boolean;
@@ -56,22 +59,17 @@ interface AuthContextType {
     profileLoaded: boolean;
     session: Session | null;
     user: User | null;
-    // Subscription state
     isActive: boolean;
     subscriptionTier: string;
     daysRemaining: number;
     settingsError: boolean;
-    // Account conflict state
     accountConflict: boolean;
     accountConflictMessage: string | null;
-    // Personalization & Onboarding
     assistantName: string;
     onboardingCompleted: boolean;
-    // Integration state
     initialSyncCompleted: boolean;
     gmailConnected: boolean;
     calendarConnected: boolean;
-    // Actions
     signInWithGoogle: () => Promise<boolean>;
     signOut: () => Promise<void>;
     refreshProfile: () => Promise<void>;
@@ -133,47 +131,65 @@ function profileReducer(state: ProfileState, action: ProfileAction): ProfileStat
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-    // Core auth state (changes independently from profile)
     const [session, setSession] = useState<Session | null>(null);
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-
-    // Profile state (batched updates via reducer)
     const [profile, dispatch] = useReducer(profileReducer, initialProfileState);
 
-    // Abort controller ref for cancelling in-flight requests
     const abortControllerRef = useRef<AbortController | null>(null);
 
+    // Ref to hold pending Gmail connect data captured from onAuthStateChange.
+    // provider_token is ephemeral — only on the session during SIGNED_IN.
+    const pendingGmailConnectRef = useRef<{
+        providerToken: string;
+        providerRefreshToken?: string;
+        email: string;
+        accessToken: string;
+    } | null>(null);
+
+    // Guard: only process Gmail connect once per auth session.
+    // Supabase fires multiple SIGNED_IN events on web — without this,
+    // connectGmail would be called in a loop.
+    const gmailConnectProcessedRef = useRef(false);
+
+    // -----------------------------------------------------------------
+    // Check subscription / load profile
+    // -----------------------------------------------------------------
     const checkSubscription = useCallback(async () => {
         if (!session?.user) return;
 
-        // Cancel any in-flight request
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
         }
         abortControllerRef.current = new AbortController();
 
         try {
-            // Dynamically import api to avoid circular dependencies if any
             const { api } = require('../services/api');
-            // Fetch latest settings from backend
             const response = await api.get('/settings/', {
                 signal: abortControllerRef.current.signal,
-                validateStatus: (status: number) => status < 500 // Don't throw on 404
+                validateStatus: (status: number) => status < 500
             });
 
-            // Check for 409 Conflict (account exists with different user_id)
             if (response.status === 409) {
-                const errorData = response.data;
-                const message = errorData?.detail?.message ||
+                const message = response.data?.detail?.message ||
                     'An account with this email already exists. Please contact support.';
                 dispatch({ type: 'CONFLICT', message });
                 return;
             }
 
-            const settings = response.data;
+            if (response.status !== 200) {
+                console.warn('[Auth] Settings fetch returned status:', response.status);
+                return;
+            }
 
-            // Single dispatch updates all profile state at once (reduces re-renders)
+            const settings = response.data;
+            console.log('[Auth] Settings loaded:', {
+                is_active: settings.is_active,
+                subscription_tier: settings.subscription_tier,
+                days_remaining: settings.days_remaining,
+                gmail_connected: settings.gmail_connected,
+                onboarding_completed: settings.onboarding_completed,
+            });
             dispatch({
                 type: 'LOADED',
                 payload: {
@@ -188,94 +204,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 },
             });
         } catch (error: any) {
-            // Ignore abort errors - they're expected when session changes mid-fetch
-            if (error?.name === 'AbortError' || error?.name === 'CanceledError') {
-                return;
-            }
+            if (error?.name === 'AbortError' || error?.name === 'CanceledError') return;
             console.error('Failed to fetch settings:', error);
-            // Mark error so UI can show connection issue instead of demo data
-            // Keep previous values - user might be a paying customer with connection issues
             dispatch({ type: 'ERROR' });
         }
     }, [session?.user]);
 
+    // -----------------------------------------------------------------
+    // Auth listener — keep it synchronous, no async work
+    // -----------------------------------------------------------------
     useEffect(() => {
-        // Get initial session
         supabase.auth.getSession().then(({ data: { session } }) => {
             setSession(session);
             setUser(session?.user ?? null);
             setIsLoading(false);
         });
 
-        // Listen for auth state changes
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (_event, session) => {
+            (_event, session) => {
+                console.log('[Auth] onAuthStateChange:', _event, {
+                    email: session?.user?.email,
+                    provider_token: !!session?.provider_token,
+                });
+
+                // Capture provider_token before it disappears.
+                // This is synchronous — no awaits, no race conditions.
+                // Guard: only capture once per auth session (Supabase fires multiple SIGNED_IN on web).
+                if (_event === 'SIGNED_IN' && session?.provider_token && session?.user?.email && !gmailConnectProcessedRef.current) {
+                    gmailConnectProcessedRef.current = true;
+                    pendingGmailConnectRef.current = {
+                        providerToken: session.provider_token,
+                        providerRefreshToken: session.provider_refresh_token || undefined,
+                        email: session.user.email,
+                        accessToken: session.access_token,
+                    };
+                }
+
                 setSession(session);
                 setUser(session?.user ?? null);
                 setIsLoading(false);
 
-                // On web/PWA: handle OAuth redirect
-                if (_event === 'SIGNED_IN' && Platform.OS === 'web' && typeof window !== 'undefined') {
-                    // Check for provider token in URL hash (from Google OAuth)
-                    if (window.location.hash) {
-                        const hashParams = new URLSearchParams(window.location.hash.substring(1));
-                        const providerToken = hashParams.get('provider_token');
-                        const providerRefreshToken = hashParams.get('provider_refresh_token');
-
-                        // Verify we received the required tokens
-                        if (__DEV__) {
-                            console.log('OAuth callback received (web)');
-                        }
-
-                        // Provider token is REQUIRED to connect Google services
-                        if (!providerToken) {
-                            console.error('No provider_token received from OAuth (web)');
-                            const { Alert } = require('react-native');
-                            Alert.alert(
-                                'Connection Failed',
-                                'Google did not return access to Gmail/Calendar. Please try again and grant all permissions.',
-                                [{ text: 'OK' }]
-                            );
-                            await supabase.auth.signOut();
-                        } else if (session?.user?.email) {
-                            // Connect Google services
-                            try {
-                                const { connectGmail } = require('../services/gmail');
-                                await connectGmail({
-                                    provider_token: providerToken,
-                                    provider_refresh_token: providerRefreshToken || undefined,
-                                    email: session.user.email,
-                                });
-                                console.log('Google connected successfully (web)');
-                            } catch (gmailError: any) {
-                                console.error('Failed to connect Google (web):', gmailError);
-                                // Sign out to clean up partial state - can't proceed without Google connection
-                                await supabase.auth.signOut();
-
-                                // Show appropriate error message
-                                const { Alert } = require('react-native');
-                                const errorDetail = gmailError?.response?.data?.detail;
-                                if (errorDetail?.error === 'missing_scopes') {
-                                    Alert.alert(
-                                        'Permissions Required',
-                                        `To use Teeks, please grant all requested permissions:\n\n• ${errorDetail.missing_permissions?.join('\n• ')}`,
-                                        [{ text: 'OK' }]
-                                    );
-                                } else {
-                                    Alert.alert(
-                                        'Connection Failed',
-                                        'Unable to connect your Google account. Please try again.',
-                                        [{ text: 'OK' }]
-                                    );
-                                }
-                            }
-                        }
-
-                        // Always clean tokens from URL hash after OAuth
-                        if (window.location.hash) {
-                            window.history.replaceState(null, '', window.location.pathname + window.location.search);
-                        }
-                    }
+                // Clean URL hash on web
+                if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.hash) {
+                    window.history.replaceState(null, '', window.location.pathname + window.location.search);
                 }
             }
         );
@@ -283,22 +254,75 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return () => subscription.unsubscribe();
     }, []);
 
-    // Check subscription whenever session changes
+    // -----------------------------------------------------------------
+    // Gmail connect effect — runs after session state settles
+    // -----------------------------------------------------------------
+    useEffect(() => {
+        const pending = pendingGmailConnectRef.current;
+        if (!pending || !session) return;
+
+        // Clear immediately so this only runs once
+        pendingGmailConnectRef.current = null;
+
+        (async () => {
+            console.log('[Auth] Connecting Gmail for:', pending.email);
+            try {
+                const { connectGmail } = require('../services/gmail');
+                const result = await connectGmail({
+                    provider_token: pending.providerToken,
+                    provider_refresh_token: pending.providerRefreshToken,
+                    email: pending.email,
+                }, pending.accessToken);
+                console.log('[Auth] connectGmail success:', result);
+
+                // Trigger initial sync now that GmailAccount exists
+                try {
+                    const { triggerInitialSync } = require('../services/billing');
+                    await triggerInitialSync();
+                    console.log('[Auth] Initial sync triggered successfully');
+                } catch (syncError: any) {
+                    // Non-fatal: sync can be retried later
+                    console.warn('[Auth] Initial sync trigger failed:', syncError?.message);
+                }
+            } catch (error: any) {
+                console.error('[Auth] connectGmail failed:', {
+                    status: error?.response?.status,
+                    data: error?.response?.data,
+                    message: error?.message,
+                });
+                const errorDetail = error?.response?.data?.detail;
+                if (errorDetail?.error === 'missing_scopes') {
+                    Alert.alert(
+                        'Permissions Required',
+                        `To use Teeks, please grant all requested permissions:\n\n• ${errorDetail.missing_permissions?.join('\n• ')}`,
+                        [{ text: 'OK' }]
+                    );
+                } else {
+                    Alert.alert(
+                        'Connection Failed',
+                        'Unable to connect your Google account. Please try again.',
+                        [{ text: 'OK' }]
+                    );
+                }
+                await supabase.auth.signOut();
+            }
+        })();
+    }, [session]);
+
+    // -----------------------------------------------------------------
+    // Profile check — runs when session changes
+    // -----------------------------------------------------------------
     useEffect(() => {
         if (session) {
-            // Reset profileLoaded before fetching new settings
             dispatch({ type: 'LOADING' });
             checkSubscription();
         } else {
-            // Cancel any in-flight request on logout
             if (abortControllerRef.current) {
                 abortControllerRef.current.abort();
             }
-            // Reset all profile state on logout
             dispatch({ type: 'RESET' });
         }
 
-        // Cleanup on unmount
         return () => {
             if (abortControllerRef.current) {
                 abortControllerRef.current.abort();
@@ -306,19 +330,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
     }, [session, checkSubscription]);
 
-    /**
-     * Sign in with Google using Supabase OAuth
-     *
-     * This uses the PKCE flow via expo-auth-session for security.
-     * The redirect URI must be configured in Supabase dashboard.
-     */
+    // -----------------------------------------------------------------
+    // Sign in with Google
+    // -----------------------------------------------------------------
     const signInWithGoogle = useCallback(async (): Promise<boolean> => {
         try {
             if (Platform.OS === 'web') {
-                // Web/PWA: Use full-page redirect instead of popup.
-                // After Google OAuth, Supabase redirects back to the app URL
-                // with tokens in the hash. detectSessionInUrl (enabled for web
-                // in supabase.ts) auto-extracts them and triggers onAuthStateChange.
+                // Web: full-page redirect. After OAuth, Supabase detects tokens
+                // in the hash, fires onAuthStateChange with SIGNED_IN + provider_token.
+                // The ref + useEffect above handles connectGmail.
                 const { data, error } = await supabase.auth.signInWithOAuth({
                     provider: 'google',
                     options: {
@@ -330,17 +350,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         },
                     },
                 });
-
                 if (error) throw error;
-                // signInWithOAuth on web will redirect the page automatically
                 return true;
             }
 
-            // Native: Use expo-auth-session popup flow
-            const redirectUri = makeRedirectUri({
-                path: 'auth/callback',
-            });
-            console.log('Redirect URI:', redirectUri);
+            // Native: expo-auth-session popup flow
+            const redirectUri = makeRedirectUri({ path: 'auth/callback' });
 
             const { data, error } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
@@ -354,70 +369,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     },
                 },
             });
-
             if (error) throw error;
 
             if (data?.url) {
-                const result = await WebBrowser.openAuthSessionAsync(
-                    data.url,
-                    redirectUri
-                );
+                const result = await WebBrowser.openAuthSessionAsync(data.url, redirectUri);
 
                 if (result.type === 'cancel' || result.type === 'dismiss') {
                     return false;
                 }
 
                 if (result.type === 'success' && result.url) {
-                    const url = new URL(result.url);
-                    const params = new URLSearchParams(url.hash.substring(1));
+                    const params = new URLSearchParams(new URL(result.url).hash.substring(1));
 
                     const accessToken = params.get('access_token');
                     const refreshToken = params.get('refresh_token');
                     const providerToken = params.get('provider_token');
                     const providerRefreshToken = params.get('provider_refresh_token');
 
-                    if (accessToken) {
-                        const { error: sessionError } = await supabase.auth.setSession({
-                            access_token: accessToken,
-                            refresh_token: refreshToken || '',
-                        });
+                    if (!accessToken) throw new Error('No access token from Google');
 
-                        if (sessionError) throw sessionError;
+                    const { error: sessionError } = await supabase.auth.setSession({
+                        access_token: accessToken,
+                        refresh_token: refreshToken || '',
+                    });
+                    if (sessionError) throw sessionError;
 
-                        if (__DEV__) {
-                            console.log('OAuth callback received (native)');
-                        }
-
-                        // Provider token is REQUIRED to connect Google services
-                        if (!providerToken) {
-                            console.error('No provider_token received from OAuth');
-                            await supabase.auth.signOut();
-                            throw new Error('Google did not return access to Gmail/Calendar. Please try again and grant all permissions.');
-                        }
-
-                        // Connect Google services
-                        try {
-                            const { connectGmail } = require('../services/gmail');
-                            const { data: { session: newSession } } = await supabase.auth.getSession();
-                            const email = newSession?.user?.email;
-                            if (email) {
-                                await connectGmail({
-                                    provider_token: providerToken,
-                                    provider_refresh_token: providerRefreshToken || undefined,
-                                    email: email,
-                                });
-                                console.log('Google connected successfully');
-                            }
-                        } catch (gmailError: any) {
-                            console.error('Failed to connect Google:', gmailError);
-                            // Sign out to clean up partial state - can't proceed without Google connection
-                            await supabase.auth.signOut();
-                            // Re-throw so UI can handle it
-                            throw gmailError;
-                        }
-
-                        return true;
+                    if (!providerToken) {
+                        await supabase.auth.signOut();
+                        throw new Error('Google did not return access to Gmail/Calendar. Please try again and grant all permissions.');
                     }
+
+                    // Native flow is linear — no race condition, connect directly
+                    const { connectGmail } = require('../services/gmail');
+                    const { data: { session: newSession } } = await supabase.auth.getSession();
+                    const email = newSession?.user?.email;
+
+                    if (!email) {
+                        throw new Error('No email found in session. Please try again.');
+                    }
+
+                    await connectGmail({
+                        provider_token: providerToken,
+                        provider_refresh_token: providerRefreshToken || undefined,
+                        email,
+                    }, accessToken);
+
+                    console.log('[Auth] Gmail connected successfully (native)');
+                    return true;
                 }
             }
             return false;
@@ -427,30 +425,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     }, []);
 
-    /**
-     * Sign out and clear all auth state
-     */
+    // -----------------------------------------------------------------
+    // Sign out
+    // -----------------------------------------------------------------
     const signOut = useCallback(async () => {
         try {
+            gmailConnectProcessedRef.current = false;
             const { error } = await supabase.auth.signOut();
             if (error) throw error;
-
-            // State will be cleared by onAuthStateChange listener
         } catch (error) {
             console.error('Sign out error:', error);
             throw error;
         }
     }, []);
 
-    // Memoize context value to prevent unnecessary re-renders of consumers
     const value: AuthContextType = {
         isAuthenticated: !!session,
         isLoading,
         session,
         user,
-        // Spread profile state
         ...profile,
-        // Actions
         signInWithGoogle,
         signOut,
         refreshProfile: checkSubscription,

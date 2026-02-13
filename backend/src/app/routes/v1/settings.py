@@ -1,9 +1,12 @@
+import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.security.auth import get_user_settings, get_db_for_user
 from app.data.models import UserSettings
 from app.data.schemas import UserSettingsResponse, UserSettingsUpdateRequest
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
@@ -44,6 +47,12 @@ def get_settings(
     db: Session = Depends(get_db_for_user)
 ):
     """Get current user settings. Auto-creates on first access."""
+    logger.info(
+        f"Settings for user={settings.user_id}: "
+        f"tier={settings.subscription_tier}, status={settings.subscription_status}, "
+        f"trial_ends_at={settings.trial_ends_at}, is_active={settings.is_active}, "
+        f"days_remaining={settings.days_remaining}, onboarding={settings.onboarding_completed}"
+    )
     return _enrich_settings_response(settings, db)
 
 
