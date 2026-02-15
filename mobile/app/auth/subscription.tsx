@@ -14,7 +14,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { Colors, Spacing, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
 import { useAuth } from '../../src/context/AuthContext';
-import { activateTrial, createCheckout } from '../../src/services/billing';
+import { activateTrial, createCheckout, triggerInitialSync } from '../../src/services/billing';
 import { api } from '../../src/services/api';
 
 type PlanType = 'trial' | 'pro';
@@ -43,7 +43,6 @@ export default function SubscriptionSelectionScreen() {
                 console.log('[SUB] Trial activated, triggering initial sync...');
                 // Trigger email backfill now that subscription is active
                 try {
-                    const { triggerInitialSync } = require('../../src/services/billing');
                     await triggerInitialSync();
                     console.log('[SUB] Initial sync triggered successfully');
                 } catch (syncError: any) {

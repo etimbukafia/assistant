@@ -18,6 +18,7 @@ import { useAuth } from '../../src/context/AuthContext';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeOnboarding } from '../../src/services/onboarding';
 import { updateCalendarSettings } from '../../src/services/calendar';
+import { triggerInitialSync } from '../../src/services/billing';
 
 export default function SetupScreen() {
     const router = useRouter();
@@ -29,8 +30,15 @@ export default function SetupScreen() {
         mutationFn: async () => {
             await completeOnboarding({ assistant_name: assistantName.trim() || 'Donna' });
 
-            // Initial sync is triggered by AuthContext after connectGmail succeeds
-            // (guarantees GmailAccount exists before sync starts)
+            // Safety net: ensure initial sync was triggered
+            // (subscription.tsx should have done this, but catch any gaps)
+            try {
+                await triggerInitialSync();
+                console.log('[Setup] Initial sync triggered successfully');
+            } catch (syncError: any) {
+                // Non-fatal: 'already_completed' is fine, other errors are retryable
+                console.log('[Setup] Initial sync:', syncError?.message || 'skipped');
+            }
 
             // Set primary calendar as default
             updateCalendarSettings({ calendar_ids: ['primary'] }).catch(console.error);

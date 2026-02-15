@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, SectionList, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator, Pressable, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Typography, Radius } from '../../src/theme/Theme';
 import { DonnaText } from '../../src/components/ui/DonnaText';
@@ -134,8 +134,13 @@ export default function DashboardScreen() {
         <DonnaText variant="h1" style={styles.greeting}>Inbox</DonnaText>
         <View style={styles.headerActions}>
           {/* Focus Mode Toggle */}
-          <TouchableOpacity
-            style={[styles.actionButton, focusMode && styles.actionButtonActive]}
+          <Pressable
+            style={({ pressed }) => [
+              styles.actionButton,
+              focusMode && styles.actionButtonActive,
+              pressed && { opacity: 0.7 },
+              Platform.OS === 'web' && { cursor: 'pointer' }
+            ]}
             onPress={() => setFocusMode(!focusMode)}
           >
             <Ionicons
@@ -143,7 +148,7 @@ export default function DashboardScreen() {
               size={18}
               color={focusMode ? '#FFFFFF' : Colors.textPrimary}
             />
-          </TouchableOpacity>
+          </Pressable>
         </View>
       </View>
 
@@ -199,30 +204,45 @@ export default function DashboardScreen() {
 
       {/* Filter Chips */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-        <TouchableOpacity
-          style={[styles.filterChip, activeFilter === 'all' && styles.filterChipActive]}
+        <Pressable
+          style={({ pressed }) => [
+            styles.filterChip,
+            activeFilter === 'all' && styles.filterChipActive,
+            pressed && { opacity: 0.7 },
+            Platform.OS === 'web' && { cursor: 'pointer' }
+          ]}
           onPress={() => setActiveFilter('all')}
         >
           <DonnaText style={[styles.filterText, activeFilter === 'all' && styles.filterTextActive]}>
             All ({messages.length})
           </DonnaText>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterChip, activeFilter === 'needs_reply' && styles.filterChipActiveUrgent]}
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [
+            styles.filterChip,
+            activeFilter === 'needs_reply' && styles.filterChipActiveUrgent,
+            pressed && { opacity: 0.7 },
+            Platform.OS === 'web' && { cursor: 'pointer' }
+          ]}
           onPress={() => setActiveFilter('needs_reply')}
         >
           <DonnaText style={[styles.filterText, activeFilter === 'needs_reply' && styles.filterTextActive]}>
             Needs Reply ({messages.filter(m => m.needs_reply).length})
           </DonnaText>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterChip, activeFilter === 'today' && styles.filterChipActive]}
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [
+            styles.filterChip,
+            activeFilter === 'today' && styles.filterChipActive,
+            pressed && { opacity: 0.7 },
+            Platform.OS === 'web' && { cursor: 'pointer' }
+          ]}
           onPress={() => setActiveFilter('today')}
         >
           <DonnaText style={[styles.filterText, activeFilter === 'today' && styles.filterTextActive]}>
             Today ({messages.filter(m => isToday(parseISO(m.received_at))).length})
           </DonnaText>
-        </TouchableOpacity>
+        </Pressable>
       </ScrollView>
     </View>
   );

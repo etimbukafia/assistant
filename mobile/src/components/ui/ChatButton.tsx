@@ -1,5 +1,5 @@
 import React from 'react';
-import { TouchableOpacity, StyleSheet, Modal, View } from 'react-native';
+import { TouchableOpacity, StyleSheet, Modal, View, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius, Spacing } from '../../theme/Theme';
 import { useRouter } from 'expo-router';
@@ -8,15 +8,18 @@ export function ChatButton() {
     const router = useRouter();
 
     return (
-        <TouchableOpacity
-            style={styles.container}
+        <Pressable
+            style={({ pressed }) => [
+                styles.container,
+                pressed && { opacity: 0.9 },
+                Platform.OS === 'web' && { cursor: 'pointer' }
+            ]}
             onPress={() => router.push('/chat')}
-            activeOpacity={0.9}
         >
             <View style={styles.iconContainer}>
                 <Ionicons name="chatbubbles" size={28} color="#FFFFFF" />
             </View>
-        </TouchableOpacity>
+        </Pressable>
     );
 }
 

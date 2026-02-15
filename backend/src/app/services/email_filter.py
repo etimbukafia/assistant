@@ -164,12 +164,12 @@ class EmailFilterService:
             reasons.append("List-Unsubscribe header present")
 
         # Check Precedence: bulk
-        precedence = headers.get('precedence', '').lower()
+        precedence = (headers.get('precedence') or '').lower()
         if precedence == 'bulk':
             reasons.append("Precedence: bulk")
 
         # Check Auto-Submitted: auto-generated
-        auto_submitted = headers.get('auto_submitted', '').lower()
+        auto_submitted = (headers.get('auto_submitted') or '').lower()
         if auto_submitted == 'auto-generated':
             reasons.append("Auto-Submitted: auto-generated")
 

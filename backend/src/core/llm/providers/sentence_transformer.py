@@ -82,9 +82,15 @@ class SentenceTransformerProvider:
 
         logger.info(f"Loading ONNX sentence transformer: {self.model_id}")
 
-        # Download model and tokenizer from HuggingFace Hub
-        model_path = hf_hub_download(repo_id=REPO_ID, filename=ONNX_FILENAME)
-        tokenizer_path = hf_hub_download(repo_id=REPO_ID, filename="tokenizer.json")
+        # Load from local cache first (avoids network roundtrip on every init).
+        # Falls back to downloading from HuggingFace Hub only if not cached.
+        try:
+            model_path = hf_hub_download(repo_id=REPO_ID, filename=ONNX_FILENAME, local_files_only=True)
+            tokenizer_path = hf_hub_download(repo_id=REPO_ID, filename="tokenizer.json", local_files_only=True)
+        except Exception:
+            logger.info("Model not in local cache, downloading from HuggingFace Hub...")
+            model_path = hf_hub_download(repo_id=REPO_ID, filename=ONNX_FILENAME)
+            tokenizer_path = hf_hub_download(repo_id=REPO_ID, filename="tokenizer.json")
 
         # Initialize ONNX runtime session (CPU)
         sess_options = ort.SessionOptions()

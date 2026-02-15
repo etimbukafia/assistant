@@ -41,10 +41,10 @@ class MessageResponse(MessageBase):
     received_at: datetime
     summary: Optional[str] = None
     needs_reply: Optional[bool] = None
-    extracted_tasks: Optional[List[str]] = None
+    extracted_tasks: Optional[List[Any]] = None
     extracted_dates: Optional[List[str]] = None
     extracted_people: Optional[List[str]] = None
-    extracted_decisions: Optional[List[str]] = None
+    extracted_decisions: Optional[List[Any]] = None
     draft_reply: Optional[str] = None
     processed: bool
     created_at: datetime

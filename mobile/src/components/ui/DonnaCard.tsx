@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, Pressable, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, Pressable, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Radius, Spacing } from '../../theme/Theme';
 import { DonnaText } from './DonnaText';
@@ -107,18 +107,32 @@ export const DonnaCard: React.FC<DonnaCardProps> = ({
                                     </View>
                                     {task.status === 'pending_approval' && (
                                         <View style={styles.taskActions}>
-                                            <TouchableOpacity
-                                                style={styles.taskApproveBtn}
-                                                onPress={(e) => { e.stopPropagation(); onApproveTask?.(task.id); }}
+                                            <Pressable
+                                                style={({ pressed, hovered }: any) => [
+                                                    styles.taskApproveBtn,
+                                                    pressed && { opacity: 0.7 },
+                                                    Platform.OS === 'web' && { cursor: 'pointer' }
+                                                ]}
+                                                onPress={(e) => {
+                                                    e.stopPropagation();
+                                                    onApproveTask?.(task.id);
+                                                }}
                                             >
                                                 <Ionicons name="checkmark" size={14} color={Colors.success} />
-                                            </TouchableOpacity>
-                                            <TouchableOpacity
-                                                style={styles.taskDismissBtn}
-                                                onPress={(e) => { e.stopPropagation(); onDismissTask?.(task.id); }}
+                                            </Pressable>
+                                            <Pressable
+                                                style={({ pressed, hovered }: any) => [
+                                                    styles.taskDismissBtn,
+                                                    pressed && { opacity: 0.7 },
+                                                    Platform.OS === 'web' && { cursor: 'pointer' }
+                                                ]}
+                                                onPress={(e) => {
+                                                    e.stopPropagation();
+                                                    onDismissTask?.(task.id);
+                                                }}
                                             >
                                                 <Ionicons name="close" size={14} color={Colors.textMuted} />
-                                            </TouchableOpacity>
+                                            </Pressable>
                                         </View>
                                     )}
                                     {task.priority === 'urgent' || task.priority === 'high' ? (

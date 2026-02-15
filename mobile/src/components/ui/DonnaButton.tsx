@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, StyleSheet, Animated } from 'react-native';
+import { Pressable, StyleSheet, Animated, Platform } from 'react-native';
 import { Colors, Radius, Spacing } from '../../theme/Theme';
 import { DonnaText } from './DonnaText';
 
@@ -64,7 +64,7 @@ export const DonnaButton: React.FC<DonnaButtonProps> = ({
                 styles.base,
                 getButtonStyle(),
                 fullWidth && styles.fullWidth,
-                style,
+                { ...style, ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}) },
             ]}
         >
             <Animated.View style={[styles.inner, { transform: [{ scale: animatedScale }] }]}>

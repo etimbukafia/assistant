@@ -70,8 +70,15 @@ def create_task(
     db.refresh(task)
 
     # Remove from extracted_tasks if it exists there
-    if message.extracted_tasks and request.title in message.extracted_tasks:
-        message.extracted_tasks = [t for t in message.extracted_tasks if t != request.title]
+    if message.extracted_tasks:
+        def _task_matches(t, title):
+            """Match extracted task by title, handling both str and dict formats."""
+            if isinstance(t, str):
+                return t == title
+            if isinstance(t, dict):
+                return t.get('title') == title
+            return False
+        message.extracted_tasks = [t for t in message.extracted_tasks if not _task_matches(t, request.title)]
         db.commit()
 
     # Build response with source message
