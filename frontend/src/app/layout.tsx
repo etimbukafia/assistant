@@ -17,7 +17,11 @@ import QueryProvider from "@/providers/QueryProvider";
 import { Toaster } from "sonner";
 
 import { ChatProvider } from "@/context/ChatContext";
-import { OmniChatOverlay } from "@/components/chat/OmniChatOverlay";
+import dynamic from 'next/dynamic';
+
+const OmniChatOverlay = dynamic(() => import('@/components/chat/OmniChatOverlay').then(mod => mod.OmniChatOverlay), {
+  ssr: false,
+});
 
 export default function RootLayout({
   children,

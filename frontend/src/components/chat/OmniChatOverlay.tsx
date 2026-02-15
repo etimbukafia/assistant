@@ -13,12 +13,25 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { useChatContext } from "@/context/ChatContext"
 import { useChat, useChatMessages } from "@/hooks/useChat"
 import { MessageBubble } from "./MessageBubble"
+import { ActionBubble } from "./ActionBubble"
 import { toast } from "sonner"
 
 export function OmniChatOverlay() {
     const { isOpen, setIsOpen, mode } = useChatContext()
-    const { currentSessionId, sendMessage, createSession, isSending, isCreating } = useChat()
-    const { data: messages, isLoading: isLoadingMessages } = useChatMessages(currentSessionId)
+    const {
+        currentSessionId,
+        sendMessage,
+        createSession,
+        approveAction,
+        rejectAction,
+        isSending,
+        isCreating,
+        isApproving,
+        isRejecting
+    } = useChat()
+
+    // Updated hook utilization to get pendingActions
+    const { data: messages, pendingActions, isLoading: isLoadingMessages } = useChatMessages(currentSessionId)
 
     const [inputValue, setInputValue] = React.useState("")
     const scrollRef = React.useRef<HTMLDivElement>(null)
@@ -29,7 +42,7 @@ export function OmniChatOverlay() {
         if (scrollRef.current) {
             scrollRef.current.scrollIntoView({ behavior: 'smooth' })
         }
-    }, [messages])
+    }, [messages, pendingActions, isSending])
 
     // Don't show overlay if already on the dedicated /chat page
     if (pathname === "/chat") return null
@@ -103,14 +116,29 @@ export function OmniChatOverlay() {
                             </div>
                         )}
 
-                        {messages?.map((msg) => (
-                            <MessageBubble
-                                key={msg.id}
-                                role={msg.role}
-                                content={msg.content}
-                                timestamp={msg.created_at}
-                            />
-                        ))}
+                        {messages?.map((msg) => {
+                            // Find corresponding action for this message
+                            const action = pendingActions?.find(a => a.message_id === Number(msg.id));
+
+                            return (
+                                <div key={msg.id} className="flex flex-col">
+                                    <MessageBubble
+                                        role={msg.role}
+                                        content={msg.content}
+                                        timestamp={msg.created_at}
+                                    />
+                                    {action && currentSessionId && (
+                                        <ActionBubble
+                                            action={action}
+                                            onApprove={(id) => approveAction({ sessionId: currentSessionId, actionId: id })}
+                                            onReject={(id) => rejectAction({ sessionId: currentSessionId, actionId: id })}
+                                            isApproving={isApproving}
+                                            isRejecting={isRejecting}
+                                        />
+                                    )}
+                                </div>
+                            );
+                        })}
 
                         {(isSending || isCreating) && (
                             <div className="flex justify-start mb-4">

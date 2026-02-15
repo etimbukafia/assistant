@@ -32,13 +32,27 @@ export function useChatSessions(options?: { limit?: number; offset?: number; ena
     });
 }
 
-export function useChatMessages(sessionId: string | null) {
+export function useChatSession(sessionId: string | null) {
     return useQuery({
-        queryKey: ['chat', 'messages', sessionId],
-        queryFn: () => chatService.getMessages(sessionId!),
+        queryKey: ['chat', 'session', sessionId],
+        queryFn: async () => {
+            if (!sessionId) return null;
+            return chatService.getSession(sessionId);
+        },
         enabled: !!sessionId,
-        refetchInterval: 5000, // Poll for new messages every 5s
+        refetchInterval: 5000,
     });
+}
+
+// Keep legacy for compatibility but wrap new logic if needed, or just deprecate
+export function useChatMessages(sessionId: string | null) {
+    const { data, isLoading, error } = useChatSession(sessionId);
+    return {
+        data: data?.messages || [],
+        pendingActions: data?.pending_actions || [],
+        isLoading,
+        error
+    };
 }
 
 export function useChat() {
@@ -65,9 +79,23 @@ export function useChat() {
     });
 
     const sendMessageMutation = useMutation({
-        mutationFn: chatService.sendMessage,
-        onSuccess: (newMessage, variables) => {
-            queryClient.invalidateQueries({ queryKey: ['chat', 'messages', variables.session_id] });
+        mutationFn: async (request: SendMessageRequest) => {
+            return new Promise((resolve, reject) => {
+                chatService.sendMessageWithPolling(request, {
+                    onComplete: (response, pendingActions) => {
+                        resolve({ response, pendingActions });
+                    },
+                    onError: (error) => {
+                        reject(new Error(error));
+                    },
+                    onProcessing: (jobId) => {
+                        console.log(`[Chat] Processing job: ${jobId}`);
+                    }
+                });
+            });
+        },
+        onSuccess: (data, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['chat', 'session', variables.session_id] });
             queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] });
         },
     });
@@ -82,14 +110,34 @@ export function useChat() {
         },
     });
 
+    const approveActionMutation = useMutation({
+        mutationFn: (variables: { sessionId: string, actionId: string }) =>
+            chatService.approveAction(variables.sessionId, variables.actionId),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['chat', 'session', variables.sessionId] });
+        },
+    });
+
+    const rejectActionMutation = useMutation({
+        mutationFn: (variables: { sessionId: string, actionId: string }) =>
+            chatService.rejectAction(variables.sessionId, variables.actionId),
+        onSuccess: (_, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['chat', 'session', variables.sessionId] });
+        },
+    });
+
     return {
         currentSessionId,
         setCurrentSessionId: updateCurrentSession,
         createSession: createSessionMutation.mutateAsync,
         sendMessage: sendMessageMutation.mutateAsync,
         deleteSession: deleteSessionMutation.mutateAsync,
+        approveAction: approveActionMutation.mutateAsync,
+        rejectAction: rejectActionMutation.mutateAsync,
         isCreating: createSessionMutation.isPending,
         isSending: sendMessageMutation.isPending,
         isDeleting: deleteSessionMutation.isPending,
+        isApproving: approveActionMutation.isPending,
+        isRejecting: rejectActionMutation.isPending,
     };
 }
