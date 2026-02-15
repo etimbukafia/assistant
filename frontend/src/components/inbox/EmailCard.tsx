@@ -5,9 +5,10 @@ import { DonnaCard, DonnaCardContent, DonnaCardHeader, DonnaCardTitle } from "@/
 import { DonnaText } from "@/components/ui/DonnaText";
 import { DonnaButton } from "@/components/ui/DonnaButton";
 import { formatDistanceToNow, parseISO } from "date-fns";
-import { Archive, CheckCircle, Trash2, Clock, Sparkles } from "lucide-react";
+import { Archive, CheckCircle, Trash2, Sparkles } from "lucide-react";
 import { useMessageMutations } from "@/hooks/useInbox";
 import { cn } from "@/lib/utils";
+import { TaskItem } from "./TaskItem";
 
 interface EmailCardProps {
     message: Message;
@@ -34,6 +35,7 @@ export function EmailCard({ message }: EmailCardProps) {
     // Determine card style based on priority
     const isUrgent = message.needs_reply;
     const isInsight = message.scheduling_intent?.detected;
+    const hasTasks = message.tasks && message.tasks.length > 0;
 
     return (
         <DonnaCard
@@ -84,6 +86,23 @@ export function EmailCard({ message }: EmailCardProps) {
                 <DonnaText variant="body" className="text-sm text-muted-foreground/90 line-clamp-2 leading-relaxed">
                     {message.summary || message.snippet}
                 </DonnaText>
+
+                {/* Tasks Section */}
+                {hasTasks && (
+                    <div className="mt-4 space-y-2">
+                        <div className="h-px w-full bg-border/60 mb-3" /> {/* Separator */}
+                        <DonnaText variant="label" className="text-xs text-muted-foreground uppercase tracking-widest pl-1">
+                            Suggested Actions
+                        </DonnaText>
+                        <div className="flex flex-col gap-2">
+                            {message.tasks!.map(task => (
+                                <div key={task.id} onClick={(e) => e.stopPropagation()}>
+                                    <TaskItem task={task} />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Actions (Visible on Hover or Focus) */}
                 <div className="flex items-center justify-end gap-2 mt-4 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
