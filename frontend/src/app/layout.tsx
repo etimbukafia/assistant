@@ -14,8 +14,10 @@ export const metadata: Metadata = {
 
 import { AuthProvider } from "@/context/AuthContext";
 import QueryProvider from "@/providers/QueryProvider";
+import { Toaster } from "sonner";
 
-// ... (imports)
+import { ChatProvider } from "@/context/ChatContext";
+import { OmniChatOverlay } from "@/components/chat/OmniChatOverlay";
 
 export default function RootLayout({
   children,
@@ -31,7 +33,11 @@ export default function RootLayout({
       )}>
         <QueryProvider>
           <AuthProvider>
-            {children}
+            <ChatProvider>
+              {children}
+              <OmniChatOverlay />
+              <Toaster position="bottom-right" />
+            </ChatProvider>
           </AuthProvider>
         </QueryProvider>
       </body>
