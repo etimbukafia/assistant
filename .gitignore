@@ -34,6 +34,8 @@ tests/
 !design/*.md
 !claude.md
 !BUSINESS_ANALYSIS.md
+!knowledge-vault-prd.md
+!backend/principles.md
 
 # Google credentials
 credentials.json

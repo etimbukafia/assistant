@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 
 from app.data.models import PrincipalMemory, DecisionPattern, ContactContext
+from app.services.vault_context import VaultContextService
 
 
 @dataclass
@@ -43,7 +44,7 @@ CONTEXT_TYPE_KEYS = {
 
 # Approximate tokens per character (conservative estimate)
 CHARS_PER_TOKEN = 4
-MAX_TOKENS = 400
+MAX_TOKENS = 800
 MAX_CHARS = MAX_TOKENS * CHARS_PER_TOKEN  # ~1600 chars
 
 
@@ -83,7 +84,18 @@ class ContextBuilder:
         """
         items: List[ContextItem] = []
 
-        # 1. Get ContactContext (highest priority)
+        # 0. Get VaultContext (highest priority)
+        vault_context = self._get_vault_context(context_type, sender_email)
+        if vault_context:
+            items.append(ContextItem(
+                text=vault_context,
+                priority=0,
+                relevance_score=1.0,
+                source="vault",
+                key="vault_context"
+            ))
+
+        # 1. Get ContactContext
         if sender_email:
             contact_items = self._get_contact_context(sender_email, context_type)
             items.extend(contact_items)
@@ -169,6 +181,14 @@ class ContextBuilder:
             ))
 
         return items
+
+    def _get_vault_context(self, context_type: str, sender_email: Optional[str]) -> str:
+        service = VaultContextService(self.db, self.user_id)
+        participant_emails = [sender_email] if sender_email else []
+        return service.build_context_packet(
+            participant_emails=participant_emails,
+            context_type=context_type
+        )
 
     def _get_preferences(self, context_type: str) -> List[ContextItem]:
         """Get context items from PrincipalMemory"""

@@ -5,27 +5,67 @@ import { api } from './api';
 // =============================================================================
 
 export interface Message {
-    id: string; // Changed to string to match mobile/backend if needed, keeping string for now based on previous file
+    id: number;
     role: 'user' | 'assistant' | 'system';
     content: string;
     created_at: string;
+    metadata?: Record<string, unknown> | null;
 }
 
 export interface ChatSession {
     id: string;
-    snippet: string;
-    updated_at: string;
+    session_type: 'command' | 'reflection';
+    title?: string | null;
+    created_at: string;
+    last_activity_at: string;
+    message_count?: number;
 }
 
 export interface SendMessageRequest {
     session_id: string;
     content: string;
     mode: 'action' | 'reflection';
+    mentions?: ChatMention[];
+}
+
+export interface ChatMention {
+    type: 'contact' | 'email' | 'knowledge';
+    ref_id: string;
+    label: string;
+    metadata?: Record<string, unknown>;
+}
+
+export interface MentionableContact {
+    email: string;
+    name?: string;
+    aliases?: string[];
+    vault_note_id?: number;
+}
+
+export interface MentionableEmail {
+    message_id: number;
+    subject?: string;
+    sender?: string;
+    thread_id?: string;
+    received_at?: string;
+    label: string;
+}
+
+export interface MentionableNote {
+    note_id: number;
+    slug: string;
+    note_type: string;
+    title: string;
+    label: string;
 }
 
 export interface CreateSessionRequest {
-    initial_message?: string;
     mode?: 'action' | 'reflection';
+}
+
+export interface ChatSessionsResponse {
+    sessions: ChatSession[];
+    total: number;
 }
 
 export type ProcessingStatus = 'complete' | 'processing' | 'failed';
@@ -93,21 +133,24 @@ export interface JobStatusResponse {
 // =============================================================================
 
 export const chatService = {
-    async getSessions(limit = 20, offset = 0): Promise<ChatSession[]> {
-        const response = await api.get<ChatSession[]>('/chat/sessions', {
+    async getSessions(limit = 20, offset = 0): Promise<ChatSessionsResponse> {
+        const response = await api.get<ChatSessionsResponse>('/chat/sessions', {
             params: { limit, offset }
         });
         return response.data;
     },
 
     async createSession(request: CreateSessionRequest): Promise<ChatSession> {
-        const response = await api.post<ChatSession>('/chat/sessions', request);
+        const sessionType = request.mode === 'reflection' ? 'reflection' : 'command';
+        const response = await api.post<ChatSession>('/chat/sessions', {
+            session_type: sessionType,
+        });
         return response.data;
     },
 
     async getMessages(sessionId: string): Promise<Message[]> {
-        const response = await api.get<Message[]>(`/chat/sessions/${sessionId}/messages`);
-        return response.data;
+        const response = await api.get<{ messages: Message[] }>(`/chat/sessions/${sessionId}/messages`);
+        return response.data.messages;
     },
 
     async getSession(sessionId: string): Promise<{
@@ -120,8 +163,32 @@ export const chatService = {
     },
 
     async sendMessage(request: SendMessageRequest): Promise<SendMessageResponse> {
-        const response = await api.post<SendMessageResponse>('/chat/messages', request);
+        const response = await api.post<SendMessageResponse>(
+            `/chat/sessions/${request.session_id}/messages`,
+            { content: request.content, mentions: request.mentions || [] }
+        );
         return response.data;
+    },
+
+    async getMentionableContacts(query: string, limit = 8): Promise<MentionableContact[]> {
+        const response = await api.get<{ contacts: MentionableContact[] }>("/vault/contacts/mentionable", {
+            params: { q: query || undefined, limit },
+        });
+        return response.data.contacts || [];
+    },
+
+    async getMentionableEmails(query: string, limit = 8): Promise<MentionableEmail[]> {
+        const response = await api.get<{ emails: MentionableEmail[] }>("/vault/emails/mentionable", {
+            params: { q: query || undefined, limit },
+        });
+        return response.data.emails || [];
+    },
+
+    async getMentionableNotes(query: string, limit = 8): Promise<MentionableNote[]> {
+        const response = await api.get<{ notes: MentionableNote[] }>("/vault/notes/mentionable", {
+            params: { q: query || undefined, limit },
+        });
+        return response.data.notes || [];
     },
 
     async deleteSession(sessionId: string): Promise<void> {

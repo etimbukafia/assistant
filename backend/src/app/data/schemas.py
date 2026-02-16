@@ -393,6 +393,9 @@ class ContactContextResponse(BaseModel):
     notes: Optional[str] = None
     category: Optional[str] = None  # vip | colleague | external | vendor
     preferred_tone: Optional[str] = None  # formal | neutral | casual
+    promoted: bool = False
+    vault_note_id: Optional[int] = None
+    aliases: List[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -405,12 +408,153 @@ class ContactContextUpdateRequest(BaseModel):
     notes: Optional[str] = None
     category: Optional[str] = None
     preferred_tone: Optional[str] = None
+    aliases: Optional[List[str]] = None
 
 
 class ContactContextListResponse(BaseModel):
     """List of contact contexts"""
     contacts: List[ContactContextResponse]
     total: int
+
+
+# ========================================
+# Vault Schemas
+# ========================================
+
+class VaultNoteCreate(BaseModel):
+    note_type: str
+    title: str
+    body: str = ""
+    frontmatter: Dict[str, Any] = {}
+    canonical_email: Optional[str] = None
+    source: str = "manual"
+    confidence: float = 1.0
+
+
+class VaultNoteUpdate(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+    frontmatter: Optional[Dict[str, Any]] = None
+    pinned: Optional[bool] = None
+    status: Optional[str] = None
+
+
+class VaultNoteResponse(BaseModel):
+    id: int
+    user_id: str
+    slug: str
+    note_type: str
+    title: str
+    frontmatter: Dict[str, Any]
+    body: str
+    canonical_email: Optional[str] = None
+    aliases: List[str] = []
+    source: str
+    confidence: float
+    status: str
+    pinned: bool
+    created_at: datetime
+    updated_at: datetime
+    last_referenced_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VaultNotesListResponse(BaseModel):
+    notes: List[VaultNoteResponse]
+    total: int
+
+
+class VaultProposalResponse(BaseModel):
+    id: int
+    user_id: str
+    target_note_id: Optional[int] = None
+    proposal_type: str
+    proposed_data: Dict[str, Any]
+    diff_summary: Optional[str] = None
+    source_type: Optional[str] = None
+    source_id: Optional[str] = None
+    dedupe_key: Optional[str] = None
+    confidence: float
+    priority: str
+    status: str
+    rejection_reason: Optional[str] = None
+    rejection_category: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VaultProposalsListResponse(BaseModel):
+    proposals: List[VaultProposalResponse]
+    total: int
+
+
+class VaultProposalRejectRequest(BaseModel):
+    reason: Optional[str] = None
+    category: str = Field(pattern="^(not_relevant|duplicate|inaccurate|too_minor|other)$")
+
+
+class ContactPromoteRequest(BaseModel):
+    display_name: Optional[str] = None
+
+
+class MentionableContactItem(BaseModel):
+    email: str
+    name: Optional[str] = None
+    aliases: List[str] = []
+    vault_note_id: Optional[int] = None
+
+
+class MentionableContactsResponse(BaseModel):
+    contacts: List[MentionableContactItem]
+
+
+class MentionableEmailItem(BaseModel):
+    message_id: int
+    subject: Optional[str] = None
+    sender: Optional[str] = None
+    thread_id: Optional[str] = None
+    received_at: Optional[datetime] = None
+    label: str
+
+
+class MentionableEmailsResponse(BaseModel):
+    emails: List[MentionableEmailItem]
+
+
+class MentionableNoteItem(BaseModel):
+    note_id: int
+    slug: str
+    note_type: str
+    title: str
+    label: str
+
+
+class MentionableNotesResponse(BaseModel):
+    notes: List[MentionableNoteItem]
+
+
+class MeetingPrepResponse(BaseModel):
+    summary: str
+    participants: List[str] = []
+    open_items: List[str] = []
+    decisions: List[str] = []
+    related_threads: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+
+class VaultStatsResponse(BaseModel):
+    proposal_acceptance_rate: float = 0.0
+    proposals_pending: int = 0
+    proposals_stale_count: int = 0
+    context_hit_rate: float = 0.0
+    total_notes: int = 0
+    notes_by_type: Dict[str, int] = {}
+    avg_proposals_per_day: float = 0.0
+    top_rejection_categories: List[Dict[str, Any]] = []
 
 
 # ========================================
@@ -527,3 +671,87 @@ class UnreadCountResponse(BaseModel):
 
 class MarkReadRequest(BaseModel):
     notification_ids: List[int]
+
+
+# ========================================
+# Telemetry Schemas
+# ========================================
+
+class TelemetryEventInput(BaseModel):
+    event_id: Optional[str] = None
+    event_name: str
+    event_payload: Dict[str, Any] = {}
+    page_path: Optional[str] = None
+    session_id: Optional[str] = None
+    client_ts: Optional[datetime] = None
+
+
+class TelemetryBatchRequest(BaseModel):
+    events: List[TelemetryEventInput]
+
+
+class TelemetryIngestResponse(BaseModel):
+    accepted: int
+    deduped: int = 0
+
+
+class TelemetryFunnelResponse(BaseModel):
+    chip_clicked: int = 0
+    message_sent: int = 0
+    action_approved: int = 0
+    click_to_send_rate: float = 0.0
+    send_to_approve_rate: float = 0.0
+    click_to_approve_rate: float = 0.0
+
+
+class TelemetryDailyCount(BaseModel):
+    date: str
+    chip_clicked: int = 0
+    message_sent: int = 0
+    action_approved: int = 0
+
+
+class TelemetryDashboardResponse(BaseModel):
+    days: int
+    total_events: int = 0
+    event_counts: Dict[str, int] = {}
+    funnel: TelemetryFunnelResponse
+    daily: List[TelemetryDailyCount] = []
+
+
+# ========================================
+# Focus / Daily Goals Schemas
+# ========================================
+
+class GoalItem(BaseModel):
+    text: str
+    completed: bool = False
+
+
+class DailyFocusResponse(BaseModel):
+    id: Optional[int] = None
+    focus_date: str
+    goals: List[GoalItem] = []
+    frog_task_id: Optional[int] = None
+    frog_task: Optional[TaskResponse] = None
+    weekly_target: Optional[str] = None
+    goals_completed: int = 0
+    goals_total: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DailyFocusUpdateRequest(BaseModel):
+    goals: Optional[List[GoalItem]] = None
+    frog_task_id: Optional[int] = None
+    weekly_target: Optional[str] = None
+
+
+class WeeklySummaryResponse(BaseModel):
+    week_start: str
+    week_end: str
+    weekly_target: Optional[str] = None
+    days: List[DailyFocusResponse] = []
+    total_goals_set: int = 0
+    total_goals_completed: int = 0
+    tasks_completed_this_week: int = 0

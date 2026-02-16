@@ -3,7 +3,7 @@ SQLAlchemy models for the assistant application
 
 These models match the database migrations in backend/migrations/.
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, JSON, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, JSON, Float, ForeignKey, Date
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import relationship
 
@@ -322,6 +322,28 @@ class TaskReminder(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class DailyFocus(Base):
+    """Daily focus goals and weekly target for the Focus tab"""
+    __tablename__ = "daily_focus"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    focus_date = Column(Date, nullable=False, index=True)
+
+    # Up to 3 daily goals: [{text: str, completed: bool}]
+    goals = Column(JSON, default=list)
+
+    # "Eat the frog" task
+    frog_task_id = Column(Integer, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
+    frog_task = relationship("Task", foreign_keys=[frog_task_id])
+
+    # Weekly target text
+    weekly_target = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class AgentActivityLog(Base):
     """Track all autonomous agent actions for transparency"""
     __tablename__ = "agent_activity_log"
@@ -608,10 +630,84 @@ class ContactContext(Base):
     notes = Column(Text, nullable=True)  # User-written notes only
     category = Column(String, nullable=True)  # vip | colleague | external | vendor
     preferred_tone = Column(String, nullable=True)  # formal | neutral | casual (overrides default)
+    promoted = Column(Boolean, default=False, index=True)  # User-promoted contact for vault/mentions
+    vault_note_id = Column(Integer, ForeignKey("vault_notes.id", ondelete="SET NULL"), nullable=True, index=True)
+    aliases = Column(JSON, default=list)  # Additional names/emails used for resolution
 
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class VaultNote(Base):
+    """Knowledge vault note (Markdown + frontmatter)."""
+    __tablename__ = "vault_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    slug = Column(String, nullable=False, index=True)
+    note_type = Column(String, nullable=False, index=True)  # person|project|meeting|decision|commitment
+    title = Column(String, nullable=False)
+    frontmatter = Column(JSON, default=dict)
+    body = Column(Text, default="")
+    canonical_email = Column(String, nullable=True, index=True)
+    aliases = Column(JSON, default=list)
+    source = Column(String, default="manual", index=True)
+    confidence = Column(Float, default=1.0)
+    status = Column(String, default="active", index=True)  # active|archived|draft
+    pinned = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    last_referenced_at = Column(DateTime, nullable=True, index=True)
+
+
+class VaultLink(Base):
+    """Graph edge between two vault notes."""
+    __tablename__ = "vault_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    source_note_id = Column(Integer, ForeignKey("vault_notes.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_note_id = Column(Integer, ForeignKey("vault_notes.id", ondelete="CASCADE"), nullable=False, index=True)
+    link_type = Column(String, default="reference", index=True)
+    context = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class VaultProposal(Base):
+    """Human-in-the-loop vault proposal queue."""
+    __tablename__ = "vault_proposals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    target_note_id = Column(Integer, ForeignKey("vault_notes.id", ondelete="SET NULL"), nullable=True, index=True)
+    proposal_type = Column(String, nullable=False, index=True)  # create_note|update_note|add_link|update_frontmatter
+    proposed_data = Column(JSON, nullable=False)
+    diff_summary = Column(Text, nullable=True)
+    source_type = Column(String, nullable=True, index=True)
+    source_id = Column(String, nullable=True, index=True)
+    dedupe_key = Column(String, nullable=True, index=True)
+    confidence = Column(Float, default=0.5)
+    priority = Column(String, default="normal", index=True)
+    status = Column(String, default="pending", index=True)  # auto_approved reserved for post-MVP
+    rejection_reason = Column(Text, nullable=True)
+    rejection_category = Column(String, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
+
+
+class VaultMetricsDaily(Base):
+    """Daily aggregates for vault observability."""
+    __tablename__ = "vault_metrics_daily"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    context_attempt_count = Column(Integer, default=0)
+    context_injected_count = Column(Integer, default=0)
+    notes_referenced_count = Column(Integer, default=0)
+    proposals_created_count = Column(Integer, default=0)
 
 
 # =============================================================================
@@ -782,6 +878,21 @@ class WebhookLog(Base):
     error = Column(Text, nullable=True)
     customer_id = Column(String, nullable=True)                # Polar customer_id or email address
     received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class UITelemetryEvent(Base):
+    """Product telemetry events emitted from frontend interactions."""
+    __tablename__ = "ui_telemetry_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    event_id = Column(String, nullable=True, index=True)
+    event_name = Column(String, nullable=False, index=True)
+    event_payload = Column(JSON, default=dict)
+    page_path = Column(String, nullable=True, index=True)
+    session_id = Column(String, nullable=True, index=True)
+    client_ts = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class TokenUsage(Base):

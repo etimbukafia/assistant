@@ -54,6 +54,7 @@ class CreateSessionRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=10000)
+    mentions: Optional[List[dict]] = None
 
 
 class SessionResponse(BaseModel):
@@ -254,7 +255,7 @@ async def send_message(
 
     # Process message
     try:
-        result = await service.send_message(session_id, request.content)
+        result = await service.send_message(session_id, request.content, mentions=request.mentions or [])
     except Exception as e:
         logger.error(f"Chat send_message failed: session={session_id}, user={user.user_id}, error={e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to process message")

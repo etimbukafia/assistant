@@ -18,6 +18,7 @@ from core.queue import Worker, BatchWorker
 from app.jobs.queue import queue_service
 from app.jobs.trial_warnings import handle_check_trial_expirations, get_next_trial_check_time
 from app.jobs.webhook_health import handle_check_webhook_health, get_next_webhook_health_check_time
+from app.handlers.vault_handlers import handle_vault_ingest, handle_vault_proposal_cleanup
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -1265,6 +1266,7 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
     session_id = payload.get("session_id")
     user_id = payload.get("user_id")
     content = payload.get("content")
+    mention_context = payload.get("mention_context") or {}
     assistant_message_id = payload.get("assistant_message_id")
 
     if not all([job_id, session_id, user_id, content, assistant_message_id]):
@@ -1312,7 +1314,7 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
             assistant_name=assistant_name,
             user_name=user_name,
         )
-        result = await orchestrator.process_message(session, content)
+        result = await orchestrator.process_message(session, content, mention_context=mention_context)
 
         # Get the placeholder message - verify it belongs to this session
         assistant_msg = db.query(ChatMessage).filter(
@@ -1489,6 +1491,8 @@ TASK_HANDLERS = {
     "renew_gmail_watches": handle_renew_gmail_watches,
     "check_trial_expirations": handle_check_trial_expirations,
     "check_webhook_health": handle_check_webhook_health,
+    "vault_ingest": handle_vault_ingest,
+    "vault_proposal_cleanup": handle_vault_proposal_cleanup,
 }
 
 
@@ -1542,7 +1546,7 @@ def schedule_cleanup_jobs_if_needed(db):
     from app.data.models import TaskQueue
     from app.jobs.queue import enqueue_task
 
-    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations", "check_webhook_health"]
+    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations", "check_webhook_health", "vault_proposal_cleanup"]
 
     for task_type in cleanup_jobs:
         existing = db.query(TaskQueue).filter(
@@ -1561,6 +1565,9 @@ def schedule_cleanup_jobs_if_needed(db):
                 next_run = get_next_trial_check_time()
             elif task_type == "check_webhook_health":
                 next_run = get_next_webhook_health_check_time()
+            elif task_type == "vault_proposal_cleanup":
+                from app.handlers.vault_handlers import get_next_vault_cleanup_time
+                next_run = get_next_vault_cleanup_time()
             else:
                 continue
 

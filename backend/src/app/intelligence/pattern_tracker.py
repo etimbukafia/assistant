@@ -210,6 +210,25 @@ class PatternTracker:
                     "conditions": {"sender_domain": sender_domain}
                 }
 
+        elif action_type in ("vault_proposal_approve", "vault_proposal_reject"):
+            proposal_type = context.get("proposal_type", "unknown")
+            note_type = context.get("note_type", "unknown")
+            source_type = context.get("source_type", "unknown")
+            rejection_category = context.get("rejection_category", "")
+            suffix = f":{rejection_category}" if rejection_category else ""
+            pattern_key = f"{action_type}:{proposal_type}:{note_type}:{source_type}{suffix}"
+            return {
+                "key": pattern_key,
+                "type": action_type,
+                "action": action_type,
+                "conditions": {
+                    "proposal_type": proposal_type,
+                    "note_type": note_type,
+                    "source_type": source_type,
+                    "rejection_category": rejection_category or None,
+                }
+            }
+
         return None
 
     def _calculate_confidence(self, occurrences: int) -> float:

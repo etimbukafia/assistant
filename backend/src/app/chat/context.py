@@ -15,6 +15,7 @@ from app.data.models import (
     UserSettings, PrincipalMemory
 )
 from app.intelligence.context_builder import ContextBuilder
+from app.services.vault_context import VaultContextService
 from app.security.prompt_sanitizer import (
     sanitize_for_prompt,
     wrap_user_content,
@@ -90,7 +91,7 @@ class ChatContextManager:
     """
     
     # Token budget constants
-    MAX_CONTEXT_TOKENS = 2000
+    MAX_CONTEXT_TOKENS = 3000
     MAX_HISTORY_MESSAGES = 10
     CHARS_PER_TOKEN = 4  # Conservative estimate
     
@@ -98,6 +99,7 @@ class ChatContextManager:
         self.db = db
         self.user_id = user_id
         self.context_builder = ContextBuilder(db, user_id)
+        self.vault_context_service = VaultContextService(db, user_id)
     
     def get_session_state(self, session: ChatSession) -> ConversationState:
         """Load ConversationState from session."""
@@ -298,6 +300,15 @@ class ChatContextManager:
             # Memory context is from DB, sanitize it
             safe_memory = sanitize_for_prompt(memory_context)
             parts.append(f"User preferences: {safe_memory}")
+
+        # 1.5 Vault context
+        vault_context = self.vault_context_service.build_context_packet(
+            participant_emails=[],
+            context_type=context_type,
+        )
+        if vault_context:
+            safe_vault = sanitize_for_prompt(vault_context)
+            parts.append(f"Long-term context: {safe_vault}")
 
         # 2. Current entity context (already sanitized by get_current_entity_context)
         entity_context = self.get_current_entity_context(state)

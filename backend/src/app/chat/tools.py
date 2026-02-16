@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from app.data.models import Message, Task, CalendarEvent, PrincipalMemory
 from app.security.tool_validator import validate_tool_args
 from app.security.security_logger import log_validation_failure
+from app.services.vault import VaultService
+from app.services.vault_context import VaultContextService
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +136,44 @@ class ChatToolRegistry:
                         "thread_id": {"type": "string", "description": "Thread ID to summarize"}
                     },
                     "required": ["thread_id"]
+                }
+            ),
+            "search_vault": ToolDefinition(
+                name="search_vault",
+                description="Search knowledge vault notes by query and optional note type.",
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "note_type": {"type": "string", "enum": ["person", "project", "meeting", "decision", "commitment"]},
+                        "limit": {"type": "integer", "default": 5}
+                    },
+                    "required": ["query"]
+                }
+            ),
+            "get_vault_note": ToolDefinition(
+                name="get_vault_note",
+                description="Get a vault note by slug or ID.",
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "slug": {"type": "string"},
+                        "note_id": {"type": "integer"}
+                    }
+                }
+            ),
+            "prep_meeting": ToolDefinition(
+                name="prep_meeting",
+                description="Generate a meeting prep brief using vault and work context.",
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "event_id": {"type": "integer"}
+                    },
+                    "required": ["event_id"]
                 }
             ),
             
@@ -472,6 +512,56 @@ class ChatToolRegistry:
             data=summary,
             state_updates={"current_thread_id": thread_id}
         )
+
+    def _execute_search_vault(self, params: Dict[str, Any]) -> ToolResult:
+        query = params.get("query", "")
+        note_type = params.get("note_type")
+        limit = min(params.get("limit", 5), 20)
+        service = VaultService(self.db, self.user_id)
+        notes = service.search_notes(query=query, note_type=note_type, limit=limit)
+        return ToolResult(
+            success=True,
+            data={
+                "notes": [
+                    {
+                        "id": n.id,
+                        "slug": n.slug,
+                        "note_type": n.note_type,
+                        "title": n.title,
+                        "body_preview": (n.body or "")[:200],
+                    }
+                    for n in notes
+                ],
+                "count": len(notes),
+            }
+        )
+
+    def _execute_get_vault_note(self, params: Dict[str, Any]) -> ToolResult:
+        service = VaultService(self.db, self.user_id)
+        note = None
+        if params.get("note_id"):
+            note = service.get_note(params["note_id"])
+        elif params.get("slug"):
+            note = service.get_note_by_slug(params["slug"])
+        if not note:
+            return ToolResult(success=False, error="Vault note not found")
+        return ToolResult(
+            success=True,
+            data={
+                "id": note.id,
+                "slug": note.slug,
+                "note_type": note.note_type,
+                "title": note.title,
+                "frontmatter": note.frontmatter or {},
+                "body": note.body or "",
+            }
+        )
+
+    def _execute_prep_meeting(self, params: Dict[str, Any]) -> ToolResult:
+        event_id = params.get("event_id")
+        service = VaultContextService(self.db, self.user_id)
+        prep = service.build_meeting_prep(event_id)
+        return ToolResult(success=True, data=prep)
     
     # =========================================================================
     # Approval-gated tool implementations (create pending actions)

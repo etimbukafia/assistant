@@ -28,6 +28,9 @@ from app.routes.v1 import (
     webhooks,
     notifications,
     onboarding,
+    vault,
+    focus,
+    telemetry,
 )
 from app.handlers.webhook_handlers import router as billing_router
 from app.security.rate_limiter import RateLimitMiddleware
@@ -193,6 +196,9 @@ app.include_router(billing_router, prefix="/v1")  # Polar webhooks
 app.include_router(webhooks.router, prefix="/v1")  # Gmail Pub/Sub
 app.include_router(notifications.router, prefix="/v1")
 app.include_router(onboarding.router, prefix="/v1")
+app.include_router(vault.router, prefix="/v1")
+app.include_router(focus.router, prefix="/v1")
+app.include_router(telemetry.router, prefix="/v1")
 
 
 @app.get("/")

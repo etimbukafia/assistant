@@ -4,7 +4,6 @@ import * as React from "react"
 import { usePathname } from "next/navigation"
 import { MessageSquare, X, Send, Sparkles, Loader2 } from "lucide-react"
 
-import { cn } from "@/lib/utils"
 import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { DonnaButton } from "@/components/ui/DonnaButton"
 import { DonnaText } from "@/components/ui/DonnaText"
@@ -12,9 +11,11 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useChatContext } from "@/context/ChatContext"
 import { useChat, useChatMessages } from "@/hooks/useChat"
+import { trackUIEvent } from "@/services/telemetry"
 import { MessageBubble } from "./MessageBubble"
 import { ActionBubble } from "./ActionBubble"
 import { toast } from "sonner"
+import { useMentionComposer } from "@/hooks/useMentionComposer"
 
 export function OmniChatOverlay() {
     const { isOpen, setIsOpen, mode } = useChatContext()
@@ -31,11 +32,32 @@ export function OmniChatOverlay() {
     } = useChat()
 
     // Updated hook utilization to get pendingActions
-    const { data: messages, pendingActions, isLoading: isLoadingMessages } = useChatMessages(currentSessionId)
+    const { data: messages, pendingActions } = useChatMessages(currentSessionId)
 
     const [inputValue, setInputValue] = React.useState("")
     const scrollRef = React.useRef<HTMLDivElement>(null)
+    const inputRef = React.useRef<HTMLInputElement>(null)
     const pathname = usePathname()
+
+    const {
+        listboxId,
+        mentionContext,
+        mentionSuggestions,
+        activeSuggestionIndex,
+        loadingSuggestions,
+        parseMentions,
+        onInputChange,
+        onInputKeyDown,
+        applySuggestion,
+        clearMentionState,
+    } = useMentionComposer({
+        inputValue,
+        setInputValue,
+        inputRef,
+        onMentionSelected: (mention) => {
+            trackUIEvent("mention_selected", { mention_type: mention.type, source: "overlay" })
+        },
+    })
 
     // Auto-scroll to bottom when messages change
     React.useEffect(() => {
@@ -44,28 +66,44 @@ export function OmniChatOverlay() {
         }
     }, [messages, pendingActions, isSending])
 
-    // Don't show overlay if already on the dedicated /chat page
-    if (pathname === "/chat") return null
-
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
         if (!inputValue.trim() || isSending || isCreating) return
 
         const content = inputValue.trim()
+        const mentions = parseMentions(content)
         setInputValue("") // Optimistic clear
+        clearMentionState()
 
         try {
             if (!currentSessionId) {
-                // First message creates the session
-                await createSession({ initial_message: content, mode })
+                // First create a session, then send the message to it.
+                const session = await createSession({ mode })
+                await sendMessage({ session_id: session.id, content, mode, mentions })
+                trackUIEvent("chat_message_sent", {
+                    has_mentions: mentions.length > 0,
+                    mention_count: mentions.length,
+                    source: "overlay",
+                })
             } else {
-                await sendMessage({ session_id: currentSessionId, content, mode })
+                await sendMessage({ session_id: currentSessionId, content, mode, mentions })
+                trackUIEvent("chat_message_sent", {
+                    has_mentions: mentions.length > 0,
+                    mention_count: mentions.length,
+                    source: "overlay",
+                })
             }
-        } catch (error) {
+        } catch {
             toast.error("Failed to send message")
             setInputValue(content) // Restore on error
         }
     }
+
+    // Don't show overlay if already on a dedicated chat page or auth pages
+    if (pathname === "/chat" ||
+        pathname.startsWith("/dashboard/chat") ||
+        pathname === "/login" ||
+        pathname.startsWith("/auth")) return null
 
     return (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
@@ -130,7 +168,13 @@ export function OmniChatOverlay() {
                                     {action && currentSessionId && (
                                         <ActionBubble
                                             action={action}
-                                            onApprove={(id) => approveAction({ sessionId: currentSessionId, actionId: id })}
+                                            onApprove={async (id) => {
+                                                await approveAction({ sessionId: currentSessionId, actionId: id })
+                                                trackUIEvent("chat_action_approved", {
+                                                    action_id: id,
+                                                    source: "overlay",
+                                                })
+                                            }}
                                             onReject={(id) => rejectAction({ sessionId: currentSessionId, actionId: id })}
                                             isApproving={isApproving}
                                             isRejecting={isRejecting}
@@ -155,13 +199,58 @@ export function OmniChatOverlay() {
                 {/* Input Area */}
                 <div className="p-4 bg-white border-t border-border/40">
                     <form className="flex gap-2" onSubmit={handleSubmit}>
-                        <Input
-                            placeholder="Ask Teeks to draft specific..."
-                            className="flex-1 bg-linen border-border focus-visible:ring-auburn/20 font-inter"
-                            value={inputValue}
-                            onChange={(e) => setInputValue(e.target.value)}
-                            disabled={isSending || isCreating}
-                        />
+                        <div className="relative flex-1">
+                            <Input
+                                ref={inputRef}
+                                aria-label="Chat message input"
+                                placeholder="Ask Teeks to draft specific..."
+                                className="flex-1 bg-linen border-border focus-visible:ring-auburn/20 font-inter"
+                                value={inputValue}
+                                role="combobox"
+                                aria-autocomplete="list"
+                                aria-expanded={Boolean(mentionContext || loadingSuggestions)}
+                                aria-controls={listboxId}
+                                aria-activedescendant={mentionSuggestions[activeSuggestionIndex] ? `${listboxId}-option-${activeSuggestionIndex}` : undefined}
+                                onChange={(e) => {
+                                    const value = e.target.value
+                                    const cursor = e.target.selectionStart ?? value.length
+                                    onInputChange(value, cursor)
+                                }}
+                                onKeyDown={onInputKeyDown}
+                                disabled={isSending || isCreating}
+                            />
+                            {(mentionContext || loadingSuggestions) && (
+                                <div
+                                    id={listboxId}
+                                    role="listbox"
+                                    className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border border-border/60 bg-white shadow-md"
+                                >
+                                    {loadingSuggestions ? (
+                                        <div className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">Loading mentions...</div>
+                                    ) : mentionSuggestions.length > 0 ? (
+                                        mentionSuggestions.map((suggestion, index) => (
+                                            <button
+                                                id={`${listboxId}-option-${index}`}
+                                                key={suggestion.key}
+                                                type="button"
+                                                role="option"
+                                                aria-selected={index === activeSuggestionIndex}
+                                                className={`w-full px-3 py-2 text-left text-xs hover:bg-linen/80 ${index === activeSuggestionIndex ? "bg-linen outline-none ring-1 ring-auburn/30" : ""
+                                                    }`}
+                                                onMouseDown={(evt) => {
+                                                    evt.preventDefault()
+                                                    applySuggestion(suggestion)
+                                                }}
+                                            >
+                                                {suggestion.display}
+                                            </button>
+                                        ))
+                                    ) : (
+                                        <div className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">No matches</div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                         <DonnaButton
                             type="submit"
                             size="icon"

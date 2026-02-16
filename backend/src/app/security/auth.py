@@ -388,6 +388,32 @@ def get_user_with_settings(
     return (user, settings)
 
 
+def _parse_admin_emails(admin_emails: str) -> set[str]:
+    return {
+        email.strip().lower()
+        for email in admin_emails.split(",")
+        if email.strip()
+    }
+
+
+def require_admin_user(
+    user: AuthenticatedUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> AuthenticatedUser:
+    """
+    Require that the authenticated user's email is in ADMIN_EMAILS.
+
+    ADMIN_EMAILS is a comma-separated list of admin email addresses.
+    """
+    allowed_admins = _parse_admin_emails(settings.ADMIN_EMAILS)
+    if user.email.lower() not in allowed_admins:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+    return user
+
+
 def require_active_subscription(
     user: AuthenticatedUser = Depends(get_current_user),
     settings: UserSettings = Depends(get_user_settings),

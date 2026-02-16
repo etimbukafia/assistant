@@ -61,12 +61,16 @@ export async function updateSession(request: NextRequest) {
     // Route Protection Logic
     const path = request.nextUrl.pathname
 
+    // Auth flow pages that require authentication
+    const protectedAuthRoutes = ['/auth/subscription', '/auth/setup']
+    const isProtectedAuthRoute = protectedAuthRoutes.some(r => path.startsWith(r))
+
     // Protected Routes
-    if (!user && (path.startsWith('/dashboard') || path.startsWith('/chat') || path.startsWith('/settings'))) {
+    if (!user && (path.startsWith('/dashboard') || path.startsWith('/chat') || path.startsWith('/settings') || isProtectedAuthRoute)) {
         return NextResponse.redirect(new URL('/login', request.url))
     }
 
-    // Redirect authenticated users away from login
+    // Redirect authenticated users away from login (but not from auth flow pages)
     if (user && path === '/login') {
         return NextResponse.redirect(new URL('/dashboard', request.url))
     }

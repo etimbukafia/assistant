@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
-from app.data.models import Task, ThreadState, CalendarEvent, UserSettings
+from app.data.models import Task, ThreadState, CalendarEvent, UserSettings, DailyFocus
 
 
 class DigestService:
@@ -26,7 +26,18 @@ class DigestService:
     def __init__(self, db: Session, user_email: str):
         self.db = db
         self.user_email = user_email
+        self._cached_user_id: Optional[str] = None
         self.user_tz = self._get_user_timezone()
+
+    @property
+    def _user_id(self) -> Optional[str]:
+        """Cached user_id lookup from UserSettings."""
+        if self._cached_user_id is None:
+            settings = self.db.query(UserSettings).filter(
+                UserSettings.user_email == self.user_email
+            ).first()
+            self._cached_user_id = settings.user_id if settings else ""
+        return self._cached_user_id or None
 
     def _get_user_timezone(self) -> ZoneInfo:
         """Get user's timezone from settings, default to UTC."""
@@ -69,6 +80,7 @@ class DigestService:
         Generate morning briefing digest.
 
         Content:
+        - Focus: yesterday's goal recap, weekly target, today's frog
         - Urgent tasks
         - Tasks due today
         - Threads needing reply (from ThreadState - authoritative)
@@ -79,13 +91,14 @@ class DigestService:
         today_start, today_end = self._get_day_boundaries(offset_days=0)
 
         sections = {
+            "focus": self._get_focus_for_morning(),
             "urgent_tasks": self._get_urgent_tasks(),
             "due_today": self._get_tasks_due_today(),
             "threads_needing_reply": self._get_threads_needing_reply(),
             "today_calendar": self._get_calendar_preview(today_start, today_end),
             "pending_approval": self._get_pending_approval_tasks()
         }
-        
+
         return {
             "type": "morning_briefing",
             "generated_at": now.isoformat(),
@@ -114,12 +127,13 @@ class DigestService:
         tomorrow_start, tomorrow_end = self._get_day_boundaries(offset_days=1)
 
         sections = {
+            "focus": self._get_focus_for_end_of_day(),
             "completed_today": self._get_completed_tasks(today_start, now),
             "still_pending": self._get_active_tasks(),
             "overdue": self._get_overdue_tasks(),
             "tomorrow_preview": self._get_calendar_preview(tomorrow_start, tomorrow_end)
         }
-        
+
         return {
             "type": "end_of_day",
             "generated_at": now.isoformat(),
@@ -146,12 +160,13 @@ class DigestService:
         week_ago = now - timedelta(days=7)
         
         sections = {
+            "focus_weekly": self._get_focus_for_weekly_review(week_ago, now),
             "waiting_for": self._get_waiting_for_tasks(),
             "overdue": self._get_overdue_tasks(),
             "weekly_stats": self._get_weekly_stats(week_ago, now),
             "stale_threads": self._get_stale_threads()
         }
-        
+
         return {
             "type": "weekly_review",
             "generated_at": now.isoformat(),
@@ -307,6 +322,122 @@ class DigestService:
             "participants": event.participants or []
         }
     
+    # =========================================================================
+    # Focus / Daily Goals Queries
+    # =========================================================================
+
+    def _get_focus_for_date(self, target_date) -> Optional[Dict]:
+        """Get DailyFocus row for a specific date."""
+        if not self._user_id:
+            return None
+
+        row = self.db.query(DailyFocus).filter(
+            DailyFocus.user_id == self._user_id,
+            DailyFocus.focus_date == target_date,
+        ).first()
+        if not row:
+            return None
+
+        goals = row.goals or []
+        completed = sum(1 for g in goals if g.get("completed"))
+        frog_title = None
+        frog_completed = False
+        if row.frog_task_id:
+            frog = self.db.query(Task).filter(Task.id == row.frog_task_id).first()
+            if frog:
+                frog_title = frog.title
+                frog_completed = frog.status == "completed"
+
+        return {
+            "goals": goals,
+            "goals_total": len(goals),
+            "goals_completed": completed,
+            "weekly_target": row.weekly_target,
+            "frog_task_title": frog_title,
+            "frog_completed": frog_completed,
+        }
+
+    def _get_focus_for_morning(self) -> Optional[Dict]:
+        """
+        Morning briefing focus data:
+        - Yesterday's goal recap
+        - Weekly target reminder
+        - Today's frog (if already set)
+        """
+        now_user = datetime.now(self.user_tz)
+        yesterday = now_user.date() - timedelta(days=1)
+        today = now_user.date()
+
+        yesterday_focus = self._get_focus_for_date(yesterday)
+        today_focus = self._get_focus_for_date(today)
+
+        result = {}
+        if yesterday_focus:
+            result["yesterday_goals_completed"] = yesterday_focus["goals_completed"]
+            result["yesterday_goals_total"] = yesterday_focus["goals_total"]
+        if today_focus:
+            result["weekly_target"] = today_focus.get("weekly_target")
+            result["frog_task_title"] = today_focus.get("frog_task_title")
+        elif yesterday_focus:
+            result["weekly_target"] = yesterday_focus.get("weekly_target")
+
+        return result if result else None
+
+    def _get_focus_for_end_of_day(self) -> Optional[Dict]:
+        """
+        End-of-day focus data:
+        - Today's goal progress
+        - Whether frog was tackled
+        """
+        now_user = datetime.now(self.user_tz)
+        today = now_user.date()
+        focus = self._get_focus_for_date(today)
+        if not focus:
+            return None
+
+        frog_completed = focus.get("frog_completed", False)
+
+        return {
+            "goals_completed": focus["goals_completed"],
+            "goals_total": focus["goals_total"],
+            "frog_task_title": focus.get("frog_task_title"),
+            "frog_completed": frog_completed,
+        }
+
+    def _get_focus_for_weekly_review(self, start: datetime, end: datetime) -> Optional[Dict]:
+        """
+        Weekly review focus data:
+        - Total goals set vs completed across the week
+        - Weekly target text
+        """
+        if not self._user_id:
+            return None
+
+        rows = self.db.query(DailyFocus).filter(
+            DailyFocus.user_id == self._user_id,
+            DailyFocus.focus_date >= start.date(),
+            DailyFocus.focus_date <= end.date(),
+        ).all()
+
+        if not rows:
+            return None
+
+        total_set = 0
+        total_completed = 0
+        weekly_target = None
+        for row in rows:
+            goals = row.goals or []
+            total_set += len(goals)
+            total_completed += sum(1 for g in goals if g.get("completed"))
+            if row.weekly_target:
+                weekly_target = row.weekly_target
+
+        return {
+            "goals_set": total_set,
+            "goals_completed": total_completed,
+            "weekly_target": weekly_target,
+        }
+
     # =========================================================================
     # Stats Queries
     # =========================================================================

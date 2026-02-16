@@ -136,6 +136,110 @@ def _render_thread_item(thread: Dict[str, Any]) -> str:
     </div>
     """
 
+def _render_focus_morning(focus: Dict[str, Any]) -> str:
+    """Render focus section for morning briefing."""
+    if not focus:
+        return ""
+
+    parts = []
+
+    # Yesterday's recap
+    yt = focus.get("yesterday_goals_total", 0)
+    yc = focus.get("yesterday_goals_completed", 0)
+    if yt > 0:
+        emoji = "\u2705" if yc == yt else "\u2B50" if yc > 0 else "\u23F3"
+        parts.append(f'<div style="font-size: 15px; color: {COLORS["obsidian"]}; margin-bottom: 8px;">{emoji} Yesterday: {yc}/{yt} goals completed</div>')
+
+    # Weekly target
+    wt = focus.get("weekly_target")
+    if wt:
+        parts.append(f'<div style="font-size: 14px; color: {COLORS["copper"]}; margin-bottom: 8px;">\U0001F3AF Weekly target: {wt}</div>')
+
+    # Today's frog
+    frog = focus.get("frog_task_title")
+    if frog:
+        parts.append(f'<div style="font-size: 14px; color: {COLORS["auburn"]}; font-weight: 600; margin-bottom: 4px;">\u26A1 Eat the frog: {frog}</div>')
+
+    if not parts:
+        return ""
+
+    content = "".join(parts)
+    return f"""
+    <div style="{STYLES['card']} border-left: 4px solid {COLORS['copper']}; padding: 16px 24px;">
+        <h3 style="{STYLES['section_title']} color: {COLORS['copper']};">Your Focus</h3>
+        {content}
+    </div>
+    """
+
+
+def _render_focus_end_of_day(focus: Dict[str, Any]) -> str:
+    """Render focus section for end-of-day digest."""
+    if not focus:
+        return ""
+
+    parts = []
+
+    gt = focus.get("goals_total", 0)
+    gc = focus.get("goals_completed", 0)
+    if gt > 0:
+        pct = int((gc / gt) * 100) if gt else 0
+        bar_color = COLORS["sage"] if pct >= 66 else COLORS["copper"] if pct >= 33 else COLORS["gray_text"]
+        parts.append(f'''
+        <div style="margin-bottom: 12px;">
+            <div style="font-size: 15px; color: {COLORS["obsidian"]}; margin-bottom: 6px;">Goals: {gc}/{gt} completed</div>
+            <div style="background: {COLORS["gray_light"]}; border-radius: 4px; height: 8px; overflow: hidden;">
+                <div style="background: {bar_color}; height: 100%; width: {pct}%; border-radius: 4px;"></div>
+            </div>
+        </div>''')
+
+    frog = focus.get("frog_task_title")
+    if frog:
+        done = focus.get("frog_completed", False)
+        icon = "\u2705" if done else "\u23F3"
+        label = "Completed!" if done else "Not completed"
+        parts.append(f'<div style="font-size: 14px; color: {COLORS["auburn"]};">{icon} Frog ({frog}): {label}</div>')
+
+    if not parts:
+        return ""
+
+    content = "".join(parts)
+    return f"""
+    <div style="{STYLES['card']} border-left: 4px solid {COLORS['copper']}; padding: 16px 24px;">
+        <h3 style="{STYLES['section_title']} color: {COLORS['copper']};">Today's Focus Recap</h3>
+        {content}
+    </div>
+    """
+
+
+def _render_focus_weekly(focus: Dict[str, Any]) -> str:
+    """Render focus section for weekly review."""
+    if not focus:
+        return ""
+
+    parts = []
+
+    gs = focus.get("goals_set", 0)
+    gc = focus.get("goals_completed", 0)
+    if gs > 0:
+        pct = int((gc / gs) * 100)
+        parts.append(f'<div style="font-size: 15px; color: {COLORS["obsidian"]}; margin-bottom: 8px;">\U0001F4CA Weekly goals: {gc}/{gs} completed ({pct}%)</div>')
+
+    wt = focus.get("weekly_target")
+    if wt:
+        parts.append(f'<div style="font-size: 14px; color: {COLORS["copper"]};">\U0001F3AF Target: {wt}</div>')
+
+    if not parts:
+        return ""
+
+    content = "".join(parts)
+    return f"""
+    <div style="{STYLES['card']} border-left: 4px solid {COLORS['copper']}; padding: 16px 24px;">
+        <h3 style="{STYLES['section_title']} color: {COLORS['copper']};">Focus Performance</h3>
+        {content}
+    </div>
+    """
+
+
 def _render_section(title: str, items: List[str], empty_msg: str = "Nothing to show.") -> str:
     """Render a generic card section."""
     if not items:
@@ -156,12 +260,12 @@ def _render_section(title: str, items: List[str], empty_msg: str = "Nothing to s
 
 def _render_morning_briefing(content: Dict[str, Any]) -> str:
     sections = content.get("sections", {})
-    
+
     # Overview (Top Card)
     urgent_count = len(sections.get("urgent_tasks", []))
     event_count = len(sections.get("today_calendar", []))
     thread_count = len(sections.get("threads_needing_reply", []))
-    
+
     stats_html = f"""
     <div style="{STYLES['card']} border-left: 4px solid {COLORS['auburn']};">
         <p style="{STYLES['text']} margin-bottom: 16px;">
@@ -174,24 +278,27 @@ def _render_morning_briefing(content: Dict[str, Any]) -> str:
         </div>
     </div>
     """
-    
+
+    # Focus section (yesterday recap, weekly target, frog)
+    focus_html = _render_focus_morning(sections.get("focus") or {})
+
     # 1. Urgent Tasks
     urgent_tasks = [_render_task_item(t) for t in sections.get("urgent_tasks", [])]
     urgent_html = _render_section("Urgent Attention", urgent_tasks) if urgent_tasks else ""
-    
+
     # 2. Schedule
     events = [_render_event_item(e) for e in sections.get("today_calendar", [])]
     schedule_html = _render_section("Today's Schedule", events, "No meetings scheduled.")
-    
+
     # 3. Threads
     threads = [_render_thread_item(t) for t in sections.get("threads_needing_reply", [])]
     threads_html = _render_section("Needing Reply", threads) if threads else ""
-    
+
     # 4. Due Today
     due_tasks = [_render_task_item(t) for t in sections.get("due_today", [])]
     due_html = _render_section("Tasks Due Today", due_tasks) if due_tasks else ""
 
-    return f"{stats_html}{urgent_html}{schedule_html}{threads_html}{due_html}"
+    return f"{stats_html}{focus_html}{urgent_html}{schedule_html}{threads_html}{due_html}"
 
 def _render_end_of_day(content: Dict[str, Any]) -> str:
     sections = content.get("sections", {})
@@ -214,15 +321,18 @@ def _render_end_of_day(content: Dict[str, Any]) -> str:
     </div>
     """
     
+    # Focus section (today's goal progress, frog status)
+    focus_html = _render_focus_end_of_day(sections.get("focus") or {})
+
     # 1. Completed
     completed = [_render_task_item(t) for t in sections.get("completed_today", [])]
     completed_html = _render_section("Completed Today", completed, "No tasks completed yet.")
-    
+
     # 2. Tomorrow Preview
     events = [_render_event_item(e) for e in sections.get("tomorrow_preview", [])]
     tomorrow_html = _render_section("Tomorrow's Schedule", events, "No meetings scheduled.")
 
-    return f"{stats_html}{completed_html}{tomorrow_html}"
+    return f"{stats_html}{focus_html}{completed_html}{tomorrow_html}"
 
 def _render_weekly_review(content: Dict[str, Any]) -> str:
     sections = content.get("sections", {})
@@ -241,15 +351,18 @@ def _render_weekly_review(content: Dict[str, Any]) -> str:
     </div>
     """
     
+    # Focus performance (goals completed this week, weekly target)
+    focus_html = _render_focus_weekly(sections.get("focus_weekly") or {})
+
     # 1. Waiting For
     waiting = [_render_task_item(t) for t in sections.get("waiting_for", [])]
     waiting_html = _render_section("Waiting For", waiting)
-    
+
     # 2. Stale Threads
     threads = [_render_thread_item(t) for t in sections.get("stale_threads", [])]
     threads_html = _render_section("Stale Conversations", threads)
-    
-    return f"{stats_html}{waiting_html}{threads_html}"
+
+    return f"{stats_html}{focus_html}{waiting_html}{threads_html}"
 
 # =============================================================================
 # Public Interface

@@ -20,6 +20,14 @@ curl http://localhost:8000/queue/stats # Monitor queue
 npm start        # Start Expo
 npm run android  # Run on Android
 npm run ios      # Run on iOS
+npm run build:web  # Export web build (copies _redirects for Netlify)
+```
+
+### Website (from `website/` directory)
+```bash
+npm run dev      # Start Vite dev server
+npm run build    # Production build
+npm run lint     # ESLint
 ```
 
 ### Testing (from `backend/` directory)
@@ -67,6 +75,8 @@ mobile/
 │   ├── hooks/         # TanStack Query hooks
 │   ├── services/      # API service functions
 │   └── theme/         # Design tokens and colors
+
+website/                # Marketing/landing page (React + Vite + Tailwind CSS v4)
 ```
 
 ### Key Backend Patterns
@@ -138,6 +148,7 @@ Optional:
 - `LLM_PROVIDER` - "huggingface" or "gemini" (default)
 - `LLM_HF_MODEL` - HuggingFace model ID for local inference
 - `FRONTEND_URL` - Frontend URL for OAuth redirects
+- `API_URL` - Backend API URL for mobile/website (defaults to localhost:8000)
 
 ## Database
 

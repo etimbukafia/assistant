@@ -139,7 +139,8 @@ class ChatOrchestrator:
     async def process_message(
         self,
         session: ChatSession,
-        user_message: str
+        user_message: str,
+        mention_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Process a user message and generate a response.
@@ -148,7 +149,7 @@ class ChatOrchestrator:
             Dict with 'response', 'pending_actions', 'state_updates'
         """
         try:
-            return await self._process_message_internal(session, user_message)
+            return await self._process_message_internal(session, user_message, mention_context=mention_context or {})
         except Exception as e:
             logger.error(f"Unexpected error in process_message: {e}", exc_info=True)
             return {
@@ -160,7 +161,8 @@ class ChatOrchestrator:
     async def _process_message_internal(
         self,
         session: ChatSession,
-        user_message: str
+        user_message: str,
+        mention_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Internal message processing with full error context."""
         # Security: Check for injection patterns in user message
@@ -195,6 +197,13 @@ class ChatOrchestrator:
 
         # Build messages for LLM
         messages = [{"role": "system", "content": mode.system_prompt}]
+        if mention_context:
+            # Structured mention context is serialized as JSON to avoid prompt-shape injection.
+            safe_context = json.dumps(mention_context, ensure_ascii=True, separators=(",", ":"))
+            messages.append({
+                "role": "system",
+                "content": f"Resolved mention context JSON: {safe_context}",
+            })
         for msg in history:
             messages.append({"role": msg["role"], "content": msg["content"]})
         messages.append({"role": "user", "content": user_message})

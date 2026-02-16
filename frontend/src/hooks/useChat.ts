@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { chatService, SendMessageRequest, CreateSessionRequest } from '../services/chat';
+import { chatService, SendMessageRequest } from '../services/chat';
 import { useState, useCallback } from 'react';
 
 const STORAGE_KEYS = {

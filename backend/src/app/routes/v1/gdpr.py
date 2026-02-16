@@ -7,7 +7,7 @@ from app.data.models import (
     Message, Task, TaskReminder, SchedulingSuggestion,
     CalendarEvent, AgentActivityLog,
     PrincipalMemory, DecisionPattern, ContactContext,
-    UserSettings, GmailAccount, TaskQueue
+    UserSettings, GmailAccount, TaskQueue, UITelemetryEvent
 )
 
 router = APIRouter(prefix="/user", tags=["User & GDPR"])
@@ -146,6 +146,20 @@ def export_user_data(db: Session = Depends(get_db_for_user)):
         for a in db.query(AgentActivityLog).all()
     ]
 
+    export_data["ui_telemetry_events"] = [
+        {
+            "id": t.id,
+            "event_id": t.event_id,
+            "event_name": t.event_name,
+            "event_payload": t.event_payload,
+            "page_path": t.page_path,
+            "session_id": t.session_id,
+            "client_ts": t.client_ts.isoformat() if t.client_ts else None,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in db.query(UITelemetryEvent).all()
+    ]
+
     # Settings
     settings = db.query(UserSettings).first()
     if settings:
@@ -202,6 +216,7 @@ def delete_user_data(
         deletion_summary["scheduling_suggestions"] = db.query(SchedulingSuggestion).delete()
         deletion_summary["calendar_events"] = db.query(CalendarEvent).delete()
         deletion_summary["agent_logs"] = db.query(AgentActivityLog).delete()
+        deletion_summary["ui_telemetry_events"] = db.query(UITelemetryEvent).delete()
         deletion_summary["messages"] = db.query(Message).delete()
         deletion_summary["principal_memory"] = db.query(PrincipalMemory).delete()
         deletion_summary["decision_patterns"] = db.query(DecisionPattern).delete()

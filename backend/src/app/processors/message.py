@@ -245,6 +245,28 @@ def process_messages_batch(
                         correlation_id=correlation_id,
                         db=db
                     )
+
+                # Emit message_processed event (required for downstream ingestion/notifications)
+                enqueue_task(
+                    task_type="emit_event",
+                    payload={
+                        "user_id": message.user_id,
+                        "event_name": "message_processed",
+                        "event_payload": {
+                            "message_id": message.id,
+                            "user_id": message.user_id,
+                            "thread_id": message.thread_id,
+                            "needs_reply": ai_results["needs_reply"],
+                            "task_count": len(ai_results.get("extracted_tasks", [])),
+                            "date_count": len(ai_results.get("extracted_dates", [])),
+                            "people_count": len(ai_results.get("extracted_people", [])),
+                            "decision_count": len(ai_results.get("extracted_decisions", [])),
+                            "scheduling_intent": ai_results.get("scheduling_intent", False),
+                        }
+                    },
+                    correlation_id=correlation_id,
+                    db=db
+                )
                 
                 results.append(ai_results)
 

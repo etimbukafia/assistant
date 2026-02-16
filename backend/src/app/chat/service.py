@@ -22,7 +22,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory, TaskQueue, UserSettings
+from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory, TaskQueue, UserSettings, ContactContext, Message, VaultNote
 from app.jobs.queue import queue_service
 from .orchestrator import ChatOrchestrator
 
@@ -230,6 +230,96 @@ class ChatService:
         self.db.refresh(message)
         
         return message
+
+    @staticmethod
+    def _sanitize_mention_text(value: Optional[str], max_len: int = 200) -> str:
+        if not value:
+            return ""
+        text = re.sub(r"[\r\n\t]+", " ", str(value))
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:max_len]
+
+    def _resolve_mentions(self, mentions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Resolve structured mention tokens into canonical targets."""
+        resolved_contacts = []
+        resolved_emails = []
+        resolved_knowledge = []
+
+        for mention in mentions or []:
+            mtype = mention.get("type")
+            ref_id = mention.get("ref_id", "")
+            label = mention.get("label")
+
+            if mtype == "contact":
+                email = None
+                if "@" in ref_id:
+                    email = self._sanitize_mention_text(ref_id.lower(), max_len=254)
+                else:
+                    contact = self.db.query(ContactContext).filter(
+                        ContactContext.user_id == self.user_id,
+                        (ContactContext.contact_email == ref_id) |
+                        (ContactContext.contact_name.ilike(ref_id))
+                    ).first()
+                    if contact:
+                        email = contact.contact_email
+                if email:
+                    safe_label = self._sanitize_mention_text(label or email, max_len=180)
+                    resolved_contacts.append({"email": email, "label": safe_label or email})
+
+            elif mtype == "email":
+                # Prefer stable message id when provided
+                msg_id = mention.get("metadata", {}).get("message_id")
+                if not msg_id and ref_id.startswith("msg:"):
+                    try:
+                        msg_id = int(ref_id.split(":", 1)[1])
+                    except (TypeError, ValueError):
+                        msg_id = None
+                msg = None
+                if msg_id:
+                    msg = self.db.query(Message).filter(
+                        Message.id == msg_id,
+                        Message.user_id == self.user_id
+                    ).first()
+                if not msg and ref_id:
+                    safe_ref = self._sanitize_mention_text(ref_id, max_len=180)
+                    msg = self.db.query(Message).filter(
+                        Message.user_id == self.user_id,
+                        Message.subject.ilike(f"%{safe_ref}%")
+                    ).order_by(Message.received_at.desc()).first()
+                if msg:
+                    resolved_emails.append({
+                        "message_id": msg.id,
+                        "subject": self._sanitize_mention_text(msg.subject, max_len=220),
+                        "sender": self._sanitize_mention_text(msg.sender, max_len=220),
+                        "thread_id": msg.thread_id,
+                    })
+            elif mtype == "knowledge":
+                note_id = mention.get("metadata", {}).get("note_id")
+                note = None
+                if note_id:
+                    note = self.db.query(VaultNote).filter(
+                        VaultNote.id == note_id,
+                        VaultNote.user_id == self.user_id,
+                        VaultNote.status == "active",
+                    ).first()
+                if not note and ref_id:
+                    note = self.db.query(VaultNote).filter(
+                        VaultNote.user_id == self.user_id,
+                        VaultNote.status == "active",
+                        (
+                            VaultNote.slug.ilike(ref_id) |
+                            VaultNote.title.ilike(f"%{ref_id}%")
+                        )
+                    ).order_by(VaultNote.updated_at.desc()).first()
+                if note:
+                    resolved_knowledge.append({
+                        "note_id": note.id,
+                        "slug": self._sanitize_mention_text(note.slug, max_len=120),
+                        "title": self._sanitize_mention_text(note.title, max_len=220),
+                        "note_type": self._sanitize_mention_text(note.note_type, max_len=64),
+                    })
+
+        return {"contacts": resolved_contacts, "emails": resolved_emails, "knowledge": resolved_knowledge}
     
     def get_messages(
         self,
@@ -595,7 +685,8 @@ class ChatService:
     async def send_message(
         self,
         session_id: str,
-        content: str
+        content: str,
+        mentions: Optional[List[Dict[str, Any]]] = None
     ) -> ChatResponse:
         """
         Send a message and get AI response.
@@ -616,8 +707,16 @@ class ChatService:
                 error="Session not found"
             )
 
+        mentions = mentions or []
+        resolved_mentions = self._resolve_mentions(mentions)
+
         # Save user message
-        user_msg = self.add_message(session_id, "user", content)
+        user_msg = self.add_message(
+            session_id,
+            "user",
+            content,
+            metadata={"mentions": mentions, "resolved_mentions": resolved_mentions}
+        )
 
         # Auto-generate title from first message if not set
         if not session.title:
@@ -628,29 +727,42 @@ class ChatService:
 
         # REFLECTION MODE: Always synchronous
         if session.session_type == "reflection":
-            return await self._process_sync(session, content, user_msg.id)
+            return await self._process_sync(session, content, user_msg.id, mention_context=resolved_mentions)
 
         # ACTION MODE: Optimistic sync with async fallback
         # Check if message likely needs tools
         if detect_tool_intent(content):
             logger.info(f"Tool intent detected, using async path for session {session_id}")
-            return self._enqueue_async(session, content, user_msg.id)
+            return self._enqueue_async(
+                session,
+                content,
+                user_msg.id,
+                mentions=mentions,
+                mention_context=resolved_mentions,
+            )
 
         # Try synchronous processing with timeout
         try:
             return await asyncio.wait_for(
-                self._process_sync(session, content, user_msg.id),
+                self._process_sync(session, content, user_msg.id, mention_context=resolved_mentions),
                 timeout=SYNC_TIMEOUT_SECONDS
             )
         except asyncio.TimeoutError:
             logger.info(f"Sync timeout, falling back to async for session {session_id}")
-            return self._enqueue_async(session, content, user_msg.id)
+            return self._enqueue_async(
+                session,
+                content,
+                user_msg.id,
+                mentions=mentions,
+                mention_context=resolved_mentions,
+            )
 
     async def _process_sync(
         self,
         session: ChatSession,
         content: str,
-        user_message_id: int
+        user_message_id: int,
+        mention_context: Optional[Dict[str, Any]] = None,
     ) -> ChatResponse:
         """
         Process message synchronously.
@@ -675,7 +787,11 @@ class ChatService:
                 assistant_name=assistant_name,
                 user_name=user_name,
             )
-            result = await orchestrator.process_message(session, content)
+            result = await orchestrator.process_message(
+                session,
+                content,
+                mention_context=mention_context or {},
+            )
 
             # Save assistant response
             assistant_msg = self.add_message(
@@ -726,7 +842,9 @@ class ChatService:
         self,
         session: ChatSession,
         content: str,
-        user_message_id: int
+        user_message_id: int,
+        mentions: Optional[List[Dict[str, Any]]] = None,
+        mention_context: Optional[Dict[str, Any]] = None,
     ) -> ChatResponse:
         """
         Enqueue message for async processing.
@@ -759,7 +877,9 @@ class ChatService:
                 "user_id": self.user_id,
                 "content": content,
                 "user_message_id": user_message_id,
-                "assistant_message_id": placeholder_msg.id
+                "assistant_message_id": placeholder_msg.id,
+                "mentions": mentions or [],
+                "mention_context": mention_context or {},
             },
             db=self.db
         )
