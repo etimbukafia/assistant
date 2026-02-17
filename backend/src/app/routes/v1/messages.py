@@ -601,7 +601,7 @@ def reprocess_message(message_id: int, db: Session = Depends(get_db_for_user)):
     }
 
     # Fetch assistant name from user settings
-    assistant_name = "Donna"  # default
+    assistant_name = "Teeks"  # default
     if message.user_id:
         user_settings = db.query(UserSettings).filter(UserSettings.user_id == message.user_id).first()
         if user_settings and user_settings.assistant_name:

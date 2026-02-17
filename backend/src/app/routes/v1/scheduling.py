@@ -92,6 +92,7 @@ def send_scheduling_suggestion(
         # Create follow-up task
         follow_up_task = Task(
             message_id=message.id,
+            user_id=message.user_id,
             title=f"Follow up on scheduling with {message.sender.split('@')[0]}",
             description="Check if they responded to your availability",
             task_type="follow_up",

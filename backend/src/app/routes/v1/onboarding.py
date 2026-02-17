@@ -9,7 +9,7 @@ from app.data.models import UserSettings
 router = APIRouter(prefix="/onboarding", tags=["Onboarding"])
 
 class CompleteOnboardingRequest(BaseModel):
-    assistant_name: Optional[str] = "Donna"
+    assistant_name: Optional[str] = "Teeks"
 
 @router.post("/complete")
 def complete_onboarding(
@@ -31,7 +31,7 @@ def complete_onboarding(
         raise HTTPException(status_code=404, detail="User settings not found")
     
     name = (request.assistant_name or "").strip()
-    settings.assistant_name = name[:50] if name else "Donna"
+    settings.assistant_name = name[:50] if name else "Teeks"
     settings.onboarding_completed = True
     db.commit()
     

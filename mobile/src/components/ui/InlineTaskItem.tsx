@@ -89,9 +89,9 @@ export const InlineTaskItem: React.FC<InlineTaskItemProps> = ({
                 </View>
 
                 <View style={styles.textContainer}>
-                    {/* Pending Approval: "Suggested by AI" label */}
+                    {/* Pending Approval: "Suggested by TEEKS" label */}
                     {isPendingApproval && (
-                        <DonnaText style={styles.aiSuggestedLabel}>SUGGESTED BY AI</DonnaText>
+                        <DonnaText style={styles.aiSuggestedLabel}>SUGGESTED BY TEEKS</DonnaText>
                     )}
 
                     {/* Waiting For: Show waiting context */}

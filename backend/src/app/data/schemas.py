@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+﻿from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -75,6 +75,7 @@ class MessagesListResponse(BaseModel):
 class UserSettingsResponse(BaseModel):
     id: int
     user_email: str
+    notification_email: Optional[str] = None
     auto_approve_tasks: bool
     task_detection_instructions: Optional[str] = None
     reminder_preferences: Dict[str, Any]
@@ -88,7 +89,7 @@ class UserSettingsResponse(BaseModel):
     days_remaining: int = 0
     
     # Personalization & Onboarding
-    assistant_name: str = "Donna"
+    assistant_name: str = "Teeks"
     onboarding_completed: bool = False
 
     # Integration status
@@ -96,6 +97,9 @@ class UserSettingsResponse(BaseModel):
     initial_sync_failed: bool = False
     gmail_connected: bool = False
     calendar_connected: bool = False
+    default_calendar_id: Optional[str] = None
+    auto_briefing_enabled: Optional[bool] = None
+    briefing_hours_before: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
@@ -109,6 +113,10 @@ class UserSettingsUpdateRequest(BaseModel):
     notification_preferences: Optional[Dict[str, Any]] = None
     enable_quick_reply_from_task: Optional[bool] = None
     assistant_name: Optional[str] = None
+    notification_email: Optional[str] = None
+    default_calendar_id: Optional[str] = None
+    auto_briefing_enabled: Optional[bool] = None
+    briefing_hours_before: Optional[int] = None
 
 
 # ========================================
@@ -137,6 +145,9 @@ class TaskResponse(BaseModel):
     snoozed_until: Optional[datetime] = None
     related_people: List[str]
     related_dates: List[str]
+    deadline: Optional[datetime] = Field(default=None, serialization_alias="deadline_at")
+    deadline_source: Optional[str] = None
+    deadline_user_confirmed: Optional[bool] = None
 
     confidence_score: Optional[float] = Field(default=None, serialization_alias="confidence")
 
@@ -147,8 +158,41 @@ class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
+class TaskListItem(BaseModel):
+    """Slim task schema for list endpoints (no source_message payload)."""
+    id: int
+    message_id: int
+    title: str
+    description: Optional[str] = None
+    source_snippet: Optional[str] = None
+
+    task_type: str = Field(serialization_alias="type")
+    priority: str
+    status: str
+
+    approved_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    dismissed_at: Optional[datetime] = None
+    reminder_context: Optional[Dict[str, Any]] = None
+    scheduled_reminder_at: Optional[datetime] = None
+    last_reminded_at: Optional[datetime] = None
+    reminder_count: int
+    snoozed_until: Optional[datetime] = None
+    related_people: List[str]
+    related_dates: List[str]
+    deadline: Optional[datetime] = Field(default=None, serialization_alias="deadline_at")
+    deadline_source: Optional[str] = None
+    deadline_user_confirmed: Optional[bool] = None
+
+    confidence_score: Optional[float] = Field(default=None, serialization_alias="confidence")
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
 class TasksListResponse(BaseModel):
-    tasks: List[TaskResponse]
+    tasks: List[TaskListItem]
     total: int
 
 
@@ -176,6 +220,10 @@ class TaskUpdateRequest(BaseModel):
     description: Optional[str] = None
     priority: Optional[str] = None
     scheduled_reminder_at: Optional[datetime] = None
+    deadline: Optional[datetime] = None
+    deadline_confirmed: Optional[bool] = Field(default=None, validation_alias="confirm_deadline")
+    mark_urgent: Optional[bool] = None
+    clear_deadline: Optional[bool] = None
 
 
 class TaskSnoozeRequest(BaseModel):
@@ -231,11 +279,41 @@ class CalendarEventCreateRequest(BaseModel):
     location: Optional[str] = None
 
 
+class CalendarEventManualCreateRequest(BaseModel):
+    """Request to create a calendar event directly (not from suggestion)"""
+    title: str
+    start_time: datetime
+    end_time: datetime
+    description: Optional[str] = None
+    notes: Optional[str] = None
+    participants: Optional[List[str]] = None
+    all_day: Optional[bool] = False
+    timezone: Optional[str] = None
+    location: Optional[str] = None
+    calendar_id: Optional[str] = None
+
+
+class CalendarEventUpdateRequest(BaseModel):
+    """Request to update a calendar event"""
+    title: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    description: Optional[str] = None
+    notes: Optional[str] = None
+    participants: Optional[List[str]] = None
+    all_day: Optional[bool] = None
+    timezone: Optional[str] = None
+    location: Optional[str] = None
+    calendar_id: Optional[str] = None
+
+
 class CalendarEventResponse(BaseModel):
     """Response for a calendar event"""
     id: int
     title: str
     description: Optional[str] = None
+    notes: Optional[str] = None
+    all_day: Optional[bool] = None
     start_time: datetime
     end_time: datetime
     participants: List[str]
@@ -245,8 +323,12 @@ class CalendarEventResponse(BaseModel):
     source_suggestion_id: Optional[int] = None
     provider: str
     external_event_id: Optional[str] = None
+    calendar_id: Optional[str] = None
     status: str
     error_message: Optional[str] = None
+    briefing: Optional[Dict[str, Any]] = None
+    briefing_generated_at: Optional[datetime] = None
+    briefing_scheduled_for: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -275,6 +357,9 @@ class CalendarSettingsResponse(BaseModel):
     working_hours_end: str
     default_timezone: str
     calendar_ids: List[str]
+    default_calendar_id: Optional[str] = None
+    auto_briefing_enabled: Optional[bool] = None
+    briefing_hours_before: Optional[int] = None
 
 
 class CalendarSettingsUpdateRequest(BaseModel):
@@ -286,6 +371,9 @@ class CalendarSettingsUpdateRequest(BaseModel):
     working_hours_end: Optional[str] = None
     default_timezone: Optional[str] = None
     calendar_ids: Optional[List[str]] = None
+    default_calendar_id: Optional[str] = None
+    auto_briefing_enabled: Optional[bool] = None
+    briefing_hours_before: Optional[int] = None
 
 
 class CalendarInfoResponse(BaseModel):
@@ -755,3 +843,7 @@ class WeeklySummaryResponse(BaseModel):
     total_goals_set: int = 0
     total_goals_completed: int = 0
     tasks_completed_this_week: int = 0
+
+
+
+

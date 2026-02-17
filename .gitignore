@@ -28,14 +28,17 @@ tests/
 # Except markdown files in backend/prompts
 !backend/prompts/
 !backend/prompts/*.md
+!calendar_plan.md
 
 # Except markdown files in design
 !design/
 !design/*.md
 !claude.md
+!AGENTS.md
 !BUSINESS_ANALYSIS.md
 !knowledge-vault-prd.md
 !backend/principles.md
+tests/
 
 # Google credentials
 credentials.json

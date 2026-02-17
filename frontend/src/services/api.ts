@@ -15,9 +15,18 @@ export const api = axios.create({
 
 // Add auth interceptor using Supabase session
 api.interceptors.request.use(async (config) => {
+    // Skip if caller already set Authorization (e.g. fetchSettings with explicit token)
+    if (config.headers.Authorization) return config;
+
     try {
         const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
+        let { data: { session } } = await supabase.auth.getSession();
+
+        // If no session (expired/missing), try refreshing before giving up
+        if (!session?.access_token) {
+            const { data: { session: refreshed } } = await supabase.auth.refreshSession();
+            session = refreshed;
+        }
 
         if (session?.access_token) {
             config.headers.Authorization = `Bearer ${session.access_token}`;

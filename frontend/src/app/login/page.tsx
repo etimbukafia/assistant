@@ -109,13 +109,17 @@ function BriefingCard({
 }
 
 export default function LoginPage() {
-    const { loading } = useAuth();
+    const { loading, signInWithGoogle } = useAuth();
 
     const handleContinue = () => {
         // Navigate to connect-google trust screen first
         window.location.href = "/auth/connect-google";
     };
 
+    const handleLogin = async () => {
+        // Skip trust screen and go straight to Google auth
+        await signInWithGoogle();
+    };
 
 
     if (loading) {
@@ -162,6 +166,16 @@ export default function LoginPage() {
                         </svg>
                         Continue with Google
                     </button>
+                    <p className="text-xs text-faint text-center">
+                        Already signed up?{" "}
+                        <button
+                            type="button"
+                            onClick={handleLogin}
+                            className="underline text-copper"
+                        >
+                            Log in
+                        </button>
+                    </p>
 
 
                 </div>

@@ -314,19 +314,22 @@ class GmailClient:
         """Get client secret from environment"""
         return get_settings().GOOGLE_CLIENT_SECRET
 
-    def exchange_code_for_token(self, code: str) -> Credentials:
+    def exchange_code_for_token(self, code: str, state: Optional[str] = None) -> Credentials:
         """
         Exchange authorization code for credentials.
         Wrapper around authenticate_with_code for backward compatibility.
 
         Args:
             code: Authorization code from Google callback
+            state: OAuth state parameter (required for web flow)
 
         Returns:
             Credentials object
         """
-        state = self._flow_state
-        return self.authenticate_with_code(code, state)
+        resolved_state = state or self._flow_state
+        if not resolved_state:
+            raise Exception("Missing OAuth state for token exchange")
+        return self.authenticate_with_code(code, resolved_state)
 
     def get_profile_email(self) -> Optional[str]:
         """

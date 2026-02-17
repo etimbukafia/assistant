@@ -17,11 +17,7 @@ import QueryProvider from "@/providers/QueryProvider";
 import { Toaster } from "sonner";
 
 import { ChatProvider } from "@/context/ChatContext";
-import dynamic from 'next/dynamic';
-
-const OmniChatOverlay = dynamic(() => import('@/components/chat/OmniChatOverlay').then(mod => mod.OmniChatOverlay), {
-  ssr: false,
-});
+import { OmniChatOverlay } from "@/components/chat/OmniChatOverlay";
 
 export default function RootLayout({
   children,
@@ -30,6 +26,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <link
+          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+          rel="stylesheet"
+        />
+      </head>
       <body className={cn(
         "min-h-screen bg-background font-sans antialiased",
         inter.variable,

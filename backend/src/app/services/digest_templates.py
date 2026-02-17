@@ -400,7 +400,7 @@ def render_digest_email(digest_type: str, content: Dict[str, Any], user_email: s
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{title} - Donna</title>
+        <title>{title} - Teeks</title>
     </head>
     <body style="{STYLES['body']}">
         <div style="{STYLES['container']}">
@@ -419,7 +419,7 @@ def render_digest_email(digest_type: str, content: Dict[str, Any], user_email: s
             <!-- Footer -->
             <div style="{STYLES['footer']}">
                 <p>
-                    Sent by <strong>Donna</strong><br>
+                    Sent by <strong>Teeks</strong><br>
                     Your Executive Assistant
                 </p>
                 <p style="margin-top: 20px;">

@@ -40,6 +40,9 @@ export interface Task {
     description?: string;
     priority: 'urgent' | 'high' | 'normal' | 'low';
     status: 'pending_approval' | 'approved' | 'in_progress' | 'completed' | 'dismissed' | 'waiting_for';
+    approved_at?: string;
+    completed_at?: string;
+    dismissed_at?: string;
     deadline_at?: string;
     deadline_source?: 'explicit' | 'inferred';
     deadline_user_confirmed?: boolean;
@@ -47,6 +50,19 @@ export interface Task {
     scheduled_reminder_at?: string;
     created_at: string;
     updated_at: string;
+    source_message?: TaskSourceMessage;
+}
+
+export interface TaskSourceMessage {
+    id: number;
+    message_id: string;
+    thread_id?: string;
+    subject: string;
+    sender: string;
+    recipient: string;
+    body: string;
+    received_at: string;
+    summary?: string;
 }
 
 export interface ThreadMessage {

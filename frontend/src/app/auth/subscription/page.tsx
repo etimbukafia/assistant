@@ -11,7 +11,17 @@ type PlanType = "trial" | "pro";
 
 export default function SubscriptionPage() {
     const router = useRouter();
-    const { user, refreshProfile } = useAuth();
+    const {
+        user,
+        settings,
+        loading,
+        settingsLoading,
+        gmailConnectError,
+        gmailConnectInFlight,
+        gmailConnected,
+        retryGmailConnect,
+        refreshProfile,
+    } = useAuth();
     const [selectedPlan, setSelectedPlan] = useState<PlanType>("trial");
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -23,13 +33,23 @@ export default function SubscriptionPage() {
     }, [user]);
 
     const handleContinue = async () => {
+        if (gmailConnectInFlight) {
+            setError("Gmail is still connecting. Please wait a moment.");
+            return;
+        }
+        if (!gmailConnected) {
+            setError("Gmail isn't connected yet. Please connect to continue.");
+            return;
+        }
         setIsProcessing(true);
         setError(null);
         try {
             if (selectedPlan === "trial") {
                 await activateTrial();
                 try {
-                    await triggerInitialSync();
+                    if (gmailConnected) {
+                        await triggerInitialSync();
+                    }
                 } catch {
                     // Non-fatal: sync can be retried from settings
                 }
@@ -163,6 +183,27 @@ export default function SubscriptionPage() {
                     </p>
                 </div>
 
+                {gmailConnectError && (
+                    <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm text-center">
+                        Gmail connection issue: {gmailConnectError}. Please retry to continue.
+                        <div className="mt-2">
+                            <button
+                                onClick={() => retryGmailConnect()}
+                                disabled={gmailConnectInFlight}
+                                className="text-amber-900 underline font-medium disabled:opacity-60"
+                            >
+                                {gmailConnectInFlight ? "Reconnecting..." : "Retry Gmail connection"}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {!gmailConnected && !gmailConnectError && (
+                    <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm text-center">
+                        Connecting Gmail. This must complete before you continue.
+                    </div>
+                )}
+
                 {error && (
                     <div className="mt-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm text-center">
                         {error}
@@ -175,7 +216,7 @@ export default function SubscriptionPage() {
                 <div className="max-w-lg mx-auto">
                     <button
                         onClick={handleContinue}
-                        disabled={isProcessing}
+                        disabled={isProcessing || gmailConnectInFlight || !gmailConnected}
                         className="w-full flex items-center justify-center bg-auburn text-white py-4 rounded font-semibold text-[17px] shadow-lg shadow-auburn/25 hover:bg-auburn/90 transition-colors disabled:opacity-60"
                     >
                         {isProcessing ? (

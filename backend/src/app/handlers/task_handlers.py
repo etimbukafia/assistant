@@ -265,6 +265,9 @@ async def schedule_task_reminders(event: Dict[str, Any], payload: Dict[str, Any]
             return
         
         now = datetime.now(timezone.utc)
+        settings = db.query(UserSettings).first()
+        reminder_prefs = (settings.reminder_preferences or {}) if settings else {}
+        default_offset_hours = reminder_prefs.get("default_reminder_offset_hours", 1)
         
         # Ensure deadline is timezone-aware
         deadline = task.deadline
@@ -279,9 +282,9 @@ async def schedule_task_reminders(event: Dict[str, Any], payload: Dict[str, Any]
         # Calculate reminder time based on policy
         time_until_deadline = deadline - now
         
-        if time_until_deadline > timedelta(hours=24):
-            # More than 24h away: remind 24h before
-            reminder_at = deadline - timedelta(hours=24)
+        if time_until_deadline > timedelta(hours=default_offset_hours):
+            # More than offset away: remind offset hours before
+            reminder_at = deadline - timedelta(hours=default_offset_hours)
         else:
             # Less than 24h away: remind 1 hour from now
             reminder_at = now + timedelta(hours=1)

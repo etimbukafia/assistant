@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_current_user, AuthenticatedUser
+from app.security.auth import get_current_user, AuthenticatedUser, get_user_settings, get_db_for_user
+from app.data.models import UserSettings
 from app.services.polar import get_polar_service, PolarService
 from app.infra.database import get_db
 from core.llm.token_tracking import get_user_usage_summary
@@ -35,6 +36,8 @@ class PortalResponse(BaseModel):
 def create_checkout(
     request: CheckoutRequest,
     user: AuthenticatedUser = Depends(get_current_user),
+    settings: UserSettings = Depends(get_user_settings),
+    db: Session = Depends(get_db_for_user),
     polar: PolarService = Depends(get_polar_service)
 ):
     """
@@ -45,10 +48,15 @@ def create_checkout(
     if not polar.enabled:
         raise HTTPException(status_code=503, detail="Billing service not available")
 
-    # Get or create Polar customer
-    customer_id = polar.get_or_create_customer(user.email)
-    if not customer_id:
-        raise HTTPException(status_code=500, detail="Failed to create billing customer")
+    # Get or create Polar customer, persist to UserSettings for webhook lookup
+    if not settings.polar_customer_id:
+        customer_id = polar.get_or_create_customer(user.email)
+        if not customer_id:
+            raise HTTPException(status_code=500, detail="Failed to create billing customer")
+        settings.polar_customer_id = customer_id
+        db.commit()
+    else:
+        customer_id = settings.polar_customer_id
 
     # Create checkout session
     checkout_url = polar.create_checkout_session(
@@ -66,6 +74,8 @@ def create_checkout(
 @router.get("/portal-url", response_model=PortalResponse)
 def get_portal_url(
     user: AuthenticatedUser = Depends(get_current_user),
+    settings: UserSettings = Depends(get_user_settings),
+    db: Session = Depends(get_db_for_user),
     polar: PolarService = Depends(get_polar_service)
 ):
     """
@@ -77,10 +87,15 @@ def get_portal_url(
     if not polar.enabled:
         raise HTTPException(status_code=503, detail="Billing service not available")
 
-    # Get or create Polar customer
-    customer_id = polar.get_or_create_customer(user.email)
-    if not customer_id:
-        raise HTTPException(status_code=500, detail="Failed to find billing customer")
+    # Get or create Polar customer, persist for webhook lookup
+    if not settings.polar_customer_id:
+        customer_id = polar.get_or_create_customer(user.email)
+        if not customer_id:
+            raise HTTPException(status_code=500, detail="Failed to find billing customer")
+        settings.polar_customer_id = customer_id
+        db.commit()
+    else:
+        customer_id = settings.polar_customer_id
 
     # Get portal URL
     portal_url = polar.get_customer_portal_url(customer_id)

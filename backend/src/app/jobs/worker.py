@@ -871,11 +871,31 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
         # Mark sync as completed
         gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
         if gmail_account:
-            if not gmail_account.initial_sync_completed:
+            was_completed = gmail_account.initial_sync_completed
+            if not was_completed:
                 gmail_account.initial_sync_completed = True
                 logger.info(f"Marked initial_sync_completed=True for user {user_id}")
             gmail_account.last_sync = datetime.now(timezone.utc)
             db.commit()
+
+            if not was_completed:
+                try:
+                    from app.services.notification import NotificationService
+                    notif_service = NotificationService(db, user_id)
+                    notif_service.create_notification(
+                        title="Initial sync complete",
+                        body="Today's processed emails are ready in your Inbox.",
+                        category="system",
+                        priority="normal",
+                        send_push=False,
+                    )
+                    from app.data.models import UserSettings
+                    user_settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+                    if user_settings and not user_settings.onboarding_completed:
+                        user_settings.onboarding_completed = True
+                        db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to create initial sync notification for user {user_id}: {e}")
 
         logger.info(
             f"Email backfill complete for user {user_id}: "
@@ -1124,7 +1144,7 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
                 raise Exception(f"Failed to load Gmail credentials for user {user_id}")
             
             # Send email
-            subject = f"Your {digest.digest_type.replace('_', ' ').title()} | Donna"
+            subject = f"Your {digest.digest_type.replace('_', ' ').title()} | Teeks"
             gmail_client.send_message(
                 to=digest.user_email,
                 subject=subject,
@@ -1304,7 +1324,7 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
         user_settings = db.query(UserSettings).filter(
             UserSettings.user_id == user_id
         ).first()
-        assistant_name = user_settings.assistant_name if user_settings else "Donna"
+        assistant_name = user_settings.assistant_name if user_settings else "Teeks"
         session_state = session.state or {}
         user_name = session_state.get("user_first_name")
 

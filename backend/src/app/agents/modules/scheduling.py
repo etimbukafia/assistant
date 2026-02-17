@@ -576,6 +576,7 @@ class SchedulingModule(BaseModule):
         title: Optional[str] = None,
         description: Optional[str] = None,
         location: Optional[str] = None,
+        calendar_id: Optional[str] = None,
         db: Session = None,
         user_id: str = None
     ) -> Dict[str, Any]:
@@ -638,7 +639,8 @@ class SchedulingModule(BaseModule):
                 source_message_id=suggestion.message_id,
                 source_suggestion_id=suggestion.id,
                 provider="google",
-                status="pending"
+                status="pending",
+                calendar_id=calendar_id or "primary"
             )
             db.add(calendar_event)
             db.commit()
@@ -656,7 +658,8 @@ class SchedulingModule(BaseModule):
                 description=description,
                 attendees=suggestion.participants,
                 location=location,
-                timezone_str=suggestion.timezone
+                timezone_str=suggestion.timezone,
+                calendar_id=calendar_event.calendar_id
             )
             
             # Check if we're already in an event loop
@@ -673,6 +676,21 @@ class SchedulingModule(BaseModule):
             calendar_event.status = "created"
             suggestion.status = "accepted"
             db.commit()
+
+            # Schedule briefing if enabled
+            settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+            if settings and settings.auto_briefing_enabled:
+                briefing_time = start_time - timedelta(hours=settings.briefing_hours_before or 1)
+                if briefing_time > datetime.now(timezone.utc):
+                    from app.jobs.queue import enqueue_task
+                    enqueue_task(
+                        task_type="generate_briefing",
+                        payload={"event_id": calendar_event.id},
+                        scheduled_for=briefing_time,
+                        db=db
+                    )
+                    calendar_event.briefing_scheduled_for = briefing_time
+                    db.commit()
 
             return {
                 "success": True,

@@ -12,9 +12,10 @@ import { TaskItem } from "./TaskItem";
 
 interface EmailCardProps {
     message: Message;
+    highlight?: boolean;
 }
 
-export function EmailCard({ message }: EmailCardProps) {
+export function EmailCard({ message, highlight }: EmailCardProps) {
     const { markDone, archive, remove } = useMessageMutations();
 
     const handleDone = (e: React.MouseEvent) => {
@@ -43,7 +44,8 @@ export function EmailCard({ message }: EmailCardProps) {
             className={cn(
                 "group relative overflow-hidden transition-all duration-300",
                 isUrgent && "border-l-4 border-l-auburn bg-linen/50", // Urgent highlight
-                isInsight && "border-l-4 border-l-copper bg-white" // Insight highlight
+                isInsight && "border-l-4 border-l-copper bg-white", // Insight highlight
+                highlight && "ring-2 ring-auburn/40"
             )}
         >
             <DonnaCardHeader className="pb-2 flex flex-row items-start justify-between space-y-0">

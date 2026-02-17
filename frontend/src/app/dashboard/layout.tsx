@@ -1,51 +1,45 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { DonnaText } from "@/components/ui/DonnaText";
-import { Settings, LogOut, Inbox, BookOpen, MessageSquare, Target, Loader2 } from "lucide-react";
+import { Settings, LogOut, Inbox, BookOpen, MessageSquare, Target, Calendar } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 export default function DashboardLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
-    const { signOut, settings, settingsLoading, loading } = useAuth();
+    const { signOut, settings } = useAuth();
     const pathname = usePathname();
-    const router = useRouter();
+    const prevSyncCompletedRef = useRef<boolean | null>(null);
 
-    // Onboarding guard: redirect users who haven't completed setup
     useEffect(() => {
-        if (loading || settingsLoading || !settings) return;
-
-        if (!settings.is_active && !settings.onboarding_completed) {
-            router.replace('/auth/subscription');
-        } else if (settings.is_active && !settings.onboarding_completed) {
-            router.replace('/auth/setup');
+        if (!settings) return;
+        if (prevSyncCompletedRef.current === null) {
+            prevSyncCompletedRef.current = settings.initial_sync_completed;
+            return;
         }
-    }, [settings, loading, settingsLoading, router]);
-
-    // Show loading while checking onboarding status
-    if (loading || settingsLoading || !settings) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-linen">
-                <Loader2 className="h-8 w-8 animate-spin text-auburn" />
-            </div>
-        );
-    }
-
-    // Don't render dashboard if user needs onboarding
-    if (!settings.is_active && !settings.onboarding_completed) return null;
-    if (settings.is_active && !settings.onboarding_completed) return null;
+        if (!prevSyncCompletedRef.current && settings.initial_sync_completed) {
+            const storageKey = "teeks_initial_sync_notified";
+            if (!window.localStorage.getItem(storageKey)) {
+                toast.success("Initial sync complete. Today's processed emails are ready in your Inbox.");
+                window.localStorage.setItem(storageKey, "1");
+            }
+        }
+        prevSyncCompletedRef.current = settings.initial_sync_completed;
+    }, [settings?.initial_sync_completed, settings]);
 
     const navItems = [
         { href: "/dashboard/chat", label: "Chat", icon: <MessageSquare size={18} /> },
         { href: "/dashboard/focus", label: "Focus", icon: <Target size={18} /> },
         { href: "/dashboard/vault", label: "Knowledge", icon: <BookOpen size={18} /> },
         { href: "/dashboard/inbox", label: "Inbox", icon: <Inbox size={18} /> },
+        { href: "/dashboard/calendar", label: "Calendar", icon: <Calendar size={18} /> },
         { href: "/dashboard/settings", label: "Settings", icon: <Settings size={18} /> },
     ];
 

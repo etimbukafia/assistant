@@ -23,7 +23,7 @@ export function DailyGoals({ goals, onUpdate }: DailyGoalsProps) {
         while (base.length < 3) base.push({ text: "", completed: false });
         return base.slice(0, 3);
     });
-    const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+    const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
     useEffect(() => {
         const base = [...goals];

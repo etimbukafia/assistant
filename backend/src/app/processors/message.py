@@ -78,7 +78,7 @@ def process_message(
     }
 
     # Fetch assistant name from user settings
-    assistant_name = "Donna"  # default
+    assistant_name = "Teeks"  # default
     if message.user_id:
         user_settings = db.query(UserSettings).filter(UserSettings.user_id == message.user_id).first()
         if user_settings and user_settings.assistant_name:
@@ -199,7 +199,7 @@ def process_messages_batch(
 
         if to_process:
             # Fetch assistant name from user settings
-            assistant_name = "Donna"  # default
+            assistant_name = "Teeks"  # default
             user_settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
             if user_settings and user_settings.assistant_name:
                 assistant_name = user_settings.assistant_name

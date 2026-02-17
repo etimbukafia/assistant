@@ -4,6 +4,7 @@ import {
     updateSettings,
     UpdateSettingsRequest,
 } from '@/services/settings';
+import { useAuth } from '@/context/AuthContext';
 
 export const settingsKeys = {
     all: ['settings'] as const,
@@ -12,10 +13,12 @@ export const settingsKeys = {
 
 export function useSettings() {
     const queryClient = useQueryClient();
+    const { session } = useAuth();
 
     const query = useQuery({
         queryKey: settingsKeys.detail(),
-        queryFn: fetchSettings,
+        queryFn: () => fetchSettings(),
+        enabled: !!session,
     });
 
     const updateMutation = useMutation({

@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 import logging
 import httpx
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from app.infra.config import get_settings, Settings
 from app.security.auth import get_db_for_user, get_current_user, AuthenticatedUser
 from app.security.auth import get_settings as get_app_settings # Watch out for name collision with config.get_settings
@@ -22,6 +23,7 @@ REQUIRED_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.freebusy",
 ]
 
 # Human-readable descriptions for each scope
@@ -30,6 +32,7 @@ SCOPE_DESCRIPTIONS = {
     "https://www.googleapis.com/auth/gmail.send": "Send email replies with your approval",
     "https://www.googleapis.com/auth/calendar.readonly": "Check your calendar availability",
     "https://www.googleapis.com/auth/calendar.events": "Create calendar events with your confirmation",
+    "https://www.googleapis.com/auth/calendar.events.freebusy": "See busy/free time for scheduling",
 }
 
 
@@ -218,7 +221,7 @@ def gmail_callback(
         state: State parameter for CSRF protection
     """
     try:
-        credentials = gmail_client.exchange_code_for_token(code)
+        credentials = gmail_client.exchange_code_for_token(code, state)
 
         # Verify that credentials are valid
         email_address = gmail_client.get_profile_email()
@@ -266,7 +269,10 @@ def gmail_auth_status(gmail_client: GmailClient = Depends(get_gmail_client)):
 
 
 @router.post("/gmail/revoke")
-def revoke_gmail_auth(db: Session = Depends(get_db_for_user)):
+def revoke_gmail_auth(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user)
+):
     """
     Revoke Gmail authentication and delete ALL user data.
 
@@ -283,24 +289,36 @@ def revoke_gmail_auth(db: Session = Depends(get_db_for_user)):
     from app.data.models import (
         GmailAccount, Message, Task, TaskQueue,
         PrincipalMemory, DecisionPattern, ContactContext,
-        CalendarEvent, AgentActivity, SchedulingSuggestion
+        CalendarEvent, AgentActivityLog, SchedulingSuggestion
     )
-    
-    # 1. Delete dependent data first
-    db.query(Task).delete()
-    db.query(TaskQueue).delete()
-    db.query(SchedulingSuggestion).delete()
-    db.query(CalendarEvent).delete()
-    db.query(AgentActivity).delete()
-    
-    # 2. Delete main data
-    db.query(Message).delete()
-    db.query(PrincipalMemory).delete()
-    db.query(DecisionPattern).delete()
-    db.query(ContactContext).delete()
-    
-    # 3. Delete account credentials
-    db.query(GmailAccount).delete()
+
+    # Gather scoped IDs for safe deletes when user_id isn't present
+    message_ids_subq = db.query(Message.id).filter(Message.user_id == user.user_id).subquery()
+    task_ids_subq = db.query(Task.id).filter(Task.user_id == user.user_id).subquery()
+
+    # 1. Delete dependent data first (scoped by user)
+    db.query(Task).filter(Task.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(TaskQueue).filter(TaskQueue.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(SchedulingSuggestion).filter(SchedulingSuggestion.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(CalendarEvent).filter(CalendarEvent.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(AgentActivityLog).filter(
+        (AgentActivityLog.related_message_id.in_(message_ids_subq)) |
+        (AgentActivityLog.related_task_id.in_(task_ids_subq))
+    ).delete(synchronize_session=False)
+
+    # 2. Delete main data (scoped by user)
+    db.query(Message).filter(Message.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(PrincipalMemory).filter(PrincipalMemory.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(DecisionPattern).filter(DecisionPattern.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(ContactContext).filter(ContactContext.user_id == user.user_id).delete(synchronize_session=False)
+
+    # 3. Delete account credentials (scoped by user)
+    db.query(GmailAccount).filter(
+        or_(
+            GmailAccount.user_id == user.user_id,
+            GmailAccount.email == user.email
+        )
+    ).delete(synchronize_session=False)
     
     db.commit()
     

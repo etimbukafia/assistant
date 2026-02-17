@@ -213,9 +213,9 @@ export default function TaskDetailScreen() {
                     <View style={styles.aiSuggestionCard}>
                         <Ionicons name="sparkles" size={20} color={Colors.accentSecondary} />
                         <View style={styles.aiSuggestionText}>
-                            <DonnaText style={styles.aiSuggestionTitle}>Suggested by AI</DonnaText>
+                            <DonnaText style={styles.aiSuggestionTitle}>Suggested by TEEKS</DonnaText>
                             <DonnaText style={styles.aiSuggestionSubtitle}>
-                                Donna detected this task in your email. Approve to add it to your list.
+                                TEEKS detected this task in your email. Approve to add it to your list.
                             </DonnaText>
                         </View>
                     </View>

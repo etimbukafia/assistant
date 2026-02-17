@@ -126,7 +126,7 @@ class ChatOrchestrator:
         self,
         db: Session,
         user_id: str,
-        assistant_name: str = "Donna",
+        assistant_name: str = "Teeks",
         user_name: Optional[str] = None,
     ):
         self.db = db

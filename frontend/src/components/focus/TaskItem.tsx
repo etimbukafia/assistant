@@ -1,60 +1,88 @@
-"use client";
+﻿"use client";
 
 import { DonnaText } from "@/components/ui/DonnaText";
 import type { Task } from "@/services/messages";
-import { Check, Sparkles, Clock } from "lucide-react";
+import type { MouseEvent } from "react";
+import { Check, Clock, X } from "lucide-react";
+
+export type TaskTag = "important" | "suggested" | "pending" | "done";
 
 interface TaskItemProps {
     task: Task;
+    selected?: boolean;
+    onSelect?: (taskId: number) => void;
+    onOpenDetails?: (taskId: number) => void;
     onApprove?: (taskId: number) => void;
     onComplete?: (taskId: number) => void;
     onStart?: (taskId: number) => void;
     onDismiss?: (taskId: number) => void;
 }
 
-const PRIORITY_COLORS: Record<string, string> = {
-    urgent: "text-burgundy bg-burgundy/10",
-    high: "text-auburn bg-auburn/10",
-    normal: "text-teal bg-teal/10",
-    low: "text-faint bg-faint/10",
-};
-
-export function TaskItem({ task, onApprove, onComplete, onStart, onDismiss }: TaskItemProps) {
+export function TaskItem({
+    task,
+    selected,
+    onSelect,
+    onOpenDetails,
+    onApprove,
+    onComplete,
+    onStart,
+    onDismiss,
+}: TaskItemProps) {
     const isCompleted = task.status === "completed";
     const isDismissed = task.status === "dismissed";
     const isPending = task.status === "pending_approval";
     const isWaiting = task.status === "waiting_for";
     const isActive = task.status === "approved" || task.status === "in_progress";
 
-    const handleClick = () => {
-        if (isPending && onApprove) onApprove(task.id);
-        else if (isWaiting && onStart) onStart(task.id);
-        else if (isActive && onComplete) onComplete(task.id);
+    const isClickable = Boolean(onOpenDetails);
+    const handleOpen = () => {
+        if (onOpenDetails) onOpenDetails(task.id);
     };
 
+    const stop = (event: MouseEvent) => event.stopPropagation();
+
     return (
-        <button
-            onClick={handleClick}
-            disabled={isCompleted || isDismissed}
-            aria-label={`${task.title}${isPending ? " — tap to approve" : isActive ? " — tap to complete" : isWaiting ? " — tap to start" : ""}`}
-            className={`w-full text-left flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all duration-200 border focus-visible:ring-2 focus-visible:ring-auburn/40 focus-visible:ring-offset-1 ${
+        <div
+            role={isClickable ? "button" : undefined}
+            tabIndex={isClickable ? 0 : -1}
+            onClick={isClickable ? handleOpen : undefined}
+            onKeyDown={
+                isClickable
+                    ? (event) => {
+                        if (event.key === "Enter" || event.key === " ") handleOpen();
+                    }
+                    : undefined
+            }
+            className={`w-full text-left flex items-center gap-3 rounded-lg px-3 py-2 transition-all duration-150 border ${
+                isClickable ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-auburn/40 focus-visible:ring-offset-1" : "cursor-default"
+            } ${
                 isCompleted || isDismissed
                     ? "opacity-50 border-border/40 bg-linen/50"
                     : isPending
-                    ? "border-dashed border-copper/50 bg-copper/[0.03] hover:bg-copper/[0.06]"
+                    ? "border-dashed border-copper/50 bg-copper/[0.02] hover:bg-copper/[0.05]"
                     : isWaiting
                     ? "border-teal/30 bg-teal/[0.03] hover:bg-teal/[0.06]"
                     : "border-border/60 bg-white/80 hover:bg-white"
             }`}
         >
-            {/* Waiting bar */}
-            {isWaiting && (
-                <div className="w-1 self-stretch -ml-3 -my-2.5 rounded-l-lg bg-teal" />
+            {onSelect && isPending && (
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        stop(event);
+                        onSelect(task.id);
+                    }}
+                    className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center ${
+                        selected ? "bg-obsidian border-obsidian" : "border-border/60"
+                    }`}
+                    aria-label={selected ? "Deselect task" : "Select task"}
+                >
+                    {selected && <Check size={10} className="text-white" />}
+                </button>
             )}
 
-            {/* Checkbox */}
             <div
-                className={`shrink-0 w-5 h-5 rounded-md border-[1.5px] flex items-center justify-center ${
+                className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center ${
                     isCompleted
                         ? "bg-sage border-sage"
                         : isPending
@@ -62,22 +90,10 @@ export function TaskItem({ task, onApprove, onComplete, onStart, onDismiss }: Ta
                         : "border-faint/50"
                 }`}
             >
-                {isCompleted && <Check size={12} className="text-white" />}
-                {isPending && <Sparkles size={10} className="text-copper" />}
+                {isCompleted && <Check size={10} className="text-white" />}
             </div>
 
-            {/* Content */}
             <div className="flex-1 min-w-0">
-                {isPending && (
-                    <DonnaText as="span" className="text-[9px] font-bold tracking-wider text-copper uppercase block">
-                        SUGGESTED BY AI
-                    </DonnaText>
-                )}
-                {isWaiting && (
-                    <DonnaText as="span" className="text-[9px] font-bold tracking-wider text-teal uppercase block">
-                        WAITING FOR RESPONSE
-                    </DonnaText>
-                )}
                 <DonnaText
                     as="span"
                     variant="caption"
@@ -88,14 +104,6 @@ export function TaskItem({ task, onApprove, onComplete, onStart, onDismiss }: Ta
                 </DonnaText>
             </div>
 
-            {/* Priority badge */}
-            {task.priority !== "normal" && task.priority !== "low" && (
-                <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded shrink-0 ${PRIORITY_COLORS[task.priority]}`}>
-                    {task.priority}
-                </span>
-            )}
-
-            {/* Deadline */}
             {task.deadline_at && !isCompleted && !isDismissed && (
                 <div className="flex items-center gap-1 text-faint shrink-0">
                     <Clock size={10} />
@@ -104,6 +112,60 @@ export function TaskItem({ task, onApprove, onComplete, onStart, onDismiss }: Ta
                     </span>
                 </div>
             )}
-        </button>
+
+            <div className="flex items-center gap-1 shrink-0">
+                {isPending && (onApprove || onDismiss) && (
+                    <>
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                stop(event);
+                                onDismiss?.(task.id);
+                            }}
+                            className="text-[11px] font-semibold px-2 py-1 rounded-full border border-burgundy/30 text-burgundy hover:bg-burgundy/10"
+                            aria-label="Reject"
+                        >
+                            <X size={10} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                stop(event);
+                                onApprove?.(task.id);
+                            }}
+                            className="text-[11px] font-semibold px-2 py-1 rounded-full bg-copper text-white hover:bg-copper/90"
+                            aria-label="Approve"
+                        >
+                            <Check size={10} />
+                        </button>
+                    </>
+                )}
+                {isWaiting && onStart && (
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            stop(event);
+                            onStart?.(task.id);
+                        }}
+                        className="text-[11px] font-semibold px-2 py-1 rounded-full border border-teal/30 text-teal hover:bg-teal/10"
+                    >
+                        Start
+                    </button>
+                )}
+                {isActive && onComplete && (
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            stop(event);
+                            onComplete?.(task.id);
+                        }}
+                        className="text-[11px] font-semibold px-2 py-1 rounded-full border border-sage/30 text-sage hover:bg-sage/10"
+                        aria-label="Complete"
+                    >
+                        <Check size={10} />
+                    </button>
+                )}
+            </div>
+        </div>
     );
 }

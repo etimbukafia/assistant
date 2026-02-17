@@ -1,12 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.security.auth import get_db_for_user, get_user_settings, require_active_subscription, AuthenticatedUser
-from app.security.feature_gating import require_feature, Feature
+from app.security.feature_gating import require_feature, Feature, is_feature_enabled
 from app.data.models import CalendarEvent, UserSettings
 from app.data.schemas import (
-    CalendarEventCreateRequest, CalendarEventResponse, 
+    CalendarEventCreateRequest, CalendarEventManualCreateRequest, CalendarEventUpdateRequest, CalendarEventResponse, 
     CalendarSettingsResponse, CalendarSettingsUpdateRequest,
     CalendarAvailabilityResponse, CalendarInfoResponse
 )
@@ -19,7 +19,9 @@ router = APIRouter(prefix="/calendar", tags=["Calendar"])
 @router.post("/events", response_model=CalendarEventResponse)
 def create_calendar_event(
     request: CalendarEventCreateRequest,
-    db: Session = Depends(get_db_for_user)
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+    settings: UserSettings = Depends(get_user_settings),
 ):
     """Create a calendar event from a scheduling suggestion"""
 
@@ -31,7 +33,9 @@ def create_calendar_event(
         title=request.title,
         description=request.description,
         location=request.location,
-        db=db
+        calendar_id=settings.default_calendar_id,
+        db=db,
+        user_id=user.user_id
     )
 
     if not result.get("success"):
@@ -43,11 +47,90 @@ def create_calendar_event(
     return event
 
 
+@router.post("/events/manual", response_model=CalendarEventResponse)
+def create_manual_calendar_event(
+    request: CalendarEventManualCreateRequest,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+    settings: UserSettings = Depends(get_user_settings),
+):
+    """Create a calendar event directly (not from a suggestion)"""
+    calendar_id = request.calendar_id or settings.default_calendar_id or "primary"
+    timezone_str = request.timezone or settings.default_timezone or "UTC"
+
+    start_time = request.start_time
+    end_time = request.end_time
+    all_day = bool(request.all_day)
+    if all_day and end_time <= start_time:
+        end_time = start_time + timedelta(days=1)
+
+    calendar_event = CalendarEvent(
+        user_id=user.user_id,
+        title=request.title,
+        description=request.description,
+        notes=request.notes,
+        start_time=start_time,
+        end_time=end_time,
+        participants=request.participants or [],
+        timezone=timezone_str,
+        location=request.location,
+        source="created",
+        status="pending",
+        provider="google",
+        calendar_id=calendar_id,
+        all_day=all_day,
+    )
+    db.add(calendar_event)
+    db.commit()
+    db.refresh(calendar_event)
+
+    calendar_service = CalendarService(db, user_id=user.user_id)
+    try:
+        result = calendar_service.run_create_event(
+            title=request.title,
+            start_time=start_time,
+            end_time=end_time,
+            description=request.description,
+            attendees=request.participants or [],
+            location=request.location,
+            timezone_str=timezone_str,
+            calendar_id=calendar_id,
+            all_day=all_day,
+        )
+    except Exception as e:
+        calendar_event.status = "failed"
+        calendar_event.error_message = str(e)
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Failed to create event: {str(e)}")
+
+    calendar_event.external_event_id = result.get("external_event_id")
+    calendar_event.status = "created"
+    db.commit()
+
+    # Schedule briefing if enabled
+    if settings.auto_briefing_enabled:
+        briefing_time = start_time - timedelta(hours=settings.briefing_hours_before or 1)
+        if briefing_time > datetime.now(timezone.utc):
+            from app.jobs.queue import enqueue_task
+            enqueue_task(
+                task_type="generate_briefing",
+                payload={"event_id": calendar_event.id},
+                scheduled_for=briefing_time,
+                db=db
+            )
+            calendar_event.briefing_scheduled_for = briefing_time
+            db.commit()
+
+    return calendar_event
+
+
 @router.get("/events")
 def get_calendar_events(
     status: str = None,
     limit: int = 50,
     offset: int = 0,
+    start_time: str = None,
+    end_time: str = None,
     db: Session = Depends(get_db_for_user)
 ):
     """Get calendar events"""
@@ -56,6 +139,20 @@ def get_calendar_events(
 
     if status:
         query = query.filter(CalendarEvent.status == status)
+    else:
+        query = query.filter(CalendarEvent.status != "cancelled")
+    if start_time:
+        try:
+            start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            query = query.filter(CalendarEvent.end_time >= start_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid start_time format")
+    if end_time:
+        try:
+            end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+            query = query.filter(CalendarEvent.start_time <= end_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid end_time format")
 
     total = query.count()
     events = query.order_by(CalendarEvent.start_time.desc()).offset(offset).limit(limit).all()
@@ -80,18 +177,117 @@ def get_calendar_event(
     return event
 
 
+@router.patch("/events/{event_id}", response_model=CalendarEventResponse)
+def update_calendar_event(
+    event_id: int,
+    request: CalendarEventUpdateRequest,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+    settings: UserSettings = Depends(get_user_settings),
+):
+    """Update a calendar event and sync to Google if possible"""
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    update_data = request.model_dump(exclude_unset=True)
+    all_day = update_data.get("all_day", event.all_day)
+    start_time = update_data.get("start_time", event.start_time)
+    end_time = update_data.get("end_time", event.end_time)
+    if all_day and end_time <= start_time:
+        end_time = start_time + timedelta(days=1)
+
+    for key, value in update_data.items():
+        setattr(event, key, value)
+
+    event.start_time = start_time
+    event.end_time = end_time
+    event.all_day = all_day
+
+    calendar_id = update_data.get("calendar_id") or event.calendar_id or settings.default_calendar_id or "primary"
+
+    calendar_service = CalendarService(db, user_id=user.user_id)
+    if event.external_event_id:
+        result = calendar_service.run_update_event(
+            event_id=event.external_event_id,
+            calendar_id=calendar_id,
+            title=event.title,
+            start_time=event.start_time,
+            end_time=event.end_time,
+            description=event.description,
+            attendees=event.participants,
+            location=event.location,
+            timezone_str=event.timezone,
+            all_day=event.all_day,
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to update event"))
+
+    # Reschedule briefing if enabled and time changed
+    if settings.auto_briefing_enabled:
+        briefing_time = event.start_time - timedelta(hours=settings.briefing_hours_before or 1)
+        if briefing_time > datetime.now(timezone.utc):
+            from app.jobs.queue import enqueue_task
+            enqueue_task(
+                task_type="generate_briefing",
+                payload={"event_id": event.id},
+                scheduled_for=briefing_time,
+                db=db
+            )
+            event.briefing_scheduled_for = briefing_time
+    else:
+        event.briefing_scheduled_for = None
+
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+@router.delete("/events/{event_id}")
+def delete_calendar_event(
+    event_id: int,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    """Delete/cancel a calendar event and sync to Google"""
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    if event.external_event_id:
+        calendar_service = CalendarService(db, user_id=user.user_id)
+        result = calendar_service.run_delete_event(
+            event_id=event.external_event_id,
+            calendar_id=event.calendar_id or "primary"
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to delete event"))
+
+    event.status = "cancelled"
+    db.commit()
+    return {"success": True}
+
+
 @router.post("/sync")
 async def sync_calendar_events(
     days_ahead: int = 7,
     user: AuthenticatedUser = Depends(require_active_subscription),
-    db: Session = Depends(get_db_for_user)
+    db: Session = Depends(get_db_for_user),
+    settings: UserSettings = Depends(get_user_settings),
 ):
     """Sync upcoming events from Google Calendar to database"""
 
     calendar_service = CalendarService(db, user_id=user.user_id)
  
     try:
-        results = await calendar_service.sync_upcoming_events(days_ahead=days_ahead)
+        enable_briefings = settings.auto_briefing_enabled and is_feature_enabled(Feature.MEETING_BRIEFINGS, settings)
+        calendar_ids = [settings.default_calendar_id] if settings.default_calendar_id else None
+        results = await calendar_service.sync_upcoming_events(
+            days_ahead=days_ahead,
+            briefing_hours_before=settings.briefing_hours_before or 1,
+            enable_briefings=enable_briefings,
+            calendar_ids=calendar_ids
+        )
         return {
             "success": True,
             "message": f"Calendar sync complete: {results['created']} created, {results['updated']} updated",
@@ -178,7 +374,10 @@ def get_calendar_settings(settings: UserSettings = Depends(get_user_settings)):
         working_hours_start=settings.working_hours_start,
         working_hours_end=settings.working_hours_end,
         default_timezone=settings.default_timezone,
-        calendar_ids=settings.calendar_ids or []
+        calendar_ids=settings.calendar_ids or [],
+        default_calendar_id=settings.default_calendar_id,
+        auto_briefing_enabled=settings.auto_briefing_enabled,
+        briefing_hours_before=settings.briefing_hours_before,
     )
 
 
@@ -206,8 +405,34 @@ def update_calendar_settings(
         working_hours_start=settings.working_hours_start,
         working_hours_end=settings.working_hours_end,
         default_timezone=settings.default_timezone,
-        calendar_ids=settings.calendar_ids or []
+        calendar_ids=settings.calendar_ids or [],
+        default_calendar_id=settings.default_calendar_id,
+        auto_briefing_enabled=settings.auto_briefing_enabled,
+        briefing_hours_before=settings.briefing_hours_before,
     )
+
+
+@router.post("/events/{event_id}/generate-briefing")
+def generate_meeting_briefing(
+    event_id: int,
+    db: Session = Depends(get_db_for_user),
+    _gate=Depends(require_feature(Feature.MEETING_BRIEFINGS)),
+):
+    """Generate a briefing for a calendar event"""
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    result = generate_briefing_for_event(db, event_id)
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to generate briefing")
+
+    db.refresh(event)
+    return {
+        "success": True,
+        "briefing": result,
+        "briefing_generated_at": event.briefing_generated_at
+    }
 
 
 @router.post("/events/{event_id}/generate-followups")

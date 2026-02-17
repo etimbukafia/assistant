@@ -12,7 +12,7 @@ interface WeeklyTargetInputProps {
 export function WeeklyTargetInput({ value, onSave }: WeeklyTargetInputProps) {
     const [text, setText] = useState(value ?? "");
     const [saved, setSaved] = useState(false);
-    const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+    const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
     useEffect(() => {
         setText(value ?? "");

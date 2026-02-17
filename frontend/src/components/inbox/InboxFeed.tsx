@@ -8,9 +8,12 @@ import { Loader2, Inbox, Zap, ZapOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { isToday, isYesterday, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
+import { useSearchParams } from "next/navigation";
 
 export function InboxFeed() {
     const [isFocusMode, setIsFocusMode] = useState(false);
+    const searchParams = useSearchParams();
+    const highlightId = searchParams.get("messageId");
     const { data, fetchNextPage, hasNextPage, isFetchingNextPage, status } = useInbox({
         needs_reply: isFocusMode ? true : undefined
     });
@@ -29,6 +32,16 @@ export function InboxFeed() {
         return () => observer.disconnect();
     }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
+    const messages = data?.pages.flatMap(page => page.messages) || [];
+
+    useEffect(() => {
+        if (!highlightId) return;
+        const target = document.getElementById(`message-${highlightId}`);
+        if (target) {
+            target.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+    }, [highlightId, messages.length]);
+
     if (status === "pending") {
         return (
             <div className="flex justify-center items-center h-40">
@@ -44,8 +57,6 @@ export function InboxFeed() {
             </div>
         );
     }
-
-    const messages = data?.pages.flatMap(page => page.messages) || [];
 
     // Group messages logic
     let lastDateGroup: string | null = null;
@@ -108,7 +119,11 @@ export function InboxFeed() {
                         lastDateGroup = group;
 
                         return (
-                            <div key={msg.id} className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                            <div
+                                key={msg.id}
+                                id={`message-${msg.id}`}
+                                className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500"
+                            >
                                 {showHeader && (
                                     <div className="sticky top-0 z-10 bg-linen/95 backdrop-blur-sm py-2 px-1 border-b border-border/40">
                                         <DonnaText variant="label" className="text-auburn font-bold tracking-widest uppercase">
@@ -116,7 +131,7 @@ export function InboxFeed() {
                                         </DonnaText>
                                     </div>
                                 )}
-                                <EmailCard message={msg} />
+                                <EmailCard message={msg} highlight={highlightId === String(msg.id)} />
                             </div>
                         );
                     })}

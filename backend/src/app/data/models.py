@@ -112,6 +112,7 @@ class UserSettings(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, unique=True, index=True)
     user_email = Column(String, unique=True, index=True)
+    notification_email = Column(String, nullable=True, index=True)
 
     # Task Detection
     auto_approve_tasks = Column(Boolean, default=False)
@@ -122,7 +123,7 @@ class UserSettings(Base):
         "max_reminders_per_day": 10,
         "quiet_hours_start": "22:00",
         "quiet_hours_end": "08:00",
-        "default_reminder_offset_hours": 24
+        "default_reminder_offset_hours": 1
     })
 
     # Notification Preferences (JSON)
@@ -145,6 +146,9 @@ class UserSettings(Base):
     working_hours_end = Column(String, default="17:00")  # HH:MM format
     default_timezone = Column(String, default="UTC")  # IANA format, e.g., "Africa/Johannesburg"
     calendar_ids = Column(JSON, default=list)  # Google Calendar IDs to check for availability
+    default_calendar_id = Column(String, default="primary")
+    auto_briefing_enabled = Column(Boolean, default=True)
+    briefing_hours_before = Column(Integer, default=1)
 
     # Digest Preferences (JSON)
     digest_preferences = Column(JSON, default=lambda: {
@@ -181,7 +185,7 @@ class UserSettings(Base):
     last_trial_warning_milestone = Column(String, nullable=True)  # 3_days | 1_day | expired | grace_ending
 
     # Personalization & Onboarding (from migration 023)
-    assistant_name = Column(String, default="Donna")  # User's chosen name for AI assistant
+    assistant_name = Column(String, default="Teeks")  # User's chosen name for AI assistant
     onboarding_completed = Column(Boolean, default=False)  # True after first-time setup
 
     # Credit system (from migration 027)
@@ -200,7 +204,7 @@ class UserSettings(Base):
         
         # Ensure defaults are set for new instances
         if self.assistant_name is None:
-            self.assistant_name = "Donna"
+            self.assistant_name = "Teeks"
         if self.onboarding_completed is None:
             self.onboarding_completed = False
 
@@ -433,6 +437,8 @@ class CalendarEvent(Base):
     # Event details
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)  # User-authored meeting/event notes
+    all_day = Column(Boolean, default=False)
     start_time = Column(DateTime, nullable=False, index=True)
     end_time = Column(DateTime, nullable=False)
     participants = Column(JSON, default=list)  # [{email, name, response_status}]
@@ -456,6 +462,7 @@ class CalendarEvent(Base):
     # Meeting briefing
     briefing = Column(JSON, nullable=True)  # Generated briefing data
     briefing_generated_at = Column(DateTime, nullable=True)
+    briefing_scheduled_for = Column(DateTime, nullable=True)
     related_message_ids = Column(JSON, default=list)  # Messages involving attendees
     related_task_ids = Column(JSON, default=list)  # Tasks involving attendees
 

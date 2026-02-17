@@ -34,25 +34,50 @@ export interface UpdateTaskRequest {
     title?: string;
     description?: string;
     priority?: 'urgent' | 'high' | 'normal' | 'low';
-    deadline?: string;
+    deadline?: string | null;
     confirm_deadline?: boolean;
     mark_urgent?: boolean;
-    scheduled_reminder_at?: string;
+    clear_deadline?: boolean;
+    scheduled_reminder_at?: string | null;
 }
 
 export async function fetchTasks(params?: {
     status?: string;
+    priorities?: string;
     limit?: number;
     offset?: number;
+    sort?: "priority" | "created_at";
 }): Promise<TasksResponse> {
     const searchParams = new URLSearchParams();
     if (params?.status) searchParams.append('status', params.status);
+    if (params?.priorities) searchParams.append('priorities', params.priorities);
     if (params?.limit) searchParams.append('limit', params.limit.toString());
     if (params?.offset) searchParams.append('offset', params.offset.toString());
+    if (params?.sort) searchParams.append('sort', params.sort);
 
     const query = searchParams.toString();
     const response = await api.get<TasksResponse>(`/tasks${query ? `?${query}` : ''}`);
     return response.data;
+}
+
+export async function getTasksInfinite(params: {
+    pageParam?: number;
+    pageSize?: number;
+    status?: string[];
+    priority?: string[];
+}): Promise<TasksResponse & { nextPage?: number }> {
+    const page = params.pageParam ?? 0;
+    const limit = params.pageSize ?? 5;
+    const response = await fetchTasks({
+        status: params.status?.join(","),
+        priorities: params.priority?.join(","),
+        limit,
+        offset: page * limit,
+        sort: "priority",
+    });
+
+    const nextPage = response.tasks.length >= limit ? page + 1 : undefined;
+    return { ...response, nextPage };
 }
 
 export async function fetchTask(taskId: number): Promise<Task> {

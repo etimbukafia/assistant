@@ -63,7 +63,7 @@ class AIProcessor:
         self,
         prompts_dir: str = "prompts",
         llm_config: Optional[LLMConfig] = None,
-        assistant_name: str = "Donna",
+        assistant_name: str = "Teeks",
     ):
         self.prompts_dir = Path(prompts_dir)
         self._prompts_cache = {}

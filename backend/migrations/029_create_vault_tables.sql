@@ -3,6 +3,12 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- Ensure the RLS helper function exists (defined in 017, repeated for safety)
+CREATE OR REPLACE FUNCTION current_user_id()
+RETURNS TEXT AS $$
+    SELECT NULLIF(current_setting('app.user_id', true), '')::TEXT;
+$$ LANGUAGE SQL STABLE;
+
 -- ============================================================================
 -- vault_notes
 -- ============================================================================

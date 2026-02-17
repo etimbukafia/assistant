@@ -43,7 +43,7 @@ export const SettingRow: React.FC<SettingRowProps> = ({
                     className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
                     style={{ backgroundColor: iconColor ? `${iconColor}20` : 'var(--accent-precision-20)' }}
                 >
-                    {React.cloneElement(icon as React.ReactElement, {
+                    {React.cloneElement(icon as React.ReactElement<any>, {
                         size: 20,
                         className: cn(iconColor ? `text-[${iconColor}]` : "text-accent-precision")
                     })}

@@ -308,6 +308,8 @@ def track_task_action(db: Session, action: str, task: Task, user_id: str):
         task: The Task object
         user_id: User ID
     """
+    if not user_id:
+        return
     tracker = PatternTracker(db, user_id)
 
     # Get message for sender info

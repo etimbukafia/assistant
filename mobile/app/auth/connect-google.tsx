@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
     View,
+    Image,
     StyleSheet,
     SafeAreaView,
     TouchableOpacity,
@@ -107,14 +108,22 @@ export default function ConnectGoogleScreen() {
                 contentContainerStyle={styles.content}
                 showsVerticalScrollIndicator={false}
             >
-                {/* Icon and Title */}
+                {/* Illustration */}
+                <View style={styles.illustrationContainer}>
+                    <Image
+                        source={require('../../assets/images/teeks-trust-concept.png')}
+                        style={styles.illustration}
+                        resizeMode="contain"
+                    />
+                </View>
+
+                {/* Hero Title */}
                 <View style={styles.titleSection}>
-                    <View style={styles.iconContainer}>
-                        <Ionicons name="logo-google" size={32} color="#4285F4" />
-                    </View>
-                    <DonnaText style={styles.title}>Connect Your Google Workspace</DonnaText>
-                    <DonnaText style={styles.subtitle}>
-                        Teeks needs access to your Gmail and Calendar to help manage your work
+                    <DonnaText style={styles.heroTitle}>
+                        Effortless support begins with trust.
+                    </DonnaText>
+                    <DonnaText style={styles.heroSubtitle}>
+                        Teeks handles the details so you can focus on the big picture
                     </DonnaText>
                 </View>
 
@@ -230,29 +239,29 @@ const styles = StyleSheet.create({
     },
     content: {
         padding: Spacing.lg,
-        paddingTop: Spacing.md,
+        paddingTop: Spacing.sm,
+    },
+    illustrationContainer: {
+        alignItems: 'center',
+        marginBottom: Spacing.lg,
+    },
+    illustration: {
+        width: 260,
+        height: 200,
     },
     titleSection: {
         alignItems: 'center',
         marginBottom: Spacing.xl,
     },
-    iconContainer: {
-        width: 64,
-        height: 64,
-        borderRadius: 32,
-        backgroundColor: '#4285F410',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: Spacing.md,
-    },
-    title: {
+    heroTitle: {
         fontFamily: 'PlayfairDisplay_600SemiBold',
-        fontSize: 24,
+        fontSize: 26,
         color: Colors.textPrimary,
         textAlign: 'center',
-        marginBottom: Spacing.sm,
+        marginBottom: Spacing.xs,
+        lineHeight: 34,
     },
-    subtitle: {
+    heroSubtitle: {
         fontSize: 15,
         color: Colors.textSecondary,
         textAlign: 'center',

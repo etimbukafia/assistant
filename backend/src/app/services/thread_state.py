@@ -26,7 +26,7 @@ class ThreadStateService:
     No full thread transcript re-analysis.
     """
 
-    def __init__(self, db: Session, ai_processor: Optional[AIProcessor] = None, assistant_name: str = "Donna"):
+    def __init__(self, db: Session, ai_processor: Optional[AIProcessor] = None, assistant_name: str = "Teeks"):
         self.db = db
         self.ai_processor = ai_processor or AIProcessor(assistant_name=assistant_name)
 
@@ -344,6 +344,7 @@ class ThreadStateService:
         task = Task(
             thread_id=thread_state.thread_id,
             message_id=message.id,
+            user_id=message.user_id,
             title=task_data.get("title"),
             description=task_data.get("description"),
             task_type=task_data.get("task_type", "explicit"),
@@ -365,11 +366,11 @@ class ThreadStateService:
         enqueue_task(
             task_type="emit_event",
             payload={
-                "user_id": task.user_id,
+                "user_id": message.user_id,
                 "event_name": "task_created",
                 "event_payload": {
                     "task_id": task.id,
-                    "user_id": task.user_id,
+                    "user_id": message.user_id,
                     "message_id": message.id,
                     "source": "thread_state_service"
                 }

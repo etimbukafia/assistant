@@ -2,13 +2,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, case
 
 from app.security.auth import get_current_user, get_db_for_user, AuthenticatedUser
 from app.data.models import Task, Message
 from app.data.schemas import (
-    TasksListResponse, TaskResponse, TaskCreateRequest, 
-    ManualTaskCreateRequest, TaskUpdateRequest, TaskSnoozeRequest
+    TasksListResponse, TaskResponse, TaskCreateRequest,
+    ManualTaskCreateRequest, TaskUpdateRequest, TaskSnoozeRequest, TaskListItem
 )
 from app.intelligence.pattern_tracker import track_task_action
 from app.jobs.queue import enqueue_task
@@ -18,6 +18,8 @@ router = APIRouter(prefix="/tasks", tags=["Tasks"])
 @router.get("/", response_model=TasksListResponse)
 def get_tasks(
     status: str = None,
+    priorities: str = None,
+    sort: str = "priority",
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db_for_user)
@@ -26,12 +28,33 @@ def get_tasks(
     query = db.query(Task)
 
     if status:
-        query = query.filter(Task.status == status)
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+        if len(statuses) == 1:
+            query = query.filter(Task.status == statuses[0])
+        else:
+            query = query.filter(Task.status.in_(statuses))
+
+    if priorities:
+        priority_list = [p.strip() for p in priorities.split(",") if p.strip()]
+        if len(priority_list) == 1:
+            query = query.filter(Task.priority == priority_list[0])
+        else:
+            query = query.filter(Task.priority.in_(priority_list))
 
     total = query.count()
-    tasks = query.order_by(Task.created_at.desc()).offset(offset).limit(limit).all()
+    if sort == "created_at":
+        tasks = query.order_by(Task.created_at.desc()).offset(offset).limit(limit).all()
+    else:
+        priority_rank = case(
+            (Task.priority == "urgent", 0),
+            (Task.priority == "high", 1),
+            (Task.priority == "normal", 2),
+            (Task.priority == "low", 3),
+            else_=4
+        )
+        tasks = query.order_by(priority_rank.asc(), Task.created_at.desc()).offset(offset).limit(limit).all()
 
-    return TasksListResponse(tasks=tasks, total=total)
+    return TasksListResponse(tasks=[TaskListItem.model_validate(t) for t in tasks], total=total)
 
 
 @router.post("/", response_model=TaskResponse)
@@ -101,6 +124,9 @@ def create_task(
         "snoozed_until": task.snoozed_until,
         "related_people": task.related_people or [],
         "related_dates": task.related_dates or [],
+        "deadline": task.deadline,
+        "deadline_source": task.deadline_source,
+        "deadline_user_confirmed": task.deadline_user_confirmed,
         "confidence_score": task.confidence_score,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
@@ -222,6 +248,9 @@ def get_task(task_id: int, db: Session = Depends(get_db_for_user)):
         "snoozed_until": task.snoozed_until,
         "related_people": task.related_people or [],
         "related_dates": task.related_dates or [],
+        "deadline": task.deadline,
+        "deadline_source": task.deadline_source,
+        "deadline_user_confirmed": task.deadline_user_confirmed,
         "confidence_score": task.confidence_score,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
@@ -232,7 +261,11 @@ def get_task(task_id: int, db: Session = Depends(get_db_for_user)):
 
 
 @router.post("/{task_id}/approve")
-def approve_task(task_id: int, db: Session = Depends(get_db_for_user)):
+def approve_task(
+    task_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user)
+):
     """Approve a pending task"""
 
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -244,7 +277,7 @@ def approve_task(task_id: int, db: Session = Depends(get_db_for_user)):
     db.commit()
 
     # Track pattern for learning
-    track_task_action(db, "approve", task)
+    track_task_action(db, "approve", task, task.user_id or user.user_id)
 
     # Schedule reminder if needed
     if task.scheduled_reminder_at:
@@ -259,7 +292,11 @@ def approve_task(task_id: int, db: Session = Depends(get_db_for_user)):
 
 
 @router.post("/{task_id}/dismiss")
-def dismiss_task(task_id: int, db: Session = Depends(get_db_for_user)):
+def dismiss_task(
+    task_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user)
+):
     """Dismiss a task (mark as not relevant)"""
 
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -271,7 +308,7 @@ def dismiss_task(task_id: int, db: Session = Depends(get_db_for_user)):
     db.commit()
 
     # Track pattern for learning
-    track_task_action(db, "dismiss", task)
+    track_task_action(db, "dismiss", task, task.user_id or user.user_id)
 
     return {"message": "Task dismissed", "task_id": task_id}
 
@@ -307,7 +344,12 @@ def update_task(
         task.scheduled_reminder_at = request.scheduled_reminder_at
 
     # Handle deadline updates (Smart Todo List)
-    if request.deadline is not None:
+    if request.clear_deadline is True:
+        task.deadline = None
+        task.deadline_source = None
+        task.deadline_user_confirmed = False
+        task.deadline_confidence = None
+    elif request.deadline is not None:
         # User explicitly setting deadline overrides AI suggestion
         task.deadline = request.deadline
         task.deadline_source = "explicit"

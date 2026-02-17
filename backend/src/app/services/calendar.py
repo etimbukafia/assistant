@@ -381,7 +381,8 @@ class CalendarService:
         attendees: Optional[List[str]] = None,
         location: Optional[str] = None,
         timezone_str: str = "UTC",
-        calendar_id: str = "primary"
+        calendar_id: str = "primary",
+        all_day: bool = False
     ) -> Dict[str, Any]:
         """
         Create a calendar event.
@@ -402,17 +403,28 @@ class CalendarService:
         try:
             service = self._get_service()
 
-            event = {
-                'summary': title,
-                'start': {
-                    'dateTime': start_time.isoformat(),
-                    'timeZone': timezone_str,
-                },
-                'end': {
-                    'dateTime': end_time.isoformat(),
-                    'timeZone': timezone_str,
-                },
-            }
+            if all_day:
+                event = {
+                    'summary': title,
+                    'start': {
+                        'date': start_time.date().isoformat(),
+                    },
+                    'end': {
+                        'date': end_time.date().isoformat(),
+                    },
+                }
+            else:
+                event = {
+                    'summary': title,
+                    'start': {
+                        'dateTime': start_time.isoformat(),
+                        'timeZone': timezone_str,
+                    },
+                    'end': {
+                        'dateTime': end_time.isoformat(),
+                        'timeZone': timezone_str,
+                    },
+                }
 
             if description:
                 event['description'] = description
@@ -451,6 +463,7 @@ class CalendarService:
             logger.info(f"Created calendar event: {created_event.get('id')}")
 
             return {
+                'success': True,
                 'external_event_id': created_event.get('id'),
                 'html_link': created_event.get('htmlLink'),
                 'status': 'created',
@@ -459,6 +472,79 @@ class CalendarService:
         except Exception as e:
             logger.error(f"Failed to create event: {e}")
             raise
+
+    async def update_event(
+        self,
+        event_id: str,
+        title: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        description: Optional[str] = None,
+        attendees: Optional[List[str]] = None,
+        location: Optional[str] = None,
+        timezone_str: str = "UTC",
+        calendar_id: str = "primary",
+        all_day: bool = False
+    ) -> Dict[str, Any]:
+        """Update a calendar event."""
+        try:
+            service = self._get_service()
+            event: Dict[str, Any] = {}
+
+            if title is not None:
+                event['summary'] = title
+
+            if start_time and end_time:
+                if all_day:
+                    event['start'] = {'date': start_time.date().isoformat()}
+                    event['end'] = {'date': end_time.date().isoformat()}
+                else:
+                    event['start'] = {'dateTime': start_time.isoformat(), 'timeZone': timezone_str}
+                    event['end'] = {'dateTime': end_time.isoformat(), 'timeZone': timezone_str}
+
+            if description is not None:
+                event['description'] = description
+
+            if location is not None:
+                event['location'] = location
+
+            if attendees is not None:
+                import re
+                clean_attendees = []
+                for a in attendees:
+                    if not a:
+                        continue
+                    match = re.search(r'<([^>]+@[^>]+)>', a)
+                    if match:
+                        email = match.group(1).strip()
+                    else:
+                        email = a.strip()
+                    if '@' in email and '.' in email.split('@')[-1]:
+                        clean_attendees.append(email)
+                event['attendees'] = [{'email': email} for email in clean_attendees]
+
+            service.events().patch(
+                calendarId=calendar_id,
+                eventId=event_id,
+                body=event,
+                sendUpdates='all' if attendees else 'none'
+            ).execute()
+
+            return {"success": True}
+
+        except Exception as e:
+            logger.error(f"Failed to update event: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def delete_event(self, event_id: str, calendar_id: str = "primary") -> Dict[str, Any]:
+        """Delete a calendar event."""
+        try:
+            service = self._get_service()
+            service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"Failed to delete event: {e}")
+            return {"success": False, "error": str(e)}
 
     async def get_event(self, event_id: str, calendar_id: str = "primary") -> Optional[Dict[str, Any]]:
         """
@@ -521,10 +607,6 @@ class CalendarService:
                 ).execute()
 
                 for event in events_result.get('items', []):
-                    # Skip all-day events
-                    if 'dateTime' not in event.get('start', {}):
-                        continue
-
                     all_events.append(self._normalize_event(event, cal_id))
 
             all_events.sort(key=lambda x: x['start_time'])
@@ -542,12 +624,16 @@ class CalendarService:
         # Handle dateTime (timed events) or date (all-day events)
         start_dt_str = start.get('dateTime') or start.get('date')
         end_dt_str = end.get('dateTime') or end.get('date')
+        all_day = 'date' in start and 'dateTime' not in start
 
         if not start_dt_str or not end_dt_str:
             raise ValueError(f"Event {event.get('id')} missing start/end dateTime")
 
         start_time = datetime.fromisoformat(start_dt_str.replace('Z', '+00:00'))
         end_time = datetime.fromisoformat(end_dt_str.replace('Z', '+00:00'))
+        if all_day:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+            end_time = end_time.replace(tzinfo=timezone.utc)
 
         attendees = [
             {
@@ -569,10 +655,17 @@ class CalendarService:
             'location': event.get('location'),
             'organizer': event.get('organizer', {}).get('email'),
             'attendees': attendees,
-            'status': event.get('status', 'confirmed')
+            'status': event.get('status', 'confirmed'),
+            'all_day': all_day
         }
 
-    async def sync_upcoming_events(self, days_ahead: int = 7, briefing_hours_before: int = 2) -> Dict[str, int]:
+    async def sync_upcoming_events(
+        self,
+        days_ahead: int = 7,
+        briefing_hours_before: int = 2,
+        enable_briefings: bool = True,
+        calendar_ids: Optional[List[str]] = None
+    ) -> Dict[str, int]:
         """
         Sync upcoming events from Google Calendar to database.
         Schedules briefing generation for new events.
@@ -587,12 +680,38 @@ class CalendarService:
         from app.data.models import CalendarEvent
         from app.jobs.queue import enqueue_task
 
-        events = await self.get_upcoming_events(days_ahead=days_ahead)
+        events = await self.get_upcoming_events(days_ahead=days_ahead, calendar_ids=calendar_ids)
         now = datetime.now(timezone.utc)
 
         created = 0
         updated = 0
         unchanged = 0
+
+        def _schedule_briefing(event_id: int, start_time: datetime) -> None:
+            if not enable_briefings:
+                return
+            briefing_time = start_time - timedelta(hours=briefing_hours_before)
+            if briefing_time <= now:
+                return
+            enqueue_task(
+                task_type="generate_briefing",
+                payload={"event_id": event_id},
+                scheduled_for=briefing_time,
+                db=self.db
+            )
+            return briefing_time
+
+        def _apply_event_fields(target: CalendarEvent, data: Dict[str, Any]) -> None:
+            target.title = data['title']
+            target.description = data['description']
+            target.start_time = data['start_time']
+            target.end_time = data['end_time']
+            target.location = data['location']
+            target.organizer = data['organizer']
+            target.participants = data['attendees']
+            target.timezone = data['timezone']
+            target.all_day = data.get('all_day', False)
+            target.last_synced_at = now
 
         for event_data in events:
             existing = self.db.query(CalendarEvent).filter(
@@ -605,16 +724,12 @@ class CalendarService:
                     existing.start_time != event_data['start_time'] or
                     existing.participants != event_data['attendees']):
 
-                    existing.title = event_data['title']
-                    existing.description = event_data['description']
-                    existing.start_time = event_data['start_time']
-                    existing.end_time = event_data['end_time']
-                    existing.location = event_data['location']
-                    existing.organizer = event_data['organizer']
-                    existing.participants = event_data['attendees']
-                    existing.timezone = event_data['timezone']
-                    existing.last_synced_at = now
+                    _apply_event_fields(existing, event_data)
                     updated += 1
+
+                    briefing_time = _schedule_briefing(existing.id, event_data['start_time'])
+                    if briefing_time:
+                        existing.briefing_scheduled_for = briefing_time
                 else:
                     existing.last_synced_at = now
                     unchanged += 1
@@ -631,6 +746,7 @@ class CalendarService:
                     organizer=event_data['organizer'],
                     participants=event_data['attendees'],
                     timezone=event_data['timezone'],
+                    all_day=event_data.get('all_day', False),
                     source='synced',
                     status='upcoming',
                     last_synced_at=now
@@ -639,14 +755,9 @@ class CalendarService:
                 self.db.flush()  # Get the ID
 
                 # Schedule briefing generation
-                briefing_time = event_data['start_time'] - timedelta(hours=briefing_hours_before)
-                if briefing_time > now:
-                    enqueue_task(
-                        task_type="generate_briefing",
-                        payload={"event_id": new_event.id},
-                        scheduled_for=briefing_time,
-                        db=self.db
-                    )
+                briefing_time = _schedule_briefing(new_event.id, event_data['start_time'])
+                if briefing_time:
+                    new_event.briefing_scheduled_for = briefing_time
                     logger.info(f"Scheduled briefing for event {new_event.id} at {briefing_time}")
 
                 created += 1
@@ -655,3 +766,39 @@ class CalendarService:
 
         logger.info(f"Calendar sync complete: {created} created, {updated} updated, {unchanged} unchanged")
         return {'created': created, 'updated': updated, 'unchanged': unchanged}
+
+    def run_create_event(self, **kwargs) -> Dict[str, Any]:
+        """Sync wrapper for create_event (handles event loop)."""
+        import asyncio
+        coro = self.create_event(**kwargs)
+        try:
+            loop = asyncio.get_running_loop()
+            import nest_asyncio
+            nest_asyncio.apply()
+            return loop.run_until_complete(coro)
+        except RuntimeError:
+            return asyncio.run(coro)
+
+    def run_update_event(self, **kwargs) -> Dict[str, Any]:
+        """Sync wrapper for update_event (handles event loop)."""
+        import asyncio
+        coro = self.update_event(**kwargs)
+        try:
+            loop = asyncio.get_running_loop()
+            import nest_asyncio
+            nest_asyncio.apply()
+            return loop.run_until_complete(coro)
+        except RuntimeError:
+            return asyncio.run(coro)
+
+    def run_delete_event(self, **kwargs) -> Dict[str, Any]:
+        """Sync wrapper for delete_event (handles event loop)."""
+        import asyncio
+        coro = self.delete_event(**kwargs)
+        try:
+            loop = asyncio.get_running_loop()
+            import nest_asyncio
+            nest_asyncio.apply()
+            return loop.run_until_complete(coro)
+        except RuntimeError:
+            return asyncio.run(coro)

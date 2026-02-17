@@ -41,7 +41,7 @@ class AssistantOrchestrator:
         self,
         model_name: str = "gemini-2.5-flash-lite",
         prompts_dir: str = "prompts",
-        assistant_name: str = "Donna"
+        assistant_name: str = "Teeks"
     ):
         """Initialize the orchestrator"""
         self.model_name = model_name

@@ -12,9 +12,9 @@ import type { GoalItem } from "@/services/focus";
 
 export default function FocusPage() {
     const { data: dailyFocus, isLoading: focusLoading } = useDailyFocus();
-    const { data: tasksData, isLoading: tasksLoading } = useTasks();
+    const { data: tasksData } = useTasks({ limit: 200 });
     const { updateDaily } = useFocusMutations();
-    const { approve, complete, start, dismiss } = useTaskMutations();
+    const { approve, complete, start, dismiss, update } = useTaskMutations();
 
     const allTasks = tasksData?.tasks ?? [];
 
@@ -48,14 +48,6 @@ export default function FocusPage() {
         updateDaily.mutate({ frog_task_id: null });
     }, [updateDaily]);
 
-    if (focusLoading) {
-        return (
-            <div className="max-w-3xl mx-auto py-8 flex justify-center">
-                <div className="w-6 h-6 border-2 border-auburn/30 border-t-auburn rounded-full animate-spin" />
-            </div>
-        );
-    }
-
     const goals = dailyFocus?.goals ?? [];
     const goalsCompleted = dailyFocus?.goals_completed ?? 0;
     const goalsTotal = goals.length > 0 ? goals.length : 3;
@@ -74,19 +66,18 @@ export default function FocusPage() {
                 activeTasks={activeTasks}
                 onSelectFrog={handleSelectFrog}
                 onClearFrog={handleClearFrog}
-                onComplete={complete}
-                onStart={start}
+                onComplete={complete.mutate}
+                onStart={start.mutate}
             />
 
             <DailyGoals goals={goals} onUpdate={handleUpdateGoals} />
 
             <ActiveTasksList
-                tasks={allTasks}
-                isLoading={tasksLoading}
-                onApprove={approve}
-                onComplete={complete}
-                onStart={start}
-                onDismiss={dismiss}
+                onApprove={approve.mutate}
+                onComplete={complete.mutate}
+                onStart={start.mutate}
+                onDismiss={dismiss.mutate}
+                onUpdate={update.mutate}
             />
         </div>
     );

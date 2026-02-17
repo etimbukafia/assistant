@@ -17,6 +17,7 @@ import {
     type ManualTaskRequest,
 } from "@/services/tasks";
 import { messagesKeys } from "./useInbox";
+import type { Task } from "@/services/messages";
 
 export const tasksKeys = {
     all: ["tasks"] as const,
@@ -27,9 +28,22 @@ export const tasksKeys = {
     stats: () => [...tasksKeys.all, "stats"] as const,
 };
 
-export function useTasks(params?: { status?: string; limit?: number; offset?: number; enabled?: boolean }) {
+export function useTasks(params?: {
+    status?: string;
+    priorities?: string;
+    limit?: number;
+    offset?: number;
+    sort?: "priority" | "created_at";
+    enabled?: boolean;
+}) {
     return useQuery({
-        queryKey: tasksKeys.list(params?.status),
+        queryKey: [
+            ...tasksKeys.list(params?.status),
+            params?.priorities ?? null,
+            params?.sort ?? null,
+            params?.limit ?? null,
+            params?.offset ?? null,
+        ],
         queryFn: () => fetchTasks(params),
         enabled: params?.enabled ?? true,
     });
@@ -53,6 +67,32 @@ export function useTaskStats() {
 export function useTaskMutations() {
     const queryClient = useQueryClient();
 
+    const updateTaskInCache = (taskId: number, updater: (task: Task) => Task) => {
+        queryClient.setQueriesData({ queryKey: tasksKeys.all }, (old: unknown) => {
+            if (!old) return old;
+            // Handle infinite queries
+            if (typeof old === "object" && old && "pages" in old) {
+                const data = old as { pages: Array<{ tasks: Task[] }>; pageParams: unknown[] };
+                return {
+                    ...data,
+                    pages: data.pages.map((page) => ({
+                        ...page,
+                        tasks: page.tasks.map((task) => (task.id === taskId ? updater(task) : task)),
+                    })),
+                };
+            }
+            // Handle normal list queries
+            if (typeof old === "object" && old && "tasks" in old) {
+                const data = old as TasksResponse;
+                return {
+                    ...data,
+                    tasks: data.tasks.map((task) => (task.id === taskId ? updater(task) : task)),
+                };
+            }
+            return old;
+        });
+    };
+
     const invalidateTaskLists = () => {
         queryClient.invalidateQueries({ queryKey: tasksKeys.lists() });
         queryClient.invalidateQueries({ queryKey: tasksKeys.stats() });
@@ -65,6 +105,19 @@ export function useTaskMutations() {
 
     const approveMutation = useMutation({
         mutationFn: approveTask,
+        onMutate: async (taskId) => {
+            await queryClient.cancelQueries({ queryKey: tasksKeys.all });
+            const previous = queryClient.getQueriesData({ queryKey: tasksKeys.all });
+            updateTaskInCache(taskId, (task) => ({
+                ...task,
+                status: "approved",
+                approved_at: new Date().toISOString(),
+            }));
+            return { previous };
+        },
+        onError: (_error, _taskId, context) => {
+            context?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+        },
         onSuccess: (_, taskId) => {
             invalidateTaskLists();
             invalidateTaskDetail(taskId);
@@ -73,6 +126,19 @@ export function useTaskMutations() {
 
     const dismissMutation = useMutation({
         mutationFn: dismissTask,
+        onMutate: async (taskId) => {
+            await queryClient.cancelQueries({ queryKey: tasksKeys.all });
+            const previous = queryClient.getQueriesData({ queryKey: tasksKeys.all });
+            updateTaskInCache(taskId, (task) => ({
+                ...task,
+                status: "dismissed",
+                dismissed_at: new Date().toISOString(),
+            }));
+            return { previous };
+        },
+        onError: (_error, _taskId, context) => {
+            context?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+        },
         onSuccess: (_, taskId) => {
             invalidateTaskLists();
             invalidateTaskDetail(taskId);
@@ -81,6 +147,19 @@ export function useTaskMutations() {
 
     const completeMutation = useMutation({
         mutationFn: completeTask,
+        onMutate: async (taskId) => {
+            await queryClient.cancelQueries({ queryKey: tasksKeys.all });
+            const previous = queryClient.getQueriesData({ queryKey: tasksKeys.all });
+            updateTaskInCache(taskId, (task) => ({
+                ...task,
+                status: "completed",
+                completed_at: new Date().toISOString(),
+            }));
+            return { previous };
+        },
+        onError: (_error, _taskId, context) => {
+            context?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+        },
         onSuccess: (_, taskId) => {
             invalidateTaskLists();
             invalidateTaskDetail(taskId);
@@ -124,22 +203,14 @@ export function useTaskMutations() {
     });
 
     return {
-        approve: approveMutation.mutate,
-        isApproving: approveMutation.isPending,
-        dismiss: dismissMutation.mutate,
-        isDismissing: dismissMutation.isPending,
-        complete: completeMutation.mutate,
-        isCompleting: completeMutation.isPending,
-        start: startMutation.mutate,
-        isStarting: startMutation.isPending,
-        update: updateMutation.mutate,
-        isUpdating: updateMutation.isPending,
-        snooze: snoozeMutation.mutate,
-        isSnoozing: snoozeMutation.isPending,
-        create: createMutation.mutate,
-        isCreating: createMutation.isPending,
-        createManual: createManualMutation.mutate,
-        isCreatingManual: createManualMutation.isPending,
+        approve: approveMutation,
+        dismiss: dismissMutation,
+        complete: completeMutation,
+        start: startMutation,
+        update: updateMutation,
+        snooze: snoozeMutation,
+        create: createMutation,
+        createManual: createManualMutation,
         isAnyPending:
             approveMutation.isPending ||
             dismissMutation.isPending ||

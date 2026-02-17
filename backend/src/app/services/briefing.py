@@ -70,11 +70,13 @@ class BriefingService:
     def _get_attendee_emails(self, event: CalendarEvent) -> List[str]:
         """Extract attendee emails from event."""
         emails = []
-        for att in (event.attendees or []):
-            if att.get('email'):
-                emails.append(att['email'].lower())
-        if event.organizer:
-            emails.append(event.organizer.lower())
+        for p in (event.participants or []):
+            if isinstance(p, dict):
+                email = p.get('email', '')
+            else:
+                email = str(p)
+            if email and '@' in email:
+                emails.append(email.lower())
         return list(set(emails))
 
     def _find_related_messages(
@@ -141,13 +143,19 @@ class BriefingService:
     def _format_attendees(self, event: CalendarEvent) -> List[Dict[str, Any]]:
         """Format attendee info for briefing."""
         attendees = []
-        for att in (event.attendees or []):
-            attendees.append({
-                'email': att.get('email'),
-                'name': att.get('name') or att.get('email', '').split('@')[0],
-                'response': att.get('response_status', 'unknown'),
-                'is_organizer': att.get('email') == event.organizer
-            })
+        for p in (event.participants or []):
+            if isinstance(p, dict):
+                attendees.append({
+                    'email': p.get('email'),
+                    'name': p.get('name') or (p.get('email', '').split('@')[0] if p.get('email') else ''),
+                    'response': p.get('response_status', 'unknown'),
+                })
+            elif isinstance(p, str) and '@' in p:
+                attendees.append({
+                    'email': p,
+                    'name': p.split('@')[0],
+                    'response': 'unknown',
+                })
         return attendees
 
     def _summarize_messages(self, messages: List[Message]) -> List[Dict[str, Any]]:

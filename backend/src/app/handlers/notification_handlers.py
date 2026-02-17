@@ -1,4 +1,4 @@
-"""
+﻿"""
 Notification Handlers
 
 Event handlers for sending notifications about urgent items.
@@ -66,7 +66,7 @@ def render_urgent_task_email(task: Task) -> str:
     return f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background: #FEE2E2; border-left: 4px solid #EF4444; padding: 16px; border-radius: 4px;">
-            <h2 style="margin: 0 0 8px 0; color: #991B1B; font-size: 18px;">⚠️ Urgent Task Due Soon</h2>
+            <h2 style="margin: 0 0 8px 0; color: #991B1B; font-size: 18px;">âš ï¸ Urgent Task Due Soon</h2>
             <p style="margin: 0; color: #7F1D1D; font-size: 16px; font-weight: 500;">{task.title}</p>
             <p style="margin: 8px 0 0 0; color: #991B1B; font-size: 14px;">Due: {deadline_str}</p>
         </div>
@@ -118,17 +118,17 @@ async def maybe_send_email_notification(event: Dict[str, Any], payload: Dict[str
         
         # Get user settings for email
         settings = db.query(UserSettings).first()
-        if not settings or not settings.user_email:
+        if not settings or not (settings.notification_email or settings.user_email):
             logger.warning("No user email configured for notifications")
             return
         
         # Send email via CommunicationModule
         comm = CommunicationModule()
         result = comm.notify_user_email(
-            subject=f"⚠️ Urgent: {task.title}",
+            subject=f"âš ï¸ Urgent: {task.title}",
             body=render_urgent_task_email(task),
             priority="urgent",
-            user_email=settings.user_email
+            user_email=settings.notification_email or settings.user_email
         )
         
         if result.get("sent"):

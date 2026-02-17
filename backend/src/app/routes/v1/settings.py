@@ -35,6 +35,7 @@ def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettin
     return UserSettingsResponse(
         id=settings.id,
         user_email=settings.user_email,
+        notification_email=settings.notification_email or settings.user_email,
         auto_approve_tasks=settings.auto_approve_tasks,
         task_detection_instructions=settings.task_detection_instructions,
         reminder_preferences=settings.reminder_preferences,
@@ -47,13 +48,16 @@ def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettin
         is_active=settings.is_active,
         days_remaining=settings.days_remaining,
         # Personalization & Onboarding
-        assistant_name=settings.assistant_name or "Donna",
+        assistant_name=settings.assistant_name or "Teeks",
         onboarding_completed=settings.onboarding_completed or False,
         # Integration status (computed)
         initial_sync_completed=initial_sync_completed,
         initial_sync_failed=initial_sync_failed,
         gmail_connected=gmail_account is not None,
         calendar_connected=bool(settings.calendar_ids),
+        default_calendar_id=settings.default_calendar_id,
+        auto_briefing_enabled=settings.auto_briefing_enabled,
+        briefing_hours_before=settings.briefing_hours_before,
         created_at=settings.created_at,
         updated_at=settings.updated_at,
     )
@@ -93,6 +97,18 @@ def update_existing_settings(
         settings.notification_preferences = request.notification_preferences
     if request.enable_quick_reply_from_task is not None:
         settings.enable_quick_reply_from_task = request.enable_quick_reply_from_task
+    if request.assistant_name is not None:
+        name = request.assistant_name.strip()
+        settings.assistant_name = name[:50] if name else "Teeks"
+    if request.notification_email is not None:
+        email = request.notification_email.strip()
+        settings.notification_email = email if email else None
+    if request.default_calendar_id is not None:
+        settings.default_calendar_id = request.default_calendar_id
+    if request.auto_briefing_enabled is not None:
+        settings.auto_briefing_enabled = request.auto_briefing_enabled
+    if request.briefing_hours_before is not None:
+        settings.briefing_hours_before = request.briefing_hours_before
 
     db.commit()
     db.refresh(settings)

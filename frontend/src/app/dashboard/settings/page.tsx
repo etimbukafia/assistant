@@ -77,14 +77,6 @@ export default function SettingsPage() {
         }
     };
 
-    if (isLoading) {
-        return (
-            <div className="flex justify-center items-center h-64">
-                <Loader2 className="h-8 w-8 animate-spin text-auburn" />
-            </div>
-        );
-    }
-
     return (
         <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <header className="space-y-1 px-1">
@@ -152,7 +144,7 @@ export default function SettingsPage() {
                         </DonnaCardHeader>
                         <DonnaCardContent className="space-y-4">
                             <DonnaText variant="caption" className="text-muted-foreground">
-                                Guide {settings?.assistant_name || 'Donna'} on how to identify tasks in your emails. Mention specific keywords, projects, or contexts to watch for.
+                                Guide {settings?.assistant_name || 'Teeks'} on how to identify tasks in your emails. Mention specific keywords, projects, or contexts to watch for.
                             </DonnaText>
                             <Textarea
                                 placeholder="e.g. Focus on requests from the executive team..."
@@ -180,14 +172,7 @@ export default function SettingsPage() {
                                 </DonnaText>
                             </div>
                         </div>
-                        <DonnaCardContent className="p-0">
-                            <SettingRow
-                                icon={<User />}
-                                title="Personalization"
-                                subtitle={`Your assistant's name: ${settings?.assistant_name}`}
-                            // onClick removed as per user request
-                            />
-                        </DonnaCardContent>
+                        <DonnaCardContent className="p-0" />
                     </DonnaCard>
                 </TabsContent>
 

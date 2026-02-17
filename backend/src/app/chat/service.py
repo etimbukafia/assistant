@@ -776,7 +776,7 @@ class ChatService:
             user_settings = self.db.query(UserSettings).filter(
                 UserSettings.user_id == self.user_id
             ).first()
-            assistant_name = user_settings.assistant_name if user_settings else "Donna"
+            assistant_name = user_settings.assistant_name if user_settings else "Teeks"
 
             # Get user's first name from session state
             session_state = session.state or {}

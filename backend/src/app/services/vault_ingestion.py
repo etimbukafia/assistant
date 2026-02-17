@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from app.data.models import ThreadState, ContactContext, VaultMetricsDaily
+from app.data.models import ThreadState, ContactContext, VaultMetricsDaily, VaultProposal
 from app.services.vault import VaultService
 
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { DonnaText } from "@/components/ui/DonnaText";
@@ -18,16 +17,6 @@ export default function VaultPage() {
   const contactsQuery = useVaultContacts();
   const statsQuery = useVaultStats();
   const mutations = useVaultMutations();
-
-  const loading = notesQuery.isLoading || proposalsQuery.isLoading || contactsQuery.isLoading || statsQuery.isLoading;
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-auburn" />
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">

@@ -42,7 +42,7 @@ def activate_trial(
                 "status": "active",
                 "trial_ends_at": settings.trial_ends_at.isoformat(),
                 "days_remaining": settings.days_remaining,
-                "assistant_name": settings.assistant_name or "Donna",
+                "assistant_name": settings.assistant_name or "Teeks",
                 "onboarding_completed": settings.onboarding_completed
             }
         else:
@@ -57,10 +57,11 @@ def activate_trial(
     # Activate trial
     settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=7)
     settings.subscription_status = "trialing"
+    settings.onboarding_completed = True
 
     # Set assistant name if provided (optional during trial activation)
     if request and request.assistant_name:
-        settings.assistant_name = request.assistant_name.strip()[:50] or "Donna"
+        settings.assistant_name = request.assistant_name.strip()[:50] or "Teeks"
 
     # NOTE: Don't set onboarding_completed here - that happens in the setup screen
     # Setting it prematurely causes race conditions with auth flow redirects
