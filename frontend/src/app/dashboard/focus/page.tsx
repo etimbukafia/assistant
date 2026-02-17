@@ -72,13 +72,7 @@ export default function FocusPage() {
 
             <DailyGoals goals={goals} onUpdate={handleUpdateGoals} />
 
-            <ActiveTasksList
-                onApprove={approve.mutate}
-                onComplete={complete.mutate}
-                onStart={start.mutate}
-                onDismiss={dismiss.mutate}
-                onUpdate={update.mutate}
-            />
+            <ActiveTasksList />
         </div>
     );
 }

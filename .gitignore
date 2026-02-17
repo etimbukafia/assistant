@@ -32,6 +32,7 @@ tests/
 
 # Except markdown files in design
 !design/
+!plans/*.md
 !design/*.md
 !claude.md
 !AGENTS.md

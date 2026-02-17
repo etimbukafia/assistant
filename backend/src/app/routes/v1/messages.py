@@ -13,8 +13,10 @@ from app.integrations.gmail import GmailClient, get_gmail_client
 from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion, TaskQueue, UserSettings
 from app.services.email_filter import EmailFilterService, FilterAction
 from app.data.schemas import (
-    SyncResponse, MessagesListResponse, MessageResponse, 
-    DraftReplyRequest, DraftReplyResponse
+    SyncResponse, MessagesListResponse, MessageResponse,
+    DraftReplyRequest, DraftReplyResponse,
+    ThreadDetailResponse, ThreadStateResponse, ThreadMessageResponse,
+    TaskListItem, SchedulingSuggestionResponse
 )
 from app.jobs.worker import handle_process_email_batch
 from app.jobs.queue import queue_service
@@ -422,6 +424,70 @@ def get_processing_status(
     ).count()
 
     return {"processing_count": count}
+
+
+@router.get("/thread/{thread_id}", response_model=ThreadDetailResponse)
+def get_thread_detail(thread_id: str, db: Session = Depends(get_db_for_user)):
+    """
+    Get full thread detail for the Thread Intelligence View.
+
+    Returns thread state (summary, action points, decisions, participants),
+    all messages in chronological order, linked tasks, and scheduling suggestions.
+    """
+    # Get thread state
+    thread_state = db.query(ThreadState).filter(
+        ThreadState.thread_id == thread_id
+    ).first()
+
+    if not thread_state:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Get all messages in this thread, chronological
+    messages = db.query(Message).filter(
+        Message.thread_id == thread_id
+    ).order_by(Message.received_at.asc()).all()
+
+    thread_messages = [
+        ThreadMessageResponse(
+            id=msg.id,
+            sender=msg.sender,
+            subject=msg.subject,
+            body=msg.decrypted_body,
+            summary=msg.summary,
+            received_at=msg.received_at,
+            scheduling_intent=msg.scheduling_intent or False,
+            scheduling_intent_type=msg.scheduling_intent_type,
+        )
+        for msg in messages
+    ]
+
+    # Get tasks linked to this thread
+    tasks = db.query(Task).filter(
+        Task.thread_id == thread_id
+    ).order_by(Task.created_at.desc()).all()
+
+    # Get scheduling suggestions for this thread
+    suggestions = db.query(SchedulingSuggestion).filter(
+        SchedulingSuggestion.thread_id == thread_id,
+        SchedulingSuggestion.status == "pending"
+    ).order_by(SchedulingSuggestion.created_at.desc()).all()
+
+    return ThreadDetailResponse(
+        thread_state=ThreadStateResponse(
+            summary=thread_state.summary,
+            open_tasks=thread_state.open_tasks or [],
+            decisions=thread_state.decisions or [],
+            participants=thread_state.participants or [],
+            action_points=thread_state.action_points or [],
+            needs_reply=thread_state.needs_reply or False,
+            message_count=thread_state.message_count or 0,
+            last_action=thread_state.last_action,
+            last_action_by=thread_state.last_action_by,
+        ),
+        messages=thread_messages,
+        tasks=[TaskListItem.model_validate(t) for t in tasks],
+        scheduling_suggestions=[SchedulingSuggestionResponse.model_validate(s) for s in suggestions],
+    )
 
 
 @router.get("/{message_id}", response_model=MessageResponse)

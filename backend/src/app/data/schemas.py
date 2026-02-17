@@ -52,6 +52,31 @@ class MessageResponse(MessageBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+class ThreadStateResponse(BaseModel):
+    """Thread-level AI state for the detail view"""
+    summary: Optional[str] = None
+    open_tasks: List[Dict[str, Any]] = []
+    decisions: List[Dict[str, Any]] = []
+    participants: List[Dict[str, Any]] = []
+    action_points: List[str] = []
+    needs_reply: bool = False
+    message_count: int = 0
+    last_action: Optional[str] = None
+    last_action_by: Optional[str] = None
+
+class ThreadMessageResponse(BaseModel):
+    """A single message within a thread detail view"""
+    id: int
+    sender: str
+    subject: Optional[str] = None
+    body: str
+    summary: Optional[str] = None
+    received_at: datetime
+    scheduling_intent: bool = False
+    scheduling_intent_type: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
 class SyncResponse(BaseModel):
     synced_count: int
     processed_count: int
@@ -263,6 +288,14 @@ class SchedulingSuggestionResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ThreadDetailResponse(BaseModel):
+    """Full thread detail for the Thread Intelligence View"""
+    thread_state: ThreadStateResponse
+    messages: List[ThreadMessageResponse]
+    tasks: List[TaskListItem] = []
+    scheduling_suggestions: List[SchedulingSuggestionResponse] = []
 
 
 class SchedulingSuggestionSendRequest(BaseModel):

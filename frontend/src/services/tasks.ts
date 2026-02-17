@@ -13,6 +13,7 @@ export interface TaskStats {
     in_progress: number;
     completed: number;
     dismissed: number;
+    waiting_for?: number;
 }
 
 export interface CreateTaskRequest {

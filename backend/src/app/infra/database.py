@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 from .config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
 
 
 def _create_engine(max_retries: int = 5, base_delay: float = 2.0):

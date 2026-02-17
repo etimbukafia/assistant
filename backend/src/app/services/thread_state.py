@@ -173,6 +173,7 @@ class ThreadStateService:
             "open_tasks": thread_state.open_tasks or [],
             "decisions": thread_state.decisions or [],
             "participants": thread_state.participants or [],
+            "action_points": thread_state.action_points or [],
             "last_action": thread_state.last_action,
             "message_count": thread_state.message_count
         }
@@ -189,6 +190,7 @@ class ThreadStateService:
         thread_state.last_action_by = ai_result.get("last_action_by", message.sender)
         thread_state.last_action_at = datetime.now(timezone.utc)
         thread_state.needs_reply = ai_result.get("needs_reply", True)
+        thread_state.action_points = ai_result.get("action_points", [])
 
         # Create tasks from init result
         tasks = ai_result.get("tasks", [])
@@ -223,6 +225,10 @@ class ThreadStateService:
         thread_state.last_action_by = ai_result.get("last_action_by", message.sender)
         thread_state.last_action_at = datetime.now(timezone.utc)
         thread_state.needs_reply = ai_result.get("needs_reply", True)
+
+        # Update action points (full replacement from AI)
+        if "action_points" in ai_result:
+            thread_state.action_points = ai_result["action_points"]
 
         # Process task updates (mark completed/superseded)
         task_updates = ai_result.get("task_updates", [])

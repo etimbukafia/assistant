@@ -6,6 +6,7 @@ You are updating the state of an email thread based on a new message.
 - **Participants:** {participants}
 - **Open Tasks:** {open_tasks}
 - **Decisions Made:** {decisions}
+- **Action Points:** {action_points}
 - **Last Action:** {last_action}
 - **Message Count:** {message_count}
 
@@ -40,7 +41,12 @@ Analyze the new message and produce a STATE DELTA - what has changed.
 4. **Decisions**: Add only new decisions made in THIS message
 5. **Last Action**: What meaningful action does this message represent?
 6. **Needs Reply**: Does the thread now require a response from the user?
-7. **Scheduling Intent**: Does THIS message contain scheduling intent?
+7. **Action Points**: Update the executive-scan action points list.
+   - Remove completed/resolved items, add new ones from THIS message
+   - Short imperative or declarative sentences (max 5 total)
+   - Only genuinely actionable or situationally important items
+   - No fluff, no restating the subject line
+8. **Scheduling Intent**: Does THIS message contain scheduling intent?
    - "availability_request": They're asking when you're free
    - "time_request": They're asking you to provide/confirm a specific time
    - "meeting_confirmation": They're confirming a time that was discussed
@@ -84,6 +90,7 @@ Analyze the new message and produce a STATE DELTA - what has changed.
     "last_action_by": "Email of who took the action",
     "needs_reply": true/false,
     "needs_reply_reason": "Why does/doesn't this need a reply",
+    "action_points": ["Updated action point 1", "New action point from this message"],
     "scheduling_intent": true/false,
     "scheduling_intent_type": "availability_request|time_request|meeting_confirmation|meeting_reminder|reschedule_request|none",
     "scheduling_intent_confidence": 0.0-1.0

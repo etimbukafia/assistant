@@ -587,6 +587,9 @@ class ThreadState(Base):
     needs_reply = Column(Boolean, default=False)
     last_outbound_at = Column(DateTime, nullable=True)  # When user last replied
 
+    # Action points — concise imperative "what do I need to do" list
+    action_points = Column(JSON, default=list)  # ["Send Q3 report by Friday", "Confirm with Mike"]
+
     # Message count for quick reference
     message_count = Column(Integer, default=0)
 

@@ -10,7 +10,14 @@ import { isToday, isYesterday, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useSearchParams } from "next/navigation";
 
-export function InboxFeed() {
+interface InboxFeedProps {
+    selectedThreadId?: string | null;
+    onSelectThread?: (threadId: string) => void;
+    onThreadIdsChange?: (threadIds: string[]) => void;
+    compact?: boolean;
+}
+
+export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange, compact }: InboxFeedProps) {
     const [isFocusMode, setIsFocusMode] = useState(false);
     const searchParams = useSearchParams();
     const highlightId = searchParams.get("messageId");
@@ -33,6 +40,21 @@ export function InboxFeed() {
     }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
     const messages = data?.pages.flatMap(page => page.messages) || [];
+
+    // Report thread IDs to parent for keyboard navigation
+    const prevThreadIdsRef = useRef<string>("");
+    useEffect(() => {
+        if (!onThreadIdsChange) return;
+        const ids = messages
+            .map(m => m.thread_id)
+            .filter((id): id is string => !!id);
+        const unique = [...new Set(ids)];
+        const key = unique.join(",");
+        if (key !== prevThreadIdsRef.current) {
+            prevThreadIdsRef.current = key;
+            onThreadIdsChange(unique);
+        }
+    }, [messages, onThreadIdsChange]);
 
     useEffect(() => {
         if (!highlightId) return;
@@ -83,10 +105,10 @@ export function InboxFeed() {
                         )}
                     >
                         {isFocusMode ? <Zap size={16} className="fill-current" /> : <ZapOff size={16} />}
-                        {isFocusMode ? "Focus Mode On" : "Focus Mode Off"}
+                        {compact ? "" : (isFocusMode ? "Focus Mode On" : "Focus Mode Off")}
                     </DonnaButton>
 
-                    {isFocusMode && (
+                    {isFocusMode && !compact && (
                         <DonnaText variant="caption" className="text-auburn animate-in fade-in slide-in-from-left-2">
                             Showing only actionable items
                         </DonnaText>
@@ -100,11 +122,13 @@ export function InboxFeed() {
                     <DonnaText variant="h3" className="text-muted-foreground">
                         {isFocusMode ? "All Caught Up!" : "Inbox Zero!"}
                     </DonnaText>
-                    <DonnaText variant="body" align="center" className="max-w-xs">
-                        {isFocusMode
-                            ? "No urgent items requiring your attention."
-                            : "Nothing needs your attention right now."}
-                    </DonnaText>
+                    {!compact && (
+                        <DonnaText variant="body" align="center" className="max-w-xs">
+                            {isFocusMode
+                                ? "No urgent items requiring your attention."
+                                : "Nothing needs your attention right now."}
+                        </DonnaText>
+                    )}
                     {isFocusMode && (
                         <DonnaButton variant="link" onClick={() => setIsFocusMode(false)} className="text-auburn">
                             View all messages
@@ -112,26 +136,36 @@ export function InboxFeed() {
                     )}
                 </div>
             ) : (
-                <div className="space-y-4">
+                <div className={cn("space-y-4", compact && "space-y-2")}>
                     {messages.map((msg) => {
                         const group = getGroup(msg.received_at);
                         const showHeader = group !== lastDateGroup;
                         lastDateGroup = group;
+                        const isSelected = selectedThreadId === msg.thread_id;
 
                         return (
                             <div
                                 key={msg.id}
                                 id={`message-${msg.id}`}
-                                className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500"
+                                className={cn(
+                                    "space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500",
+                                    compact && "space-y-2"
+                                )}
                             >
                                 {showHeader && (
                                     <div className="sticky top-0 z-10 bg-linen/95 backdrop-blur-sm py-2 px-1 border-b border-border/40">
-                                        <DonnaText variant="label" className="text-auburn font-bold tracking-widest uppercase">
+                                        <DonnaText variant="label" className="text-auburn font-bold tracking-widest uppercase text-xs">
                                             {group}
                                         </DonnaText>
                                     </div>
                                 )}
-                                <EmailCard message={msg} highlight={highlightId === String(msg.id)} />
+                                <EmailCard
+                                    message={msg}
+                                    highlight={highlightId === String(msg.id)}
+                                    selected={isSelected}
+                                    compact={compact}
+                                    onClick={(threadId) => onSelectThread?.(threadId)}
+                                />
                             </div>
                         );
                     })}

@@ -11,6 +11,7 @@ interface TaskItemProps {
     task: Task;
     selected?: boolean;
     onSelect?: (taskId: number) => void;
+    allowSelectActive?: boolean;
     onOpenDetails?: (taskId: number) => void;
     onApprove?: (taskId: number) => void;
     onComplete?: (taskId: number) => void;
@@ -22,6 +23,7 @@ export function TaskItem({
     task,
     selected,
     onSelect,
+    allowSelectActive,
     onOpenDetails,
     onApprove,
     onComplete,
@@ -33,6 +35,7 @@ export function TaskItem({
     const isPending = task.status === "pending_approval";
     const isWaiting = task.status === "waiting_for";
     const isActive = task.status === "approved" || task.status === "in_progress";
+    const isSelectable = Boolean(onSelect) && (isPending || (allowSelectActive && isActive));
 
     const isClickable = Boolean(onOpenDetails);
     const handleOpen = () => {
@@ -57,15 +60,15 @@ export function TaskItem({
                 isClickable ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-auburn/40 focus-visible:ring-offset-1" : "cursor-default"
             } ${
                 isCompleted || isDismissed
-                    ? "opacity-50 border-border/40 bg-linen/50"
+                    ? "opacity-50 border-border/40 bg-linen/60"
                     : isPending
-                    ? "border-dashed border-copper/50 bg-copper/[0.02] hover:bg-copper/[0.05]"
+                    ? "border-dashed border-copper/60 bg-white"
                     : isWaiting
-                    ? "border-teal/30 bg-teal/[0.03] hover:bg-teal/[0.06]"
-                    : "border-border/60 bg-white/80 hover:bg-white"
+                    ? "border-teal/40 bg-white"
+                    : "border-border/60 bg-white"
             }`}
         >
-            {onSelect && isPending && (
+            {isSelectable && (
                 <button
                     type="button"
                     onClick={(event) => {

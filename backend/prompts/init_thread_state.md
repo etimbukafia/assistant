@@ -31,7 +31,12 @@ Extract the initial state for this thread.
 4. **Decisions**: Any decisions stated in this message
 5. **Last Action**: What action does this first message represent?
 6. **Needs Reply**: Does this require a response from the user?
-7. **Scheduling Intent**: Does this message contain scheduling intent?
+7. **Action Points**: Extract a concise "what do I need to know/do" list for executive scanning.
+   - Short imperative or declarative sentences (max 5)
+   - Only genuinely actionable or situationally important items
+   - Examples: "Send Q3 report to finance by Friday", "Sarah confirmed the budget", "They're waiting for your availability"
+   - No fluff, no restating the subject line
+8. **Scheduling Intent**: Does this message contain scheduling intent?
    - "availability_request": They're asking when you're free
    - "time_request": They're asking you to provide/confirm a specific time
    - "meeting_confirmation": They're confirming a time that was discussed
@@ -68,6 +73,7 @@ Extract the initial state for this thread.
     "last_action_by": "Email of the sender",
     "needs_reply": true/false,
     "needs_reply_reason": "Why does/doesn't this need a reply",
+    "action_points": ["Concise imperative sentence 1", "Situational awareness item 2"],
     "scheduling_intent": true/false,
     "scheduling_intent_type": "availability_request|time_request|meeting_confirmation|meeting_reminder|reschedule_request|none",
     "scheduling_intent_confidence": 0.0-1.0

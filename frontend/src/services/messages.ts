@@ -79,6 +79,47 @@ export interface MessagesResponse {
     total: number;
 }
 
+// Thread Intelligence View types
+export interface ThreadStateDetail {
+    summary?: string;
+    open_tasks: Array<{ id: string; title: string; status: string }>;
+    decisions: Array<{ decision: string; made_by: string; made_at: string }>;
+    participants: Array<{ email: string; name: string; role: string }>;
+    action_points: string[];
+    needs_reply: boolean;
+    message_count: number;
+    last_action?: string;
+    last_action_by?: string;
+}
+
+export interface ThreadMessageDetail {
+    id: number;
+    sender: string;
+    subject?: string;
+    body: string;
+    summary?: string;
+    received_at: string;
+    scheduling_intent: boolean;
+    scheduling_intent_type?: string;
+}
+
+export interface SchedulingSuggestion {
+    id: number;
+    thread_id: string;
+    suggested_slots: Array<{ start_time: string; end_time: string; has_conflict: boolean }>;
+    draft_reply?: string;
+    meeting_type: string;
+    duration_minutes: number;
+    status: string;
+}
+
+export interface ThreadDetailResponse {
+    thread_state: ThreadStateDetail;
+    messages: ThreadMessageDetail[];
+    tasks: Task[];
+    scheduling_suggestions: SchedulingSuggestion[];
+}
+
 /**
  * Fetch messages with optional filtering
  */
@@ -126,4 +167,20 @@ export async function archiveMessage(messageId: number): Promise<Message> {
  */
 export async function deleteMessage(messageId: number): Promise<void> {
     await api.delete(`/messages/${messageId}`);
+}
+
+/**
+ * Fetch full thread detail for Thread Intelligence View
+ */
+export async function fetchThreadDetail(threadId: string): Promise<ThreadDetailResponse> {
+    const response = await api.get<ThreadDetailResponse>(`/messages/thread/${threadId}`);
+    return response.data;
+}
+
+/**
+ * Generate a draft reply for a message
+ */
+export async function generateDraftReply(messageId: number, context?: string): Promise<{ draft: string }> {
+    const response = await api.post<{ draft: string }>(`/messages/${messageId}/draft-reply`, { context });
+    return response.data;
 }
