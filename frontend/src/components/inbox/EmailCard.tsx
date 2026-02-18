@@ -5,10 +5,11 @@ import { DonnaCard, DonnaCardContent, DonnaCardHeader, DonnaCardTitle } from "@/
 import { DonnaText } from "@/components/ui/DonnaText";
 import { DonnaButton } from "@/components/ui/DonnaButton";
 import { formatDistanceToNow, parseISO } from "date-fns";
-import { Archive, CheckCircle, Trash2, Sparkles } from "lucide-react";
+import { Archive, CheckCircle, Trash2, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { useMessageMutations } from "@/hooks/useInbox";
 import { cn } from "@/lib/utils";
 import { TaskItem } from "./TaskItem";
+import { useState } from "react";
 
 interface EmailCardProps {
     message: Message;
@@ -18,8 +19,11 @@ interface EmailCardProps {
     onClick?: (threadId: string) => void;
 }
 
+const MAX_VISIBLE_TASKS = 2;
+
 export function EmailCard({ message, highlight, selected, compact, onClick }: EmailCardProps) {
     const { markDone, archive, remove } = useMessageMutations();
+    const [showAllTasks, setShowAllTasks] = useState(false);
 
     const handleDone = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -102,21 +106,38 @@ export function EmailCard({ message, highlight, selected, compact, onClick }: Em
                 </DonnaText>
 
                 {/* Tasks Section — hidden in compact mode */}
-                {hasTasks && !compact && (
-                    <div className="mt-4 space-y-2">
-                        <div className="h-px w-full bg-border/60 mb-3" />
-                        <DonnaText variant="label" className="text-xs text-muted-foreground uppercase tracking-widest pl-1">
-                            Suggested Actions
-                        </DonnaText>
-                        <div className="flex flex-col gap-2">
-                            {message.tasks!.map(task => (
-                                <div key={task.id} onClick={(e) => e.stopPropagation()}>
-                                    <TaskItem task={task} />
-                                </div>
-                            ))}
+                {hasTasks && !compact && (() => {
+                    const tasks = message.tasks!;
+                    const overflow = tasks.length - MAX_VISIBLE_TASKS;
+                    const visible = showAllTasks ? tasks : tasks.slice(0, MAX_VISIBLE_TASKS);
+                    return (
+                        <div className="mt-4 space-y-2">
+                            <div className="h-px w-full bg-border/60 mb-3" />
+                            <DonnaText variant="label" className="text-xs text-muted-foreground uppercase tracking-widest pl-1">
+                                Suggested Actions
+                            </DonnaText>
+                            <div className="flex flex-col gap-2">
+                                {visible.map(task => (
+                                    <div key={task.id} onClick={(e) => e.stopPropagation()}>
+                                        <TaskItem task={task} />
+                                    </div>
+                                ))}
+                            </div>
+                            {overflow > 0 && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setShowAllTasks(!showAllTasks); }}
+                                    className="flex items-center gap-1 text-xs text-auburn hover:text-auburn/80 font-medium pl-1 pt-1 transition-colors"
+                                >
+                                    {showAllTasks ? (
+                                        <><ChevronUp size={14} /> Show less</>
+                                    ) : (
+                                        <><ChevronDown size={14} /> Show {overflow} more</>
+                                    )}
+                                </button>
+                            )}
                         </div>
-                    </div>
-                )}
+                    );
+                })()}
 
                 {/* Task count badge in compact mode */}
                 {hasTasks && compact && (

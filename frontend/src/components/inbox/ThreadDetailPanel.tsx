@@ -1,15 +1,16 @@
 "use client";
 
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { fetchThreadDetail, generateDraftReply, ThreadDetailResponse, ThreadMessageDetail } from "@/services/messages";
+import { useQuery } from "@tanstack/react-query";
+import { fetchThreadDetail, ThreadDetailResponse, ThreadMessageDetail } from "@/services/messages";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { DonnaText } from "@/components/ui/DonnaText";
 import { DonnaButton } from "@/components/ui/DonnaButton";
 import { TaskItem } from "./TaskItem";
+import { ReplyComposer } from "./ReplyComposer";
 import {
     Loader2, AlertCircle, ChevronDown, ChevronRight, X,
-    Mail, Clock, Users, Pen, Calendar, Archive, MessageSquare,
+    Mail, Clock, Users, Calendar, Archive,
     CheckCircle2, ArrowRight, Zap
 } from "lucide-react";
 import { formatDistanceToNow, parseISO, format } from "date-fns";
@@ -27,6 +28,7 @@ export function ThreadDetailPanel({ threadId, onClose }: ThreadDetailPanelProps)
         queryKey: ["thread-detail", threadId],
         queryFn: () => fetchThreadDetail(threadId!),
         enabled: !!threadId,
+        staleTime: 60_000, // 1 min — switching threads and back is instant
     });
 
     return (
@@ -42,10 +44,33 @@ export function ThreadDetailPanel({ threadId, onClose }: ThreadDetailPanelProps)
             </div>
 
             {isLoading ? (
-                <div className="flex-1 flex items-center justify-center">
-                    <div className="flex flex-col items-center gap-3">
-                        <Loader2 className="h-6 w-6 animate-spin text-auburn" />
-                        <DonnaText variant="caption" className="text-muted-foreground">Loading thread...</DonnaText>
+                <div className="flex-1 px-6 py-5 space-y-4 animate-pulse">
+                    {/* Skeleton: summary */}
+                    <div className="h-4 w-3/4 rounded bg-muted-foreground/10" />
+                    <div className="h-4 w-1/2 rounded bg-muted-foreground/10" />
+                    {/* Skeleton: action points card */}
+                    <div className="rounded-xl border border-muted-foreground/10 p-4 space-y-3">
+                        <div className="h-3 w-24 rounded bg-muted-foreground/10" />
+                        <div className="h-4 w-5/6 rounded bg-muted-foreground/10" />
+                        <div className="h-4 w-2/3 rounded bg-muted-foreground/10" />
+                    </div>
+                    {/* Skeleton: action buttons */}
+                    <div className="flex gap-2">
+                        <div className="h-8 w-28 rounded-md bg-muted-foreground/10" />
+                        <div className="h-8 w-20 rounded-md bg-muted-foreground/10" />
+                        <div className="h-8 w-20 rounded-md bg-muted-foreground/10" />
+                    </div>
+                    {/* Skeleton: message bubble */}
+                    <div className="rounded-xl border border-muted-foreground/10 p-3 space-y-2">
+                        <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-muted-foreground/10" />
+                            <div className="h-4 w-32 rounded bg-muted-foreground/10" />
+                        </div>
+                        <div className="pl-11 space-y-2">
+                            <div className="h-3 w-full rounded bg-muted-foreground/8" />
+                            <div className="h-3 w-5/6 rounded bg-muted-foreground/8" />
+                            <div className="h-3 w-2/3 rounded bg-muted-foreground/8" />
+                        </div>
                     </div>
                 </div>
             ) : error ? (
@@ -54,30 +79,23 @@ export function ThreadDetailPanel({ threadId, onClose }: ThreadDetailPanelProps)
                     <DonnaText variant="body" className="text-sm">Failed to load thread.</DonnaText>
                 </div>
             ) : data ? (
-                <ThreadContent data={data} onClose={onClose} />
+                <ThreadContent data={data} threadId={threadId!} onClose={onClose} />
             ) : null}
         </div>
     );
 }
 
-function ThreadContent({ data, onClose }: { data: ThreadDetailResponse; onClose: () => void }) {
+function ThreadContent({ data, threadId, onClose }: { data: ThreadDetailResponse; threadId: string; onClose: () => void }) {
     const { thread_state, messages, tasks, scheduling_suggestions } = data;
     const latestMessage = messages[messages.length - 1];
     const olderMessages = messages.slice(0, -1);
     const { markDone, archive } = useMessageMutations();
-
-    const [draftReply, setDraftReply] = useState<string | null>(null);
-    const draftMutation = useMutation({
-        mutationFn: () => generateDraftReply(latestMessage.id),
-        onSuccess: (res) => setDraftReply(res.draft),
-    });
 
     return (
         <ScrollArea className="flex-1">
             <div className="px-6 py-5 space-y-0">
 
                 {/* ━━━ THE LOGAN ROY SECTION ━━━ */}
-                {/* This is the hero. Action points first. Everything else second. */}
                 <ActionPointsHero
                     actionPoints={thread_state.action_points}
                     needsReply={thread_state.needs_reply}
@@ -86,15 +104,12 @@ function ThreadContent({ data, onClose }: { data: ThreadDetailResponse; onClose:
 
                 {/* Quick Actions — right after action points, above the fold */}
                 <div className="flex items-center gap-2 py-4">
-                    <DonnaButton
-                        size="sm"
-                        className="gap-2 bg-auburn hover:bg-auburn/90 text-white"
-                        onClick={() => draftMutation.mutate()}
-                        disabled={draftMutation.isPending || !latestMessage}
-                    >
-                        {draftMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Pen size={14} />}
-                        Draft Reply
-                    </DonnaButton>
+                    <ReplyComposer
+                        messageId={latestMessage?.id}
+                        originalSender={latestMessage?.sender || ""}
+                        originalSubject={latestMessage?.subject || ""}
+                        threadId={threadId}
+                    />
 
                     <DonnaButton
                         variant="outline"
@@ -122,21 +137,6 @@ function ThreadContent({ data, onClose }: { data: ThreadDetailResponse; onClose:
                         Archive
                     </DonnaButton>
                 </div>
-
-                {/* Draft Reply Display */}
-                {draftReply && (
-                    <div className="mb-4 p-4 rounded-xl border-2 border-sage/30 bg-sage/5 space-y-2">
-                        <div className="flex items-center gap-2">
-                            <MessageSquare size={14} className="text-sage" />
-                            <DonnaText variant="label" className="text-[10px] text-sage uppercase tracking-widest font-bold">
-                                Suggested Reply
-                            </DonnaText>
-                        </div>
-                        <div className="text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">
-                            {draftReply}
-                        </div>
-                    </div>
-                )}
 
                 <Separator className="my-1" />
 

@@ -97,6 +97,7 @@ export function useTaskMutations() {
         queryClient.invalidateQueries({ queryKey: tasksKeys.lists() });
         queryClient.invalidateQueries({ queryKey: tasksKeys.stats() });
         queryClient.invalidateQueries({ queryKey: messagesKeys.lists() });
+        queryClient.invalidateQueries({ queryKey: ["thread-detail"] });
     };
 
     const invalidateTaskDetail = (taskId: number) => {
@@ -117,6 +118,8 @@ export function useTaskMutations() {
         },
         onError: (_error, _taskId, context) => {
             context?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+            queryClient.invalidateQueries({ queryKey: messagesKeys.lists() });
+            queryClient.invalidateQueries({ queryKey: ["thread-detail"] });
         },
         onSuccess: (_, taskId) => {
             invalidateTaskLists();
@@ -138,6 +141,8 @@ export function useTaskMutations() {
         },
         onError: (_error, _taskId, context) => {
             context?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+            queryClient.invalidateQueries({ queryKey: messagesKeys.lists() });
+            queryClient.invalidateQueries({ queryKey: ["thread-detail"] });
         },
         onSuccess: (_, taskId) => {
             invalidateTaskLists();
@@ -159,6 +164,8 @@ export function useTaskMutations() {
         },
         onError: (_error, _taskId, context) => {
             context?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+            queryClient.invalidateQueries({ queryKey: messagesKeys.lists() });
+            queryClient.invalidateQueries({ queryKey: ["thread-detail"] });
         },
         onSuccess: (_, taskId) => {
             invalidateTaskLists();

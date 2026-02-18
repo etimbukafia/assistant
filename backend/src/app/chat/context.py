@@ -173,14 +173,14 @@ class ChatContextManager:
             Task.user_id == self.user_id,
             Task.status.in_(["pending_approval", "in_progress", "approved"]),
             Task.priority.in_(["high", "urgent"])
-        ).order_by(Task.deadline_at.asc().nullslast()).limit(5).all()
+        ).order_by(Task.deadline.asc().nullslast()).limit(5).all()
         
         context["urgent_tasks"] = [
             {
                 "id": t.id,
                 "title": t.title,
                 "priority": t.priority,
-                "due_date": t.deadline_at.isoformat() if t.deadline_at else None,
+                "due_date": t.deadline.isoformat() if t.deadline else None,
                 "waiting_for": t.waiting_for_email
             }
             for t in tasks
@@ -190,7 +190,7 @@ class ChatContextManager:
         emails = self.db.query(Message).filter(
             Message.user_id == self.user_id,
             Message.needs_reply == True,
-            Message.is_archived == False
+            #Message.is_archived == False
         ).order_by(Message.received_at.desc()).limit(5).all()
         
         context["recent_emails_needing_reply"] = [
@@ -266,7 +266,7 @@ class ChatContextManager:
                     "description": sanitized["description"],
                     "status": task.status,
                     "priority": task.priority,
-                    "due_date": task.deadline_at.isoformat() if task.deadline_at else None
+                    "due_date": task.deadline.isoformat() if task.deadline else None
                 }
 
         return context

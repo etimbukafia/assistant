@@ -319,6 +319,7 @@ def track_task_action(db: Session, action: str, task: Task, user_id: str):
     context = {
         "sender": sender,
         "task_type": task.task_type,
+        "task_signal": getattr(task, "task_signal", None),
         "priority": task.priority
     }
 

@@ -38,6 +38,8 @@ export interface Task {
     message_id: number;
     title: string;
     description?: string;
+    type?: string;
+    task_signal?: string;
     priority: 'urgent' | 'high' | 'normal' | 'low';
     status: 'pending_approval' | 'approved' | 'in_progress' | 'completed' | 'dismissed' | 'waiting_for';
     approved_at?: string;
@@ -127,11 +129,13 @@ export async function fetchMessages(params?: {
     limit?: number;
     offset?: number;
     needs_reply?: boolean;
+    status?: string;
 }): Promise<MessagesResponse> {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.append('limit', params.limit.toString());
     if (params?.offset) searchParams.append('offset', params.offset.toString());
     if (params?.needs_reply !== undefined) searchParams.append('needs_reply', params.needs_reply.toString());
+    if (params?.status) searchParams.append('status', params.status);
 
     const query = searchParams.toString();
     const response = await api.get<MessagesResponse>(`/messages${query ? `?${query}` : ''}`);
@@ -182,5 +186,28 @@ export async function fetchThreadDetail(threadId: string): Promise<ThreadDetailR
  */
 export async function generateDraftReply(messageId: number, context?: string): Promise<{ draft: string }> {
     const response = await api.post<{ draft: string }>(`/messages/${messageId}/draft-reply`, { context });
+    return response.data;
+}
+
+/**
+ * Send a reply to a message
+ */
+export interface SendReplyRequest {
+    body: string;
+    to: string;
+    cc?: string[];
+    bcc?: string[];
+    subject?: string;
+}
+
+export interface SendReplyResponse {
+    sent: boolean;
+    message_id?: string;
+    thread_id?: string;
+    error?: string;
+}
+
+export async function sendReply(messageId: number, data: SendReplyRequest): Promise<SendReplyResponse> {
+    const response = await api.post<SendReplyResponse>(`/messages/${messageId}/send-reply`, data);
     return response.data;
 }

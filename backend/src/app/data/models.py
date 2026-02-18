@@ -274,8 +274,10 @@ class Task(Base):
     description = Column(Text, nullable=True)
     source_snippet = Column(Text, nullable=True)  # Context snippet from email explaining why this task exists
 
-    # Task Type/Category
-    task_type = Column(String, index=True)  # explicit, implied_followup, waiting_for, meeting_prep
+    # Task Type/Category (work category)
+    task_type = Column(String, index=True, default="other")  # follow_up, scheduling, prep, decision, review, other
+    # Task Signal (how detected)
+    task_signal = Column(String, index=True, default="explicit")  # explicit | implied | inferred_pattern
     priority = Column(String, default="normal")  # low, normal, high, urgent
 
     # Approval Workflow

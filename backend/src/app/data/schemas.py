@@ -21,6 +21,7 @@ class TaskInMessage(BaseModel):
     description: Optional[str] = None
     source_snippet: Optional[str] = None
     task_type: str = Field(serialization_alias="type")
+    task_signal: Optional[str] = None
     priority: str
     status: str
     approved_at: Optional[datetime] = None
@@ -87,6 +88,19 @@ class DraftReplyRequest(BaseModel):
 
 class DraftReplyResponse(BaseModel):
     draft: str
+
+class SendReplyRequest(BaseModel):
+    body: str
+    to: str
+    cc: Optional[List[str]] = None
+    bcc: Optional[List[str]] = None
+    subject: Optional[str] = None
+
+class SendReplyResponse(BaseModel):
+    sent: bool
+    message_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    error: Optional[str] = None
 
 class MessagesListResponse(BaseModel):
     messages: List[MessageResponse]
@@ -157,6 +171,7 @@ class TaskResponse(BaseModel):
 
     # Primary fields with frontend-compatible aliases
     task_type: str = Field(serialization_alias="type")
+    task_signal: Optional[str] = None
     priority: str
     status: str
 
@@ -192,6 +207,7 @@ class TaskListItem(BaseModel):
     source_snippet: Optional[str] = None
 
     task_type: str = Field(serialization_alias="type")
+    task_signal: Optional[str] = None
     priority: str
     status: str
 
@@ -227,7 +243,8 @@ class TaskCreateRequest(BaseModel):
     title: str
     description: Optional[str] = None
     source_snippet: Optional[str] = None
-    task_type: str = "explicit"
+    task_type: str = "other"
+    task_signal: str = "explicit"
     priority: str = "normal"
     status: str = "approved"  # When user manually approves, it's already approved
 

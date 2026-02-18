@@ -4,7 +4,7 @@ import { useInbox } from "@/hooks/useInbox";
 import { EmailCard } from "./EmailCard";
 import { DonnaText } from "@/components/ui/DonnaText";
 import { DonnaButton } from "@/components/ui/DonnaButton";
-import { Loader2, Inbox, Zap, ZapOff } from "lucide-react";
+import { Loader2, Inbox, Archive, Zap, ZapOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { isToday, isYesterday, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -15,14 +15,16 @@ interface InboxFeedProps {
     onSelectThread?: (threadId: string) => void;
     onThreadIdsChange?: (threadIds: string[]) => void;
     compact?: boolean;
+    statusFilter?: string;
 }
 
-export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange, compact }: InboxFeedProps) {
+export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange, compact, statusFilter }: InboxFeedProps) {
     const [isFocusMode, setIsFocusMode] = useState(false);
     const searchParams = useSearchParams();
     const highlightId = searchParams.get("messageId");
     const { data, fetchNextPage, hasNextPage, isFetchingNextPage, status } = useInbox({
-        needs_reply: isFocusMode ? true : undefined
+        needs_reply: isFocusMode ? true : undefined,
+        status: statusFilter,
     });
 
     // Sentinel logic for infinite scroll
@@ -92,44 +94,52 @@ export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange,
 
     return (
         <div className="space-y-6 pb-20">
-            {/* Header Actions */}
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                    <DonnaButton
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setIsFocusMode(!isFocusMode)}
-                        className={cn(
-                            "gap-2 transition-all duration-300 border-auburn/20 hover:border-auburn/50",
-                            isFocusMode && "bg-auburn/10 text-auburn border-auburn"
-                        )}
-                    >
-                        {isFocusMode ? <Zap size={16} className="fill-current" /> : <ZapOff size={16} />}
-                        {compact ? "" : (isFocusMode ? "Focus Mode On" : "Focus Mode Off")}
-                    </DonnaButton>
+            {/* Header Actions — hidden in archive view */}
+            {statusFilter !== "archived" && (
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-2">
+                        <DonnaButton
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setIsFocusMode(!isFocusMode)}
+                            className={cn(
+                                "gap-2 transition-all duration-300 border-auburn/20 hover:border-auburn/50",
+                                isFocusMode && "bg-auburn/10 text-auburn border-auburn"
+                            )}
+                        >
+                            {isFocusMode ? <Zap size={16} className="fill-current" /> : <ZapOff size={16} />}
+                            {compact ? "" : (isFocusMode ? "Focus Mode On" : "Focus Mode Off")}
+                        </DonnaButton>
 
-                    {isFocusMode && !compact && (
-                        <DonnaText variant="caption" className="text-auburn animate-in fade-in slide-in-from-left-2">
-                            Showing only actionable items
-                        </DonnaText>
-                    )}
+                        {isFocusMode && !compact && (
+                            <DonnaText variant="caption" className="text-auburn animate-in fade-in slide-in-from-left-2">
+                                Showing only actionable items
+                            </DonnaText>
+                        )}
+                    </div>
                 </div>
-            </div>
+            )}
 
             {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-[40vh] text-muted-foreground gap-4 animate-in fade-in zoom-in-95 duration-500">
-                    <Inbox size={48} className="text-muted-foreground/30" />
+                    {statusFilter === "archived" ? (
+                        <Archive size={48} className="text-muted-foreground/30" />
+                    ) : (
+                        <Inbox size={48} className="text-muted-foreground/30" />
+                    )}
                     <DonnaText variant="h3" className="text-muted-foreground">
-                        {isFocusMode ? "All Caught Up!" : "Inbox Zero!"}
+                        {statusFilter === "archived" ? "No Archived Messages" : isFocusMode ? "All Caught Up!" : "Inbox Zero!"}
                     </DonnaText>
                     {!compact && (
                         <DonnaText variant="body" align="center" className="max-w-xs">
-                            {isFocusMode
-                                ? "No urgent items requiring your attention."
-                                : "Nothing needs your attention right now."}
+                            {statusFilter === "archived"
+                                ? "Messages you archive will appear here."
+                                : isFocusMode
+                                    ? "No urgent items requiring your attention."
+                                    : "Nothing needs your attention right now."}
                         </DonnaText>
                     )}
-                    {isFocusMode && (
+                    {isFocusMode && !statusFilter && (
                         <DonnaButton variant="link" onClick={() => setIsFocusMode(false)} className="text-auburn">
                             View all messages
                         </DonnaButton>

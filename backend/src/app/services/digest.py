@@ -242,8 +242,7 @@ class DigestService:
     def _get_waiting_for_tasks(self, limit: int = 20) -> List[Dict]:
         """Get waiting-for type tasks (awaiting response from others)."""
         tasks = self.db.query(Task).filter(
-            Task.task_type == "waiting_for",
-            Task.status.in_(["approved", "pending_approval"])
+            Task.status == "waiting_for"
         ).order_by(Task.created_at.desc()).limit(limit).all()
         
         return [self._task_to_dict(t) for t in tasks]

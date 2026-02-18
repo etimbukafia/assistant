@@ -82,6 +82,7 @@ def create_task(
         description=request.description,
         source_snippet=request.source_snippet,
         task_type=request.task_type,
+        task_signal=request.task_signal,
         priority=request.priority,
         status=request.status,
         confidence_score=1.0,  # User-approved = full confidence
@@ -112,6 +113,7 @@ def create_task(
         "description": task.description,
         "source_snippet": task.source_snippet,
         "task_type": task.task_type,
+        "task_signal": task.task_signal,
         "priority": task.priority,
         "status": task.status,
         "approved_at": task.approved_at,
@@ -179,7 +181,8 @@ def create_manual_task(
         thread_id="__manual_tasks__",
         title=request.title,
         description=request.description,
-        task_type="explicit",  # Manual tasks are always explicit
+        task_type="other",
+        task_signal="explicit",  # Manual tasks are always explicit
         priority=request.priority,
         status="approved",  # Manual tasks start as approved
         confidence_score=1.0,  # User-created = full confidence
@@ -204,7 +207,10 @@ def get_task_stats(db: Session = Depends(get_db_for_user)):
 
     pending_approval = db.query(Task).filter(Task.status == "pending_approval").count()
     approved = db.query(Task).filter(Task.status == "approved").count()
+    in_progress = db.query(Task).filter(Task.status == "in_progress").count()
+    waiting_for = db.query(Task).filter(Task.status == "waiting_for").count()
     completed = db.query(Task).filter(Task.status == "completed").count()
+    dismissed = db.query(Task).filter(Task.status == "dismissed").count()
     overdue = db.query(Task).filter(
         Task.scheduled_reminder_at < datetime.now(timezone.utc),
         Task.status.in_(["approved", "pending_approval"])
@@ -213,9 +219,12 @@ def get_task_stats(db: Session = Depends(get_db_for_user)):
     return {
         "pending_approval": pending_approval,
         "approved": approved,
+        "in_progress": in_progress,
+        "waiting_for": waiting_for,
         "completed": completed,
+        "dismissed": dismissed,
         "overdue": overdue,
-        "total": pending_approval + approved + completed
+        "total": pending_approval + approved + in_progress + completed + waiting_for
     }
 
 
@@ -236,6 +245,7 @@ def get_task(task_id: int, db: Session = Depends(get_db_for_user)):
         "title": task.title,
         "description": task.description,
         "task_type": task.task_type,
+        "task_signal": task.task_signal,
         "priority": task.priority,
         "status": task.status,
         "approved_at": task.approved_at,

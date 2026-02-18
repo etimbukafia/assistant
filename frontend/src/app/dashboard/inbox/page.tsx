@@ -5,13 +5,14 @@ import { InboxFeed } from "@/components/inbox/InboxFeed";
 import { ThreadDetailPanel } from "@/components/inbox/ThreadDetailPanel";
 import { DonnaText } from "@/components/ui/DonnaText";
 import { useAuth } from "@/context/AuthContext";
-import { Loader2 } from "lucide-react";
+import { Loader2, Inbox, Archive } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function InboxPage() {
     const { user, settings, gmailConnectError } = useAuth();
     const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
     const [threadIds, setThreadIds] = useState<string[]>([]);
+    const [view, setView] = useState<"inbox" | "archived">("inbox");
     const panelOpen = !!selectedThreadId;
 
     // Keyboard navigation
@@ -61,12 +62,42 @@ export default function InboxPage() {
                 <div className={cn("py-8 px-4", panelOpen && "py-4 px-3")}>
                     {/* Header — compact when panel open */}
                     <div className={cn("mb-8 space-y-2", panelOpen && "mb-4 space-y-1")}>
-                        <DonnaText variant={panelOpen ? "h3" : "h2"}>Inbox</DonnaText>
+                        <DonnaText variant={panelOpen ? "h3" : "h2"}>
+                            {view === "archived" ? "Archive" : "Inbox"}
+                        </DonnaText>
                         {!panelOpen && (
                             <DonnaText variant="body" className="text-muted-foreground">
                                 Welcome back, {user?.user_metadata?.full_name || user?.email?.split('@')[0]}.
                             </DonnaText>
                         )}
+                    </div>
+
+                    {/* View Toggle */}
+                    <div className={cn("flex gap-1 mb-6 p-1 rounded-lg bg-muted/50 w-fit", panelOpen && "mb-4")}>
+                        <button
+                            onClick={() => { setView("inbox"); setSelectedThreadId(null); }}
+                            className={cn(
+                                "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                                view === "inbox"
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <Inbox size={13} />
+                            {!panelOpen && "Inbox"}
+                        </button>
+                        <button
+                            onClick={() => { setView("archived"); setSelectedThreadId(null); }}
+                            className={cn(
+                                "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                                view === "archived"
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            <Archive size={13} />
+                            {!panelOpen && "Archived"}
+                        </button>
                     </div>
 
                     {!settings?.initial_sync_completed && !gmailConnectError && (
@@ -83,6 +114,7 @@ export default function InboxPage() {
                             onSelectThread={handleSelectThread}
                             onThreadIdsChange={setThreadIds}
                             compact={panelOpen}
+                            statusFilter={view === "archived" ? "archived" : undefined}
                         />
                     </Suspense>
                 </div>

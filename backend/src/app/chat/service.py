@@ -456,10 +456,11 @@ class ChatService:
     
     def _execute_create_task(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a task from approved action."""
-        due_date = None
-        if data.get("due_date"):
+        deadline = None
+        if data.get("due_date") or data.get("deadline"):
             try:
-                due_date = datetime.fromisoformat(data["due_date"].replace("Z", "+00:00"))
+                deadline_value = data.get("deadline") or data.get("due_date")
+                deadline = datetime.fromisoformat(deadline_value.replace("Z", "+00:00"))
             except ValueError:
                 pass
         
@@ -467,10 +468,11 @@ class ChatService:
             user_id=self.user_id,
             title=data.get("title", "New Task"),
             description=data.get("description", ""),
-            priority=data.get("priority", "medium"),
-            status="pending",
-            task_type="explicit",
-            due_date=due_date,
+            priority=data.get("priority", "normal"),
+            status="approved",
+            task_type=data.get("task_type", "other"),
+            task_signal=data.get("task_signal", "explicit"),
+            deadline=deadline,
             created_at=datetime.now(timezone.utc)
         )
         

@@ -210,10 +210,10 @@ class BriefingService:
                 'suggestion': 'Consider adding an agenda or discussion points'
             })
 
-        # 2. Check for "waiting_for" tasks involving attendees
+        # 2. Check for waiting-for tasks involving attendees
         waiting_tasks = [
             t for t in related_tasks
-            if t.task_type == 'waiting_for' and t.status in ['approved', 'pending_approval']
+            if t.status == 'waiting_for'
         ]
         for task in waiting_tasks:
             warnings.append({
@@ -227,7 +227,7 @@ class BriefingService:
         # 3. Check for incomplete follow-up tasks
         followup_tasks = [
             t for t in related_tasks
-            if t.task_type == 'implied_followup' and t.status in ['approved', 'pending_approval']
+            if t.task_type == 'follow_up' and t.status in ['approved', 'pending_approval']
         ]
         for task in followup_tasks:
             warnings.append({
@@ -238,10 +238,10 @@ class BriefingService:
                 'suggestion': 'Complete before meeting or discuss status'
             })
 
-        # 4. Check for meeting_prep tasks
+        # 4. Check for prep tasks
         prep_tasks = [
             t for t in related_tasks
-            if t.task_type == 'meeting_prep' and t.status in ['approved', 'pending_approval']
+            if t.task_type == 'prep' and t.status in ['approved', 'pending_approval']
         ]
         for task in prep_tasks:
             warnings.append({

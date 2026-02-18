@@ -96,6 +96,7 @@ def send_scheduling_suggestion(
             title=f"Follow up on scheduling with {message.sender.split('@')[0]}",
             description="Check if they responded to your availability",
             task_type="follow_up",
+            task_signal="explicit",
             priority="normal",
             status="approved",
             approved_at=datetime.now(timezone.utc)

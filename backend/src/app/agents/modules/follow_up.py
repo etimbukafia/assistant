@@ -60,8 +60,8 @@ class FollowUpModule(BaseModule):
                 "confidence": 1.0,
             }
 
-        # Check task type - only follow up on waiting_for and implied_followup
-        if task.task_type not in ["waiting_for", "implied_followup"]:
+        # Check task type/status - only follow up on waiting_for status or follow_up tasks
+        if not (task.status == "waiting_for" or task.task_type == "follow_up"):
             return {
                 "needed": False,
                 "reason": f"Task type '{task.task_type}' doesn't require follow-up",

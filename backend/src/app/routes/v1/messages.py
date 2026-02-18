@@ -15,6 +15,7 @@ from app.services.email_filter import EmailFilterService, FilterAction
 from app.data.schemas import (
     SyncResponse, MessagesListResponse, MessageResponse,
     DraftReplyRequest, DraftReplyResponse,
+    SendReplyRequest, SendReplyResponse,
     ThreadDetailResponse, ThreadStateResponse, ThreadMessageResponse,
     TaskListItem, SchedulingSuggestionResponse
 )
@@ -294,6 +295,7 @@ def get_messages(
     limit: int = 3,
     offset: int = 0,
     needs_reply: bool = None,
+    status: str = None,
     db: Session = Depends(get_db_for_user)
 ):
     """Get all messages with optional filtering and their associated tasks.
@@ -301,6 +303,9 @@ def get_messages(
     RLS automatically filters to current user's messages.
     """
     query = db.query(Message)
+
+    if status is not None:
+        query = query.filter(Message.status == status)
 
     if needs_reply is not None:
         query = query.filter(Message.needs_reply == needs_reply)
@@ -646,6 +651,65 @@ def draft_reply(
     db.commit()
 
     return DraftReplyResponse(draft=draft)
+
+
+@router.post("/{message_id}/send-reply", response_model=SendReplyResponse)
+def send_reply(
+    message_id: int,
+    request: SendReplyRequest,
+    db: Session = Depends(get_db_for_user)
+):
+    """
+    Send a reply to a message via Gmail.
+
+    Uses the original message's thread_id and gmail_id for proper threading.
+    After sending, marks the thread as no longer needing a reply.
+    """
+    message = db.query(Message).filter(Message.id == message_id).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Get Gmail client for this user
+    gmail_account = db.query(GmailAccount).filter(
+        GmailAccount.user_id == message.user_id
+    ).first()
+    if not gmail_account:
+        return SendReplyResponse(sent=False, error="No Gmail account connected")
+
+    try:
+        gmail_client = GmailClient(gmail_account)
+
+        subject = request.subject or f"Re: {message.subject}"
+
+        result = gmail_client.send_message(
+            to=request.to,
+            subject=subject,
+            body=request.body,
+            in_reply_to=message.gmail_id,
+            thread_id=message.thread_id,
+        )
+
+        # Update thread state: no longer needs reply
+        thread_state = db.query(ThreadState).filter(
+            ThreadState.thread_id == message.thread_id,
+            ThreadState.user_id == message.user_id,
+        ).first()
+        if thread_state:
+            thread_state.needs_reply = False
+            thread_state.last_outbound_at = datetime.now(timezone.utc)
+
+        db.commit()
+
+        return SendReplyResponse(
+            sent=True,
+            message_id=result.get("id"),
+            thread_id=result.get("threadId"),
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to send reply for message {message_id}: {e}")
+        return SendReplyResponse(sent=False, error=str(e))
+
 
 @router.post("/{message_id}/reprocess")
 def reprocess_message(message_id: int, db: Session = Depends(get_db_for_user)):
