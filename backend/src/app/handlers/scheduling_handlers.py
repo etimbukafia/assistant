@@ -11,6 +11,7 @@ from core.events import register_handler
 from app.infra.database import SessionLocal
 from app.data.models import Message, SchedulingSuggestion
 from app.agents.modules.scheduling import SchedulingModule
+from core.cache import thread_cache
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,9 @@ async def handle_scheduling_intent(event: Dict[str, Any], payload: Dict[str, Any
         )
         
         if result.get("success"):
+            if user_id and thread_id:
+                thread_cache.invalidate(user_id, thread_id)
+
             logger.info(
                 f"Created scheduling suggestion for message {message_id}",
                 extra={

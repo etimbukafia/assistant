@@ -12,6 +12,7 @@ from app.data.schemas import (
 )
 from app.intelligence.pattern_tracker import track_task_action
 from app.jobs.queue import enqueue_task
+from core.cache import thread_cache
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
@@ -104,6 +105,8 @@ def create_task(
             return False
         message.extracted_tasks = [t for t in message.extracted_tasks if not _task_matches(t, request.title)]
         db.commit()
+
+    thread_cache.invalidate(user.user_id, message.thread_id)
 
     # Build response with source message
     task_dict = {
@@ -286,6 +289,9 @@ def approve_task(
     task.approved_at = datetime.now(timezone.utc)
     db.commit()
 
+    if task.thread_id:
+        thread_cache.invalidate(user.user_id, task.thread_id)
+
     # Track pattern for learning
     track_task_action(db, "approve", task, task.user_id or user.user_id)
 
@@ -317,6 +323,9 @@ def dismiss_task(
     task.dismissed_at = datetime.now(timezone.utc)
     db.commit()
 
+    if task.thread_id:
+        thread_cache.invalidate(user.user_id, task.thread_id)
+
     # Track pattern for learning
     track_task_action(db, "dismiss", task, task.user_id or user.user_id)
 
@@ -327,7 +336,8 @@ def dismiss_task(
 def update_task(
     task_id: int,
     request: TaskUpdateRequest,
-    db: Session = Depends(get_db_for_user)
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
 ):
     """Update task details (one-click edit)
 
@@ -376,6 +386,10 @@ def update_task(
         task.urgency_suggested_by_ai = False  # Now confirmed by user
 
     db.commit()
+
+    if task.thread_id:
+        thread_cache.invalidate(user.user_id, task.thread_id)
+
     db.refresh(task)
 
     return task
@@ -400,7 +414,11 @@ def start_task(task_id: int, db: Session = Depends(get_db_for_user)):
 
 
 @router.post("/{task_id}/complete")
-def complete_task(task_id: int, db: Session = Depends(get_db_for_user)):
+def complete_task(
+    task_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
     """Mark task as completed"""
 
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -410,6 +428,9 @@ def complete_task(task_id: int, db: Session = Depends(get_db_for_user)):
     task.status = "completed"
     task.completed_at = datetime.now(timezone.utc)
     db.commit()
+
+    if task.thread_id:
+        thread_cache.invalidate(user.user_id, task.thread_id)
 
     return {"message": "Task completed", "task_id": task_id}
 

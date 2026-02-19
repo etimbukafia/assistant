@@ -24,6 +24,7 @@ from app.jobs.queue import queue_service
 from core.events import emit_event
 from app.processors.ai import AIProcessor
 from app.services.thread_state import ThreadStateService
+from core.cache import thread_cache
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
 
@@ -432,67 +433,81 @@ def get_processing_status(
 
 
 @router.get("/thread/{thread_id}", response_model=ThreadDetailResponse)
-def get_thread_detail(thread_id: str, db: Session = Depends(get_db_for_user)):
+def get_thread_detail(
+    thread_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
     """
     Get full thread detail for the Thread Intelligence View.
 
     Returns thread state (summary, action points, decisions, participants),
     all messages in chronological order, linked tasks, and scheduling suggestions.
+
+    Cached per user+thread for 5 minutes. Message bodies excluded from cache
+    (no decrypted PII in memory). The intelligence view uses summary, action_points,
+    decisions, participants, tasks — not the raw body.
     """
-    # Get thread state
-    thread_state = db.query(ThreadState).filter(
-        ThreadState.thread_id == thread_id
-    ).first()
 
-    if not thread_state:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    def build():
+        thread_state = db.query(ThreadState).filter(
+            ThreadState.thread_id == thread_id
+        ).first()
 
-    # Get all messages in this thread, chronological
-    messages = db.query(Message).filter(
-        Message.thread_id == thread_id
-    ).order_by(Message.received_at.asc()).all()
+        if not thread_state:
+            raise HTTPException(status_code=404, detail="Thread not found")
 
-    thread_messages = [
-        ThreadMessageResponse(
-            id=msg.id,
-            sender=msg.sender,
-            subject=msg.subject,
-            body=msg.decrypted_body,
-            summary=msg.summary,
-            received_at=msg.received_at,
-            scheduling_intent=msg.scheduling_intent or False,
-            scheduling_intent_type=msg.scheduling_intent_type,
+        messages = db.query(Message).filter(
+            Message.thread_id == thread_id
+        ).order_by(Message.received_at.asc()).all()
+
+        thread_messages = [
+            ThreadMessageResponse(
+                id=msg.id,
+                sender=msg.sender,
+                subject=msg.subject,
+                body=msg.decrypted_body,
+                summary=msg.summary,
+                received_at=msg.received_at,
+                scheduling_intent=msg.scheduling_intent or False,
+                scheduling_intent_type=msg.scheduling_intent_type,
+            )
+            for msg in messages
+        ]
+
+        tasks = db.query(Task).filter(
+            Task.thread_id == thread_id
+        ).order_by(Task.created_at.desc()).all()
+
+        suggestions = db.query(SchedulingSuggestion).filter(
+            SchedulingSuggestion.thread_id == thread_id,
+            SchedulingSuggestion.status == "pending"
+        ).order_by(SchedulingSuggestion.created_at.desc()).all()
+
+        response = ThreadDetailResponse(
+            thread_state=ThreadStateResponse(
+                summary=thread_state.summary,
+                open_tasks=thread_state.open_tasks or [],
+                decisions=thread_state.decisions or [],
+                participants=thread_state.participants or [],
+                action_points=thread_state.action_points or [],
+                needs_reply=thread_state.needs_reply or False,
+                message_count=thread_state.message_count or 0,
+                last_action=thread_state.last_action,
+                last_action_by=thread_state.last_action_by,
+            ),
+            messages=thread_messages,
+            tasks=[TaskListItem.model_validate(t) for t in tasks],
+            scheduling_suggestions=[SchedulingSuggestionResponse.model_validate(s) for s in suggestions],
         )
-        for msg in messages
-    ]
 
-    # Get tasks linked to this thread
-    tasks = db.query(Task).filter(
-        Task.thread_id == thread_id
-    ).order_by(Task.created_at.desc()).all()
+        # Strip bodies before caching — no decrypted PII in memory
+        result = response.model_dump()
+        for msg in result["messages"]:
+            msg["body"] = ""
+        return result
 
-    # Get scheduling suggestions for this thread
-    suggestions = db.query(SchedulingSuggestion).filter(
-        SchedulingSuggestion.thread_id == thread_id,
-        SchedulingSuggestion.status == "pending"
-    ).order_by(SchedulingSuggestion.created_at.desc()).all()
-
-    return ThreadDetailResponse(
-        thread_state=ThreadStateResponse(
-            summary=thread_state.summary,
-            open_tasks=thread_state.open_tasks or [],
-            decisions=thread_state.decisions or [],
-            participants=thread_state.participants or [],
-            action_points=thread_state.action_points or [],
-            needs_reply=thread_state.needs_reply or False,
-            message_count=thread_state.message_count or 0,
-            last_action=thread_state.last_action,
-            last_action_by=thread_state.last_action_by,
-        ),
-        messages=thread_messages,
-        tasks=[TaskListItem.model_validate(t) for t in tasks],
-        scheduling_suggestions=[SchedulingSuggestionResponse.model_validate(s) for s in suggestions],
-    )
+    return thread_cache.get_or_build(user.user_id, thread_id, build)
 
 
 @router.get("/{message_id}", response_model=MessageResponse)
@@ -700,6 +715,8 @@ def send_reply(
 
         db.commit()
 
+        thread_cache.invalidate(message.user_id, message.thread_id)
+
         return SendReplyResponse(
             sent=True,
             message_id=result.get("id"),
@@ -757,6 +774,8 @@ def reprocess_message(message_id: int, db: Session = Depends(get_db_for_user)):
 
     db.commit()
 
+    thread_cache.invalidate(message.user_id, message.thread_id)
+
     return {"message": "Message reprocessed successfully"}
 
 
@@ -764,7 +783,8 @@ def reprocess_message(message_id: int, db: Session = Depends(get_db_for_user)):
 def update_message_status(
     message_id: int,
     status: str,
-    db: Session = Depends(get_db_for_user)
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
 ):
     """Update message status (inbox, done, archived)"""
     valid_statuses = ["inbox", "done", "archived"]
@@ -781,11 +801,17 @@ def update_message_status(
     message.status = status
     db.commit()
 
+    thread_cache.invalidate(user.user_id, message.thread_id)
+
     return {"message": f"Message marked as {status}", "id": message_id, "status": status}
 
 
 @router.post("/{message_id}/done")
-def mark_message_done(message_id: int, db: Session = Depends(get_db_for_user)):
+def mark_message_done(
+    message_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
     """Mark a message as done"""
     from app.intelligence.pattern_tracker import track_message_action
 
@@ -796,6 +822,8 @@ def mark_message_done(message_id: int, db: Session = Depends(get_db_for_user)):
     message.status = "done"
     db.commit()
 
+    thread_cache.invalidate(user.user_id, message.thread_id)
+
     # Track pattern for learning (especially if marked done without replying)
     track_message_action(db, "mark_done", message)
 
@@ -803,7 +831,11 @@ def mark_message_done(message_id: int, db: Session = Depends(get_db_for_user)):
 
 
 @router.post("/{message_id}/archive")
-def archive_message(message_id: int, db: Session = Depends(get_db_for_user)):
+def archive_message(
+    message_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
     """Archive a message"""
     message = db.query(Message).filter(Message.id == message_id).first()
     if not message:
@@ -812,16 +844,24 @@ def archive_message(message_id: int, db: Session = Depends(get_db_for_user)):
     message.status = "archived"
     db.commit()
 
+    thread_cache.invalidate(user.user_id, message.thread_id)
+
     return {"message": "Message archived", "id": message_id}
 
 
 @router.delete("/{message_id}")
-def delete_message(message_id: int, db: Session = Depends(get_db_for_user)):
+def delete_message(
+    message_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
     """Permanently delete a message and all related data"""
 
     message = db.query(Message).filter(Message.id == message_id).first()
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
+
+    thread_id = message.thread_id
 
     # Delete related tasks first (foreign key constraint)
     db.query(Task).filter(Task.message_id == message_id).delete(synchronize_session='fetch')
@@ -835,6 +875,8 @@ def delete_message(message_id: int, db: Session = Depends(get_db_for_user)):
     # Now delete the message
     db.delete(message)
     db.commit()
+
+    thread_cache.invalidate(user.user_id, thread_id)
 
     return {"message": "Message deleted", "id": message_id}
 

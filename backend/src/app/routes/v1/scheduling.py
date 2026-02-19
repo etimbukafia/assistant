@@ -2,11 +2,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_db_for_user, get_db
+from app.security.auth import get_db_for_user, get_db, get_current_user, AuthenticatedUser
 from app.integrations.gmail import GmailClient, get_gmail_client
 from app.data.models import SchedulingSuggestion, Message, Task
 from app.data.schemas import SchedulingSuggestionResponse, SchedulingSuggestionSendRequest
 from app.agents.modules.scheduling import SchedulingModule
+from core.cache import thread_cache
 
 router = APIRouter(prefix="/scheduling", tags=["Scheduling"])
 
@@ -54,8 +55,9 @@ def get_scheduling_suggestion(suggestion_id: int, db: Session = Depends(get_db_f
 def send_scheduling_suggestion(
     suggestion_id: int,
     request: SchedulingSuggestionSendRequest = None,
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
-    gmail_client: GmailClient = Depends(get_gmail_client)
+    gmail_client: GmailClient = Depends(get_gmail_client),
 ):
     """Send availability reply for a scheduling suggestion"""
     
@@ -104,6 +106,9 @@ def send_scheduling_suggestion(
         db.add(follow_up_task)
         db.commit()
 
+        if suggestion.thread_id:
+            thread_cache.invalidate(user.user_id, suggestion.thread_id)
+
         return {
             "success": True,
             "message": "Availability reply sent",
@@ -115,7 +120,11 @@ def send_scheduling_suggestion(
 
 
 @router.post("/suggestions/{suggestion_id}/dismiss")
-def dismiss_scheduling_suggestion(suggestion_id: int, db: Session = Depends(get_db_for_user)):
+def dismiss_scheduling_suggestion(
+    suggestion_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
     """Dismiss a scheduling suggestion"""
 
     suggestion = db.query(SchedulingSuggestion).filter(
@@ -127,6 +136,9 @@ def dismiss_scheduling_suggestion(suggestion_id: int, db: Session = Depends(get_
 
     suggestion.status = "dismissed"
     db.commit()
+
+    if suggestion.thread_id:
+        thread_cache.invalidate(user.user_id, suggestion.thread_id)
 
     return {"success": True, "message": "Suggestion dismissed"}
 

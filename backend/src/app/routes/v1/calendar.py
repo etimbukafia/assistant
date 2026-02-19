@@ -2,9 +2,10 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_db_for_user, get_user_settings, require_active_subscription, AuthenticatedUser
+from app.security.auth import get_db_for_user, get_user_settings, get_current_user, require_active_subscription, AuthenticatedUser
 from app.security.feature_gating import require_feature, Feature, is_feature_enabled
 from app.data.models import CalendarEvent, UserSettings
+from core.cache import calendar_cache
 from app.data.schemas import (
     CalendarEventCreateRequest, CalendarEventManualCreateRequest, CalendarEventUpdateRequest, CalendarEventResponse, 
     CalendarSettingsResponse, CalendarSettingsUpdateRequest,
@@ -43,6 +44,8 @@ def create_calendar_event(
 
     # Get the created event from database
     event = db.query(CalendarEvent).filter(CalendarEvent.id == result["event_id"]).first()
+
+    calendar_cache.invalidate_all(user.user_id)
 
     return event
 
@@ -121,6 +124,8 @@ def create_manual_calendar_event(
             calendar_event.briefing_scheduled_for = briefing_time
             db.commit()
 
+    calendar_cache.invalidate_all(user.user_id)
+
     return calendar_event
 
 
@@ -131,50 +136,59 @@ def get_calendar_events(
     offset: int = 0,
     start_time: str = None,
     end_time: str = None,
-    db: Session = Depends(get_db_for_user)
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
 ):
-    """Get calendar events"""
+    """Get calendar events. Cached per user for 60s."""
 
-    query = db.query(CalendarEvent)
+    cache_key = f"events:{status}:{limit}:{offset}:{start_time}:{end_time}"
 
-    if status:
-        query = query.filter(CalendarEvent.status == status)
-    else:
-        query = query.filter(CalendarEvent.status != "cancelled")
-    if start_time:
-        try:
-            start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-            query = query.filter(CalendarEvent.end_time >= start_dt)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start_time format")
-    if end_time:
-        try:
-            end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-            query = query.filter(CalendarEvent.start_time <= end_dt)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end_time format")
+    def build():
+        query = db.query(CalendarEvent)
 
-    total = query.count()
-    events = query.order_by(CalendarEvent.start_time.desc()).offset(offset).limit(limit).all()
+        if status:
+            query = query.filter(CalendarEvent.status == status)
+        else:
+            query = query.filter(CalendarEvent.status != "cancelled")
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                query = query.filter(CalendarEvent.end_time >= start_dt)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid start_time format")
+        if end_time:
+            try:
+                end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+                query = query.filter(CalendarEvent.start_time <= end_dt)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid end_time format")
 
-    return {
-        "events": [CalendarEventResponse.model_validate(e) for e in events],
-        "total": total
-    }
+        total = query.count()
+        events = query.order_by(CalendarEvent.start_time.desc()).offset(offset).limit(limit).all()
+
+        return {
+            "events": [CalendarEventResponse.model_validate(e).model_dump() for e in events],
+            "total": total
+        }
+
+    return calendar_cache.get_or_build_events(user.user_id, cache_key, build)
 
 
 @router.get("/events/{event_id}", response_model=CalendarEventResponse)
 def get_calendar_event(
     event_id: int,
-    db: Session = Depends(get_db_for_user)
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
 ):
-    """Get a single calendar event by ID"""
-    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    """Get a single calendar event by ID. Cached per user for 60s."""
 
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
+    def build():
+        event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+        if not event:
+            raise HTTPException(status_code=404, detail="Event not found")
+        return CalendarEventResponse.model_validate(event).model_dump()
 
-    return event
+    return calendar_cache.get_or_build_event(user.user_id, event_id, build)
 
 
 @router.patch("/events/{event_id}", response_model=CalendarEventResponse)
@@ -239,6 +253,9 @@ def update_calendar_event(
         event.briefing_scheduled_for = None
 
     db.commit()
+
+    calendar_cache.invalidate_all(user.user_id)
+
     db.refresh(event)
     return event
 
@@ -265,6 +282,9 @@ def delete_calendar_event(
 
     event.status = "cancelled"
     db.commit()
+
+    calendar_cache.invalidate_all(user.user_id)
+
     return {"success": True}
 
 
@@ -288,6 +308,9 @@ async def sync_calendar_events(
             enable_briefings=enable_briefings,
             calendar_ids=calendar_ids
         )
+
+        calendar_cache.invalidate_all(user.user_id)
+
         return {
             "success": True,
             "message": f"Calendar sync complete: {results['created']} created, {results['updated']} updated",
@@ -415,6 +438,7 @@ def update_calendar_settings(
 @router.post("/events/{event_id}/generate-briefing")
 def generate_meeting_briefing(
     event_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
     _gate=Depends(require_feature(Feature.MEETING_BRIEFINGS)),
 ):
@@ -427,6 +451,8 @@ def generate_meeting_briefing(
     if not result:
         raise HTTPException(status_code=500, detail="Failed to generate briefing")
 
+    calendar_cache.invalidate_event(user.user_id, event_id)
+
     db.refresh(event)
     return {
         "success": True,
@@ -438,6 +464,7 @@ def generate_meeting_briefing(
 @router.post("/events/{event_id}/generate-followups")
 def generate_meeting_followups(
     event_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
     _gate=Depends(require_feature(Feature.CALENDAR_SYNC)),
 ):
@@ -460,5 +487,7 @@ def generate_meeting_followups(
 
     if not result:
         raise HTTPException(status_code=500, detail="Failed to generate follow-ups")
+
+    calendar_cache.invalidate_event(user.user_id, event_id)
 
     return result

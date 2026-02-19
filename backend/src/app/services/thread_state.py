@@ -14,6 +14,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.data.models import ThreadState, Task, Message
 from app.processors.ai import AIProcessor
+from core.cache import thread_cache
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,9 @@ class ThreadStateService:
             self._add_participant(thread_state, message.sender, "sender")
 
             self.db.commit()
+
+            if message.user_id:
+                thread_cache.invalidate(message.user_id, thread_id)
 
         except Exception as e:
             # Rollback to release any locks and prevent stuck transactions
