@@ -31,7 +31,6 @@ const ENTITY_ICONS: Record<string, string> = {
     task: "✓",
     event: "📅",
     thread: "✉",
-    message: "💬",
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────

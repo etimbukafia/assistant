@@ -4,7 +4,7 @@ import * as React from "react";
 
 import { chatService, type ChatMention, type MentionSuggestion as ApiMentionSuggestion } from "@/services/chat";
 
-export type MentionKind = "contact" | "thread" | "event" | "message" | "task" | "memory";
+export type MentionKind = "contact" | "thread" | "event" | "task" | "memory";
 
 export type MentionContext = {
     trigger: "@" | "/";

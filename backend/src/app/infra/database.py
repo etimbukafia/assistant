@@ -14,16 +14,22 @@ def _create_engine(max_retries: int = 5, base_delay: float = 2.0):
     settings = get_settings()
     database_url = settings.DATABASE_URL
 
-    eng = create_engine(
-        database_url,
-        # SQLite compatibility
-        connect_args={"check_same_thread": False} if "sqlite" in database_url else {},
-        # Connection pool settings for Supabase reliability
-        pool_pre_ping=True,  # Check if connection is alive before using
-        pool_recycle=300,    # Recycle connections after 5 minutes
-        pool_size=5,         # Keep 5 connections in the pool
-        max_overflow=10,     # Allow up to 10 extra connections under load
-    )
+    is_sqlite = "sqlite" in database_url
+    engine_kwargs = {
+        "connect_args": {"check_same_thread": False} if is_sqlite else {},
+    }
+    if not is_sqlite:
+        engine_kwargs.update(
+            {
+                "pool_pre_ping": True,
+                "pool_recycle": settings.DB_POOL_RECYCLE_SECONDS,
+                "pool_size": settings.DB_POOL_SIZE,
+                "max_overflow": settings.DB_MAX_OVERFLOW,
+                "pool_timeout": settings.DB_POOL_TIMEOUT_SECONDS,
+            }
+        )
+
+    eng = create_engine(database_url, **engine_kwargs)
 
     # Verify connectivity with retries (prevents startup crash on transient DNS failures)
     for attempt in range(1, max_retries + 1):

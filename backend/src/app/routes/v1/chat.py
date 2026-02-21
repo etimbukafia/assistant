@@ -441,6 +441,8 @@ async def get_messages(
 async def suggest_mentions(
     q: str = Query(default=""),
     limit: int = Query(default=8, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, le=5000),
+    kind: Optional[str] = Query(default=None),
     session_id: Optional[str] = Query(default="default"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
@@ -452,13 +454,15 @@ async def suggest_mentions(
         user_id=user.user_id,
         session_id=session_id or "default",
     )
-    return service.suggest_mentions(query=q, limit=limit)
+    return service.suggest_mentions(query=q, limit=limit, offset=offset, kind=kind)
 
 
 @router.get("/slash-suggestions", response_model=List[MentionSuggestionResponse])
 async def suggest_slash(
     q: str = Query(default=""),
     limit: int = Query(default=8, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, le=5000),
+    memory_type: Optional[str] = Query(default=None),
     session_id: Optional[str] = Query(default="default"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
@@ -470,7 +474,7 @@ async def suggest_slash(
         user_id=user.user_id,
         session_id=session_id or "default",
     )
-    return service.suggest_memory_entries(query=q, limit=limit)
+    return service.suggest_memory_entries(query=q, limit=limit, offset=offset, memory_type=memory_type)
 
 
 # =============================================================================

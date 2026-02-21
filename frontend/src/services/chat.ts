@@ -29,14 +29,14 @@ export interface SendMessageRequest {
 }
 
 export interface ChatMention {
-    kind: 'contact' | 'thread' | 'event' | 'message' | 'task' | 'memory';
+    kind: 'contact' | 'thread' | 'event' | 'task' | 'memory';
     ref: string;
     label: string;
     metadata?: Record<string, unknown>;
 }
 
 export interface MentionSuggestion {
-    kind: 'contact' | 'thread' | 'event' | 'message' | 'task' | 'memory';
+    kind: 'contact' | 'thread' | 'event' | 'task' | 'memory';
     ref: string;
     label: string;
     display_label?: string;
@@ -171,16 +171,28 @@ export const chatService = {
         return response.data;
     },
 
-    async getMentionSuggestions(query: string, limit = 8, sessionId = "default"): Promise<MentionSuggestion[]> {
+    async getMentionSuggestions(
+        query: string,
+        limit = 8,
+        sessionId = "default",
+        offset = 0,
+        kind?: "contact" | "thread" | "event" | "task"
+    ): Promise<MentionSuggestion[]> {
         const response = await api.get<MentionSuggestion[]>("/chat/mentions", {
-            params: { q: query || undefined, limit, session_id: sessionId },
+            params: { q: query || undefined, limit, offset, kind, session_id: sessionId },
         });
         return response.data || [];
     },
 
-    async getSlashSuggestions(query: string, limit = 8, sessionId = "default"): Promise<MentionSuggestion[]> {
+    async getSlashSuggestions(
+        query: string,
+        limit = 8,
+        sessionId = "default",
+        offset = 0,
+        memoryType?: "decision" | "commitment" | "preferences" | "relationships" | "insight"
+    ): Promise<MentionSuggestion[]> {
         const response = await api.get<MentionSuggestion[]>("/chat/slash-suggestions", {
-            params: { q: query || undefined, limit, session_id: sessionId },
+            params: { q: query || undefined, limit, offset, memory_type: memoryType, session_id: sessionId },
         });
         return response.data || [];
     },

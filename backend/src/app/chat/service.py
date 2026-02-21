@@ -403,7 +403,7 @@ class ChatService:
                             "label": self._sanitize_mention_text(label or ref_id, max_len=220),
                         }
                     )
-            elif mtype in {"thread", "event", "message"}:
+            elif mtype in {"thread", "event"}:
                 entity = (
                     self.db.query(EntityReference)
                     .filter(

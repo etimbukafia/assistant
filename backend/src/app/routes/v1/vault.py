@@ -81,10 +81,13 @@ def _validate_diary_entity_reference(db: Session, user_id: str, payload: Context
     if entity_type in {"assistant", "executive"}:
         return
 
+    if entity_type == "message":
+        raise HTTPException(status_code=400, detail="Use thread references instead of message references.")
+
     if not entity_id:
         raise HTTPException(
             status_code=400,
-            detail="This memory must be linked to a contact, thread, message, or event.",
+            detail="This memory must be linked to a contact, thread, or event.",
         )
 
     if entity_type == "contact":
@@ -100,7 +103,7 @@ def _validate_diary_entity_reference(db: Session, user_id: str, payload: Context
             raise HTTPException(status_code=400, detail="Contact reference not found for this user.")
         return
 
-    if entity_type in {"thread", "message", "event"}:
+    if entity_type in {"thread", "event"}:
         ref = (
             db.query(EntityReference)
             .filter(
@@ -655,8 +658,12 @@ def list_entity_references(
     db: Session = Depends(get_db_for_user),
 ):
     query = db.query(EntityReference).filter(EntityReference.user_id == user.user_id)
+    if entity_type == "message":
+        raise HTTPException(status_code=400, detail="Message references are disabled. Use thread references.")
     if entity_type:
         query = query.filter(EntityReference.entity_type == entity_type)
+    else:
+        query = query.filter(EntityReference.entity_type.in_(["thread", "event"]))
     if q:
         q_norm = q.strip()
         query = query.filter(
@@ -680,6 +687,8 @@ def create_entity_reference(
         raise HTTPException(status_code=400, detail="Display name is required.")
     if not ref:
         raise HTTPException(status_code=400, detail="Reference is required.")
+    if payload.entity_type.value == "message":
+        raise HTTPException(status_code=400, detail="Message references are disabled. Use thread references.")
 
     existing_name = (
         db.query(EntityReference)
@@ -723,8 +732,6 @@ def create_entity_reference(
         cache_coordinator.invalidate_thread(tenant_id, user.user_id, entity.ref)
     elif entity.entity_type == "event":
         cache_coordinator.invalidate_event(tenant_id, user.user_id, entity.ref)
-    elif entity.entity_type == "message":
-        cache_coordinator.invalidate_message(tenant_id, user.user_id, entity.ref)
     _prewarm_action_chips_cache(db, user)
     return entity
 
@@ -795,8 +802,6 @@ def update_entity_reference(
             cache_coordinator.invalidate_thread(tenant_id, user.user_id, ref)
         elif entity.entity_type == "event":
             cache_coordinator.invalidate_event(tenant_id, user.user_id, ref)
-        elif entity.entity_type == "message":
-            cache_coordinator.invalidate_message(tenant_id, user.user_id, ref)
     _prewarm_action_chips_cache(db, user)
     return entity
 
@@ -825,8 +830,6 @@ def delete_entity_reference(
         cache_coordinator.invalidate_thread(tenant_id, user.user_id, ref)
     elif entity_type == "event":
         cache_coordinator.invalidate_event(tenant_id, user.user_id, ref)
-    elif entity_type == "message":
-        cache_coordinator.invalidate_message(tenant_id, user.user_id, ref)
     _prewarm_action_chips_cache(db, user)
     return {"deleted": True, "id": entity_id}
 

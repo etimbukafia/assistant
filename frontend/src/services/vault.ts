@@ -22,7 +22,7 @@ export interface VaultNote {
 }
 
 export type DiaryEntryType = "decision" | "commitment" | "preferences" | "insight" | "relationships";
-export type DiaryEntityType = "assistant" | "executive" | "contact" | "thread" | "message" | "event";
+export type DiaryEntityType = "assistant" | "executive" | "contact" | "thread" | "event";
 export type DiaryImportance = "low" | "normal" | "high";
 export type DiaryStatus = "active" | "resolved" | "stale" | "archived";
 
@@ -63,7 +63,7 @@ export interface DiaryContact {
 export interface DiaryEntityReference {
   id: number;
   user_id: string;
-  entity_type: "thread" | "message" | "event";
+  entity_type: "thread" | "event";
   display_name: string;
   ref: string;
   notes?: string | null;
@@ -167,7 +167,7 @@ export async function deleteDiaryContact(id: number): Promise<{ deleted: boolean
 }
 
 export async function fetchDiaryEntityReferences(params?: {
-  entity_type?: "thread" | "message" | "event";
+  entity_type?: "thread" | "event";
   q?: string;
 }): Promise<DiaryEntityReference[]> {
   const response = await api.get("/vault/diary/entity-references", { params });
@@ -175,7 +175,7 @@ export async function fetchDiaryEntityReferences(params?: {
 }
 
 export async function createDiaryEntityReference(payload: {
-  entity_type: "thread" | "message" | "event";
+  entity_type: "thread" | "event";
   display_name: string;
   ref: string;
   notes?: string | null;

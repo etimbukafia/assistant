@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { ActionBubble } from "@/components/chat/ActionBubble";
 import { MessageBubble } from "@/components/chat/MessageBubble";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useChat, useChatActionChips, useChatMessages, useChatSessions } from "@/hooks/useChat";
@@ -27,7 +28,17 @@ const FALLBACK_ACTION_CHIPS = [
 ];
 
 type ActionChip = { id: string; label: string; prompt: string };
-type PaneTab = "all" | "entities" | "remember";
+type PaneFilter =
+    | "all"
+    | "contact"
+    | "thread"
+    | "event"
+    | "task"
+    | "decision"
+    | "commitment"
+    | "preferences"
+    | "relationships"
+    | "insight";
 type PaneSource = "entity" | "memory";
 
 type ReferencePaneItem = {
@@ -43,6 +54,34 @@ type ReferencePaneItem = {
 };
 
 const CARD_SHADOW = "0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)";
+const ENTITY_PAGE_SIZE = 30;
+const MEMORY_PAGE_SIZE = 30;
+const PANE_FILTERS: Array<{ key: PaneFilter; label: string }> = [
+    { key: "all", label: "All" },
+    { key: "contact", label: "@ Contacts" },
+    { key: "thread", label: "@ Threads" },
+    { key: "event", label: "@ Events" },
+    { key: "task", label: "@ Tasks" },
+    { key: "decision", label: "/ Decisions" },
+    { key: "commitment", label: "/ Commitments" },
+    { key: "preferences", label: "/ Preferences" },
+    { key: "relationships", label: "/ Relationships" },
+    { key: "insight", label: "/ Watchouts" },
+];
+
+function isEntityFilter(filter: PaneFilter): filter is "contact" | "thread" | "event" | "task" {
+    return filter === "contact" || filter === "thread" || filter === "event" || filter === "task";
+}
+
+function isMemoryFilter(filter: PaneFilter): filter is "decision" | "commitment" | "preferences" | "relationships" | "insight" {
+    return (
+        filter === "decision" ||
+        filter === "commitment" ||
+        filter === "preferences" ||
+        filter === "relationships" ||
+        filter === "insight"
+    );
+}
 
 function mentionKey(mention: ChatMention): string {
     return `${mention.kind}:${mention.ref}`;
@@ -96,11 +135,17 @@ export default function ChatWorkspacePage() {
     const [inputValue, setInputValue] = React.useState("");
     const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null);
     const [isPaneOpen, setIsPaneOpen] = React.useState(true);
-    const [paneTab, setPaneTab] = React.useState<PaneTab>("all");
+    const [isMobileReferencesOpen, setIsMobileReferencesOpen] = React.useState(false);
+    const [paneFilter, setPaneFilter] = React.useState<PaneFilter>("all");
     const [paneQuery, setPaneQuery] = React.useState("");
     const [paneLoading, setPaneLoading] = React.useState(false);
+    const [paneLoadingMore, setPaneLoadingMore] = React.useState(false);
     const [entityItems, setEntityItems] = React.useState<ReferencePaneItem[]>([]);
     const [memoryItems, setMemoryItems] = React.useState<ReferencePaneItem[]>([]);
+    const [entityOffset, setEntityOffset] = React.useState(0);
+    const [memoryOffset, setMemoryOffset] = React.useState(0);
+    const [hasMoreEntities, setHasMoreEntities] = React.useState(true);
+    const [hasMoreMemory, setHasMoreMemory] = React.useState(true);
     const [selectedPaneMentions, setSelectedPaneMentions] = React.useState<ChatMention[]>([]);
 
     const inputRef = React.useRef<HTMLInputElement>(null);
@@ -172,39 +217,143 @@ export default function ChatWorkspacePage() {
         },
     });
 
+    const mergeUniqueItems = React.useCallback((prev: ReferencePaneItem[], next: ReferencePaneItem[]) => {
+        const seen = new Set(prev.map((item) => item.id));
+        const merged = prev.slice();
+        for (const item of next) {
+            if (seen.has(item.id)) continue;
+            seen.add(item.id);
+            merged.push(item);
+        }
+        return merged;
+    }, []);
+
+    const isReferencesActive = isPaneOpen || isMobileReferencesOpen;
+
     React.useEffect(() => {
+        if (!isReferencesActive) {
+            setPaneLoading(false);
+            return;
+        }
         let cancelled = false;
         const timer = setTimeout(async () => {
             setPaneLoading(true);
             try {
+                const entityKind = isEntityFilter(paneFilter) ? paneFilter : undefined;
+                const memoryType = isMemoryFilter(paneFilter) ? paneFilter : undefined;
+                const needEntity = paneFilter === "all" || Boolean(entityKind);
+                const needMemory = paneFilter === "all" || Boolean(memoryType);
                 const [entitySuggestions, slashSuggestions] = await Promise.all([
-                    chatService.getMentionSuggestions(paneQuery, 120, currentSessionId || "default"),
-                    chatService.getSlashSuggestions(paneQuery, 180, currentSessionId || "default"),
+                    needEntity
+                        ? chatService.getMentionSuggestions(
+                            paneQuery,
+                            ENTITY_PAGE_SIZE,
+                            currentSessionId || "default",
+                            0,
+                            entityKind
+                        )
+                        : Promise.resolve([]),
+                    needMemory
+                        ? chatService.getSlashSuggestions(
+                            paneQuery,
+                            MEMORY_PAGE_SIZE,
+                            currentSessionId || "default",
+                            0,
+                            memoryType
+                        )
+                        : Promise.resolve([]),
                 ]);
                 if (cancelled) return;
                 setEntityItems(entitySuggestions.map((item) => toReferencePaneItem(item, "entity")));
                 setMemoryItems(slashSuggestions.map((item) => toReferencePaneItem(item, "memory")));
+                setEntityOffset(entitySuggestions.length);
+                setMemoryOffset(slashSuggestions.length);
+                setHasMoreEntities(needEntity ? entitySuggestions.length === ENTITY_PAGE_SIZE : false);
+                setHasMoreMemory(needMemory ? slashSuggestions.length === MEMORY_PAGE_SIZE : false);
             } catch {
                 if (!cancelled) {
                     setEntityItems([]);
                     setMemoryItems([]);
+                    setEntityOffset(0);
+                    setMemoryOffset(0);
+                    setHasMoreEntities(false);
+                    setHasMoreMemory(false);
                 }
             } finally {
                 if (!cancelled) setPaneLoading(false);
             }
-        }, 120);
+        }, 140);
 
         return () => {
             cancelled = true;
             clearTimeout(timer);
         };
-    }, [paneQuery, currentSessionId]);
+    }, [paneQuery, currentSessionId, isReferencesActive, paneFilter]);
+
+    const handleLoadMorePane = React.useCallback(async () => {
+        if (paneLoadingMore || !isReferencesActive) return;
+        const entityKind = isEntityFilter(paneFilter) ? paneFilter : undefined;
+        const memoryType = isMemoryFilter(paneFilter) ? paneFilter : undefined;
+        const needEntity = (paneFilter === "all" || Boolean(entityKind)) && hasMoreEntities;
+        const needMemory = (paneFilter === "all" || Boolean(memoryType)) && hasMoreMemory;
+        if (!needEntity && !needMemory) return;
+
+        setPaneLoadingMore(true);
+        try {
+            const [entitySuggestions, slashSuggestions] = await Promise.all([
+                needEntity
+                    ? chatService.getMentionSuggestions(
+                        paneQuery,
+                        ENTITY_PAGE_SIZE,
+                        currentSessionId || "default",
+                        entityOffset,
+                        entityKind
+                    )
+                    : Promise.resolve([]),
+                needMemory
+                    ? chatService.getSlashSuggestions(
+                        paneQuery,
+                        MEMORY_PAGE_SIZE,
+                        currentSessionId || "default",
+                        memoryOffset,
+                        memoryType
+                    )
+                    : Promise.resolve([]),
+            ]);
+
+            if (needEntity) {
+                const mapped = entitySuggestions.map((item) => toReferencePaneItem(item, "entity"));
+                setEntityItems((prev) => mergeUniqueItems(prev, mapped));
+                setEntityOffset((prev) => prev + entitySuggestions.length);
+                setHasMoreEntities(entitySuggestions.length === ENTITY_PAGE_SIZE);
+            }
+            if (needMemory) {
+                const mapped = slashSuggestions.map((item) => toReferencePaneItem(item, "memory"));
+                setMemoryItems((prev) => mergeUniqueItems(prev, mapped));
+                setMemoryOffset((prev) => prev + slashSuggestions.length);
+                setHasMoreMemory(slashSuggestions.length === MEMORY_PAGE_SIZE);
+            }
+        } finally {
+            setPaneLoadingMore(false);
+        }
+    }, [
+        paneLoadingMore,
+        isReferencesActive,
+        paneFilter,
+        hasMoreEntities,
+        hasMoreMemory,
+        paneQuery,
+        currentSessionId,
+        entityOffset,
+        memoryOffset,
+        mergeUniqueItems,
+    ]);
 
     const paneItems = React.useMemo(() => {
         let items: ReferencePaneItem[];
-        if (paneTab === "entities") {
+        if (isEntityFilter(paneFilter)) {
             items = entityItems;
-        } else if (paneTab === "remember") {
+        } else if (isMemoryFilter(paneFilter)) {
             items = memoryItems;
         } else {
             items = [...entityItems, ...memoryItems];
@@ -216,7 +365,11 @@ export default function ChatWorkspacePage() {
                 const bTs = b.updatedAt ? Date.parse(b.updatedAt) : 0;
                 return bTs - aTs;
             });
-    }, [entityItems, memoryItems, paneTab]);
+    }, [entityItems, memoryItems, paneFilter]);
+    const hasMorePaneItems =
+        (isEntityFilter(paneFilter) && hasMoreEntities) ||
+        (isMemoryFilter(paneFilter) && hasMoreMemory) ||
+        (paneFilter === "all" && (hasMoreEntities || hasMoreMemory));
 
     const selectedPaneMentionKeys = React.useMemo(
         () => new Set(selectedPaneMentions.map((mention) => mentionKey(mention))),
@@ -346,11 +499,11 @@ export default function ChatWorkspacePage() {
 
     return (
         <div className={cn(
-            "grid grid-cols-1 gap-6 min-h-[calc(100vh-10rem)]",
+            "grid grid-cols-1 gap-6 h-[calc(100vh-10rem)] overflow-hidden",
             isPaneOpen ? "lg:grid-cols-[240px_1fr_320px]" : "lg:grid-cols-[240px_1fr]"
         )}>
             <aside
-                className="rounded-[14px] border border-border bg-white flex flex-col"
+                className="rounded-[14px] border border-border bg-white flex flex-col h-full overflow-hidden"
                 style={{ boxShadow: CARD_SHADOW }}
             >
                 <div className="px-4 pt-5 pb-3 border-b border-border">
@@ -423,7 +576,7 @@ export default function ChatWorkspacePage() {
             </aside>
 
             <section
-                className="rounded-[14px] border border-border bg-white flex flex-col min-h-[calc(100vh-10rem)]"
+                className="rounded-[14px] border border-border bg-white flex flex-col h-full overflow-hidden"
                 style={{ boxShadow: CARD_SHADOW }}
             >
                 {hasMessages && (
@@ -434,7 +587,7 @@ export default function ChatWorkspacePage() {
                         <button
                             type="button"
                             onClick={() => setIsPaneOpen((prev) => !prev)}
-                            className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-linen font-inter"
+                            className="hidden lg:inline-flex rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-linen font-inter"
                         >
                             {isPaneOpen ? "Hide references" : "Show references"}
                         </button>
@@ -442,7 +595,7 @@ export default function ChatWorkspacePage() {
                 )}
 
                 {!hasMessages && !isPaneOpen && (
-                    <div className="px-6 pt-4">
+                    <div className="px-6 pt-4 hidden lg:block">
                         <button
                             type="button"
                             onClick={() => setIsPaneOpen(true)}
@@ -543,6 +696,13 @@ export default function ChatWorkspacePage() {
                     )}
 
                     <form className="flex gap-2.5 items-center" onSubmit={handleSubmit}>
+                        <button
+                            type="button"
+                            onClick={() => setIsMobileReferencesOpen(true)}
+                            className="lg:hidden h-11 rounded-full border border-border px-3 text-[12px] text-muted-foreground hover:bg-linen font-inter shrink-0"
+                        >
+                            References
+                        </button>
                         <div className="relative flex-1">
                             <Input
                                 ref={inputRef}
@@ -638,7 +798,7 @@ export default function ChatWorkspacePage() {
 
             {isPaneOpen && (
             <aside
-                className="rounded-[14px] border border-border bg-white flex flex-col min-h-[calc(100vh-10rem)]"
+                className="hidden lg:flex rounded-[14px] border border-border bg-white flex-col h-full overflow-hidden"
                 style={{ boxShadow: CARD_SHADOW }}
             >
                 <div className="px-4 py-4 border-b border-border">
@@ -671,18 +831,14 @@ export default function ChatWorkspacePage() {
                         />
                     </div>
                     <div className="mt-3 flex flex-wrap gap-1.5">
-                        {([
-                            { key: "all", label: "All" },
-                            { key: "entities", label: "@ Entities" },
-                            { key: "remember", label: "/ Remember" },
-                        ] as Array<{ key: PaneTab; label: string }>).map((tab) => (
+                        {PANE_FILTERS.map((tab) => (
                             <button
                                 key={tab.key}
                                 type="button"
-                                onClick={() => setPaneTab(tab.key)}
+                                onClick={() => setPaneFilter(tab.key)}
                                 className={cn(
                                     "rounded-full border px-2.5 py-1 text-[11px] font-inter transition",
-                                    paneTab === tab.key
+                                    paneFilter === tab.key
                                         ? "bg-primary/[0.08] text-primary border-primary/25"
                                         : "bg-white text-muted-foreground border-border hover:bg-linen"
                                 )}
@@ -693,7 +849,7 @@ export default function ChatWorkspacePage() {
                     </div>
                 </div>
 
-                <ScrollArea className="flex-1">
+                <ScrollArea className="flex-1 min-h-0">
                     <div className="p-3 space-y-2">
                         {paneLoading ? (
                             <div className="rounded-[10px] border border-border px-3 py-3 text-xs text-muted-foreground font-inter">
@@ -725,7 +881,7 @@ export default function ChatWorkspacePage() {
                                                     {item.title}
                                                 </p>
                                                 <p className="text-[10px] uppercase tracking-wide text-muted-foreground mt-0.5">
-                                                    {item.kindLabel}
+                                                    {item.kindLabel}{item.dateLabel ? ` - ${item.dateLabel}` : ""}
                                                 </p>
                                             </div>
                                             <span className={cn(
@@ -744,16 +900,9 @@ export default function ChatWorkspacePage() {
                                                 )}
                                             </span>
                                         </div>
-                                        {item.subtitle && (
+                                        {(item.searchText || item.subtitle) && (
                                             <p className="mt-1 text-[11px] text-muted-foreground line-clamp-1">
-                                                {item.subtitle}
-                                            </p>
-                                        )}
-                                        {(item.dateLabel || item.searchText) && (
-                                            <p className="mt-1 text-[11px] text-muted-foreground line-clamp-1">
-                                                {item.dateLabel}
-                                                {item.dateLabel && item.searchText ? " | " : ""}
-                                                {item.searchText}
+                                                {item.searchText || item.subtitle}
                                             </p>
                                         )}
                                     </button>
@@ -762,8 +911,126 @@ export default function ChatWorkspacePage() {
                         )}
                     </div>
                 </ScrollArea>
+
+                <div className="border-t border-border p-3">
+                    <button
+                        type="button"
+                        onClick={handleLoadMorePane}
+                        disabled={paneLoading || paneLoadingMore || !hasMorePaneItems}
+                        className="w-full rounded-[8px] border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-linen disabled:opacity-50 disabled:cursor-not-allowed font-inter"
+                    >
+                        {paneLoadingMore ? "Loading more..." : hasMorePaneItems ? "Load more" : "No more results"}
+                    </button>
+                </div>
             </aside>
             )}
+
+            <Sheet open={isMobileReferencesOpen} onOpenChange={setIsMobileReferencesOpen}>
+                <SheetContent side="bottom" className="h-[78vh] p-0">
+                    <div className="h-full flex flex-col">
+                        <SheetHeader className="px-4 py-3 border-b border-border">
+                            <SheetTitle className="text-sm">References</SheetTitle>
+                            <p className="text-xs text-muted-foreground">Select what Teeks should use on your next message.</p>
+                        </SheetHeader>
+                        <div className="px-4 py-3 border-b border-border space-y-3">
+                            <div className="relative">
+                                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                                <Input
+                                    aria-label="Search references"
+                                    value={paneQuery}
+                                    onChange={(e) => setPaneQuery(e.target.value)}
+                                    placeholder="Search entities and remember entries"
+                                    className="h-9 pl-8 text-xs bg-linen border-border"
+                                />
+                            </div>
+                            <ScrollArea className="w-full">
+                                <div className="flex gap-1.5 pb-1">
+                                    {PANE_FILTERS.map((tab) => (
+                                        <button
+                                            key={`mobile-${tab.key}`}
+                                            type="button"
+                                            onClick={() => setPaneFilter(tab.key)}
+                                            className={cn(
+                                                "whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-inter transition",
+                                                paneFilter === tab.key
+                                                    ? "bg-primary/[0.08] text-primary border-primary/25"
+                                                    : "bg-white text-muted-foreground border-border hover:bg-linen"
+                                            )}
+                                        >
+                                            {tab.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </ScrollArea>
+                        </div>
+                        <ScrollArea className="flex-1 min-h-0">
+                            <div className="p-3 space-y-2">
+                                {paneLoading ? (
+                                    <div className="rounded-[10px] border border-border px-3 py-3 text-xs text-muted-foreground font-inter">
+                                        Loading references...
+                                    </div>
+                                ) : paneItems.length === 0 ? (
+                                    <div className="rounded-[10px] border border-border px-3 py-3 text-xs text-muted-foreground font-inter">
+                                        No references found.
+                                    </div>
+                                ) : (
+                                    paneItems.map((item) => {
+                                        const selected = selectedPaneMentionKeys.has(mentionKey(item.mention));
+                                        return (
+                                            <button
+                                                key={`mobile-${item.id}`}
+                                                type="button"
+                                                onClick={() => togglePaneMention(item.mention)}
+                                                className={cn(
+                                                    "w-full rounded-[10px] border px-3 py-2.5 text-left transition font-inter",
+                                                    selected
+                                                        ? "border-primary/30 bg-primary/[0.06]"
+                                                        : "border-border bg-white hover:bg-linen"
+                                                )}
+                                            >
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <div className="min-w-0">
+                                                        <p className="text-[12px] font-medium text-foreground truncate">
+                                                            {item.source === "memory" ? "/" : "@"}
+                                                            {item.title}
+                                                        </p>
+                                                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground mt-0.5">
+                                                            {item.kindLabel}{item.dateLabel ? ` - ${item.dateLabel}` : ""}
+                                                        </p>
+                                                    </div>
+                                                    <span className={cn(
+                                                        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
+                                                        selected
+                                                            ? "border-primary/30 text-primary bg-primary/[0.08]"
+                                                            : "border-border text-muted-foreground"
+                                                    )}>
+                                                        {selected ? "Added" : "Add"}
+                                                    </span>
+                                                </div>
+                                                {(item.searchText || item.subtitle) && (
+                                                    <p className="mt-1 text-[11px] text-muted-foreground line-clamp-1">
+                                                        {item.searchText || item.subtitle}
+                                                    </p>
+                                                )}
+                                            </button>
+                                        );
+                                    })
+                                )}
+                            </div>
+                        </ScrollArea>
+                        <div className="border-t border-border p-3">
+                            <button
+                                type="button"
+                                onClick={handleLoadMorePane}
+                                disabled={paneLoading || paneLoadingMore || !hasMorePaneItems}
+                                className="w-full rounded-[8px] border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-linen disabled:opacity-50 disabled:cursor-not-allowed font-inter"
+                            >
+                                {paneLoadingMore ? "Loading more..." : hasMorePaneItems ? "Load more" : "No more results"}
+                            </button>
+                        </div>
+                    </div>
+                </SheetContent>
+            </Sheet>
         </div>
     );
 }

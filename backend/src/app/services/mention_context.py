@@ -16,14 +16,13 @@ from app.services.warm_cache import WarmCacheService
 from app.services.warm_context_snapshot import (
     build_contact_snapshot,
     build_event_snapshot,
-    build_message_snapshot,
     build_thread_snapshot,
 )
 
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_KINDS = {"contact", "event", "thread", "message", "task"}
+ALLOWED_KINDS = {"contact", "event", "thread", "task"}
 DEFAULT_PER_ENTITY_LIMIT = 5
 DEFAULT_TOTAL_LIMIT = 25
 MAX_MENTIONS_PER_MESSAGE = 8
@@ -32,8 +31,7 @@ MENTIONS_INDEX_TTL_SECONDS = 180
 MENTIONS_INDEX_MAX_CONTACTS = 300
 MENTIONS_INDEX_MAX_THREADS = 220
 MENTIONS_INDEX_MAX_EVENTS = 160
-MENTIONS_INDEX_MAX_MESSAGES = 260
-MENTIONS_INDEX_MAX_TASKS = 220
+MENTIONS_INDEX_MAX_TASKS = 80
 
 
 @dataclass
@@ -60,9 +58,19 @@ class MentionContextService:
         self.user_id = user_id
         self.session_id = session_id
 
-    def suggest_mentions(self, query: str, limit: int = 8) -> List[Dict[str, str]]:
+    def suggest_mentions(
+        self,
+        query: str,
+        limit: int = 8,
+        offset: int = 0,
+        kind: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
         q = (query or "").strip().lower()
-        limit = max(1, min(limit, 40))
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
+        kind_filter = (kind or "").strip().lower()
+        if kind_filter and kind_filter not in ALLOWED_KINDS:
+            return []
 
         payload = self.warm_cache.get_or_build(
             tenant_id=self.tenant_id,
@@ -75,6 +83,9 @@ class MentionContextService:
 
         matches: List[Dict[str, Any]] = []
         for item in indexed:
+            item_kind = str(item.get("kind") or "").lower()
+            if kind_filter and item_kind != kind_filter:
+                continue
             label = str(item.get("label") or "")
             ref = str(item.get("ref") or "")
             search_text = str(item.get("search_text") or "")
@@ -91,7 +102,7 @@ class MentionContextService:
                 _last_seen_rank(item.get("last_seen_at", "")),
             )
         )
-        matches = matches[:limit]
+        matches = matches[offset : offset + limit]
 
         label_counts: Dict[str, int] = {}
         for item in matches:
@@ -129,11 +140,26 @@ class MentionContextService:
             )
         return results
 
-    def suggest_memory_entries(self, query: str, limit: int = 8) -> List[Dict[str, str]]:
-        q = (query or "").strip()
-        limit = max(1, min(limit, 500))
+    def suggest_memory_entries(
+        self,
+        query: str,
+        limit: int = 8,
+        offset: int = 0,
+        memory_type: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        q_raw = (query or "").strip()
+        q = q_raw.lower()
+        limit = max(1, min(limit, 100))
+        offset = max(0, offset)
 
         memory_query = self.db.query(ContextEntry).filter(ContextEntry.user_id == self.user_id)
+        normalized_type = _normalize_memory_type_query((memory_type or "").strip()) if memory_type else None
+        if normalized_type:
+            memory_query = memory_query.filter(ContextEntry.type == normalized_type)
+        normalized_q_type = _normalize_memory_type_query(q)
+        if not normalized_type and normalized_q_type:
+            memory_query = memory_query.filter(ContextEntry.type == normalized_q_type)
+            q = ""
         if q:
             memory_query = memory_query.filter(
                 or_(
@@ -147,6 +173,7 @@ class MentionContextService:
         rows = (
             memory_query
             .order_by(ContextEntry.updated_at.desc(), ContextEntry.created_at.desc())
+            .offset(offset)
             .limit(limit)
             .all()
         )
@@ -173,7 +200,7 @@ class MentionContextService:
             self.db.query(ContextEntry)
             .filter(
                 ContextEntry.user_id == self.user_id,
-                ContextEntry.entity_type.in_(["contact", "event", "thread", "message"]),
+                ContextEntry.entity_type.in_(["contact", "event", "thread"]),
                 ContextEntry.entity_id.isnot(None),
             )
             .order_by(ContextEntry.created_at.desc())
@@ -234,10 +261,10 @@ class MentionContextService:
             self.db.query(EntityReference)
             .filter(
                 EntityReference.user_id == self.user_id,
-                EntityReference.entity_type.in_(["thread", "event", "message"]),
+                EntityReference.entity_type.in_(["thread", "event"]),
             )
             .order_by(EntityReference.updated_at.desc())
-            .limit(MENTIONS_INDEX_MAX_THREADS + MENTIONS_INDEX_MAX_EVENTS + MENTIONS_INDEX_MAX_MESSAGES)
+            .limit(MENTIONS_INDEX_MAX_THREADS + MENTIONS_INDEX_MAX_EVENTS)
             .all()
         )
         for entity in entities:
@@ -286,7 +313,7 @@ class MentionContextService:
             self.db.query(Message)
             .filter(Message.user_id == self.user_id)
             .order_by(Message.received_at.desc(), Message.created_at.desc())
-            .limit(MENTIONS_INDEX_MAX_MESSAGES)
+            .limit(MENTIONS_INDEX_MAX_THREADS)
             .all()
         )
         seen_thread_refs: set[str] = set()
@@ -294,22 +321,6 @@ class MentionContextService:
             stamp = msg.received_at or msg.updated_at or msg.created_at
             ts = stamp.isoformat() if stamp else ""
             subject = (msg.subject or "").strip()
-
-            message_ref = (msg.message_id or "").strip()
-            if message_ref:
-                key = f"message:{message_ref.lower()}"
-                if key not in grouped:
-                    ctx = context_index.get(key, {})
-                    grouped[key] = {
-                        "kind": "message",
-                        "ref": message_ref,
-                        "label": subject or _entity_label("message", message_ref),
-                        "sample": ctx.get("sample", subject),
-                        "mentions": int(ctx.get("mentions", 0)),
-                        "last_seen_at": ctx.get("last_seen_at", ts),
-                        "created_at": ctx.get("created_at", msg.created_at.isoformat() if msg.created_at else ""),
-                        "updated_at": ctx.get("updated_at", msg.updated_at.isoformat() if msg.updated_at else ""),
-                    }
 
             thread_ref = (msg.thread_id or "").strip()
             if thread_ref:
@@ -332,7 +343,7 @@ class MentionContextService:
                     }
 
         for key, value in context_index.items():
-            if key not in grouped and value.get("kind") in {"contact", "thread", "event", "message"}:
+            if key not in grouped and value.get("kind") in {"contact", "thread", "event"}:
                 grouped[key] = value
 
         items: List[Dict[str, Any]] = []
@@ -341,7 +352,7 @@ class MentionContextService:
             label = str(item.get("label") or "")
             ref = str(item.get("ref") or "")
             sample = str(item.get("sample") or "")
-            tiny_search = _compact_search_text(f"{label} {sample}", max_len=80)
+            tiny_search = _compact_search_text(sample, max_len=80)
             items.append(
                 {
                     **item,
@@ -468,7 +479,7 @@ class MentionContextService:
                     resolved.append(Mention(kind="contact", ref=contact.email.lower(), label=(contact.name or "").strip() or mention.label))
                     continue
 
-            if mention.kind in {"thread", "event", "message", "task"}:
+            if mention.kind in {"thread", "event", "task"}:
                 entity = (
                     self.db.query(EntityReference)
                     .filter(
@@ -524,35 +535,6 @@ class MentionContextService:
                         )
                         continue
 
-                if mention.kind == "message":
-                    message = (
-                        self.db.query(Message)
-                        .filter(
-                            Message.user_id == self.user_id,
-                            Message.message_id == mention.ref,
-                        )
-                        .first()
-                    )
-                    if not message and mention.label:
-                        message = (
-                            self.db.query(Message)
-                            .filter(
-                                Message.user_id == self.user_id,
-                                func.lower(Message.subject) == mention.label.lower(),
-                            )
-                            .order_by(Message.received_at.desc(), Message.created_at.desc())
-                            .first()
-                        )
-                    if message and message.message_id:
-                        resolved.append(
-                            Mention(
-                                kind="message",
-                                ref=message.message_id,
-                                label=(message.subject or "").strip() or mention.label or message.message_id,
-                            )
-                        )
-                        continue
-
                 if mention.kind == "thread":
                     thread_message = (
                         self.db.query(Message)
@@ -596,8 +578,6 @@ class MentionContextService:
             builder = lambda: build_contact_snapshot(self.db, self.user_id, mention.ref)
         elif mention.kind == "event":
             builder = lambda: build_event_snapshot(self.db, self.user_id, mention.ref)
-        elif mention.kind == "message":
-            builder = lambda: build_message_snapshot(self.db, self.user_id, mention.ref)
         elif mention.kind == "task":
             builder = lambda: self._build_task_snapshot(mention.ref)
         else:
@@ -849,12 +829,34 @@ def _memory_subtitle(entity_type: Optional[str], entity_id: Optional[str], statu
     return " | ".join(parts)
 
 
+def _normalize_memory_type_query(query: str) -> Optional[str]:
+    token = (query or "").strip().lower()
+    if not token:
+        return None
+    aliases = {
+        "decision": "decision",
+        "decisions": "decision",
+        "commitment": "commitment",
+        "commitments": "commitment",
+        "preference": "preferences",
+        "preferences": "preferences",
+        "relationship": "relationships",
+        "relationships": "relationships",
+        "watchout": "insight",
+        "watchouts": "insight",
+        "insight": "insight",
+        "insights": "insight",
+        "risk": "insight",
+        "risks": "insight",
+    }
+    return aliases.get(token)
+
+
 def _cap_mentions_index(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     caps = {
         "contact": MENTIONS_INDEX_MAX_CONTACTS,
         "thread": MENTIONS_INDEX_MAX_THREADS,
         "event": MENTIONS_INDEX_MAX_EVENTS,
-        "message": MENTIONS_INDEX_MAX_MESSAGES,
         "task": MENTIONS_INDEX_MAX_TASKS,
     }
     counts: Dict[str, int] = {k: 0 for k in caps.keys()}
@@ -896,7 +898,7 @@ def _looks_opaque_ref(ref: str) -> bool:
 
 
 def _kind_rank(kind: str) -> int:
-    order = {"contact": 0, "task": 1, "event": 2, "thread": 3, "message": 4}
+    order = {"contact": 0, "task": 1, "event": 2, "thread": 3}
     return order.get(kind, 9)
 
 
@@ -938,7 +940,7 @@ def _format_suggestion_subtitle(kind: str, last_seen_at: str, sample: str, menti
     sample_hint = (sample or "").replace("\n", " ").strip()
     if len(sample_hint) > 70:
         sample_hint = f"{sample_hint[:67]}..."
-    base = {"contact": "Contact context", "event": "Event context", "thread": "Thread context", "message": "Message context", "task": "Task context"}.get(kind, "Entity context")
+    base = {"contact": "Contact context", "event": "Event context", "thread": "Thread context", "task": "Task context"}.get(kind, "Entity context")
     parts = [base]
     if date_hint:
         parts.append(f"last noted {date_hint}")

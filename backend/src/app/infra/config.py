@@ -17,6 +17,10 @@ class Settings:
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://localhost/donna")
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "3"))
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "2"))
+    DB_POOL_RECYCLE_SECONDS: int = int(os.getenv("DB_POOL_RECYCLE_SECONDS", "300"))
+    DB_POOL_TIMEOUT_SECONDS: int = int(os.getenv("DB_POOL_TIMEOUT_SECONDS", "15"))
     
     # Google APIs
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
