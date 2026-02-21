@@ -29,34 +29,28 @@ export interface SendMessageRequest {
 }
 
 export interface ChatMention {
-    type: 'contact' | 'email' | 'knowledge';
-    ref_id: string;
+    kind: 'contact' | 'thread' | 'event' | 'message' | 'task' | 'memory';
+    ref: string;
     label: string;
     metadata?: Record<string, unknown>;
 }
 
-export interface MentionableContact {
-    email: string;
-    name?: string;
-    aliases?: string[];
-    vault_note_id?: number;
+export interface MentionSuggestion {
+    kind: 'contact' | 'thread' | 'event' | 'message' | 'task' | 'memory';
+    ref: string;
+    label: string;
+    display_label?: string;
+    subtitle?: string;
+    last_seen_at?: string;
+    created_at?: string;
+    updated_at?: string;
+    search_text?: string;
 }
 
-export interface MentionableEmail {
-    message_id: number;
-    subject?: string;
-    sender?: string;
-    thread_id?: string;
-    received_at?: string;
+export interface ActionChip {
+    id: string;
     label: string;
-}
-
-export interface MentionableNote {
-    note_id: number;
-    slug: string;
-    note_type: string;
-    title: string;
-    label: string;
+    prompt: string;
 }
 
 export interface CreateSessionRequest {
@@ -128,6 +122,13 @@ export interface JobStatusResponse {
     error?: string;
 }
 
+function isTimeoutError(error: unknown): boolean {
+    const candidate = error as { code?: string; message?: string } | undefined;
+    const code = (candidate?.code || "").toUpperCase();
+    const message = (candidate?.message || "").toLowerCase();
+    return code === "ECONNABORTED" || message.includes("timeout");
+}
+
 // =============================================================================
 // Service
 // =============================================================================
@@ -170,25 +171,23 @@ export const chatService = {
         return response.data;
     },
 
-    async getMentionableContacts(query: string, limit = 8): Promise<MentionableContact[]> {
-        const response = await api.get<{ contacts: MentionableContact[] }>("/vault/contacts/mentionable", {
-            params: { q: query || undefined, limit },
+    async getMentionSuggestions(query: string, limit = 8, sessionId = "default"): Promise<MentionSuggestion[]> {
+        const response = await api.get<MentionSuggestion[]>("/chat/mentions", {
+            params: { q: query || undefined, limit, session_id: sessionId },
         });
-        return response.data.contacts || [];
+        return response.data || [];
     },
 
-    async getMentionableEmails(query: string, limit = 8): Promise<MentionableEmail[]> {
-        const response = await api.get<{ emails: MentionableEmail[] }>("/vault/emails/mentionable", {
-            params: { q: query || undefined, limit },
+    async getSlashSuggestions(query: string, limit = 8, sessionId = "default"): Promise<MentionSuggestion[]> {
+        const response = await api.get<MentionSuggestion[]>("/chat/slash-suggestions", {
+            params: { q: query || undefined, limit, session_id: sessionId },
         });
-        return response.data.emails || [];
+        return response.data || [];
     },
 
-    async getMentionableNotes(query: string, limit = 8): Promise<MentionableNote[]> {
-        const response = await api.get<{ notes: MentionableNote[] }>("/vault/notes/mentionable", {
-            params: { q: query || undefined, limit },
-        });
-        return response.data.notes || [];
+    async getActionChips(limit = 5): Promise<ActionChip[]> {
+        const response = await api.get<ActionChip[]>("/chat/action-chips", { params: { limit } });
+        return response.data || [];
     },
 
     async deleteSession(sessionId: string): Promise<void> {
@@ -262,6 +261,84 @@ export const chatService = {
         };
     },
 
+    pollSessionForReply(
+        sessionId: string,
+        sentAtMs: number,
+        onUpdate: (result: JobStatusResponse) => void,
+        options: {
+            initialInterval?: number;
+            maxInterval?: number;
+            maxAttempts?: number;
+        } = {}
+    ): () => void {
+        const {
+            initialInterval = 1200,
+            maxInterval = 5000,
+            maxAttempts = 40,
+        } = options;
+
+        let attempts = 0;
+        let interval = initialInterval;
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        let stopped = false;
+
+        const poll = async () => {
+            if (stopped) return;
+            try {
+                const snapshot = await chatService.getSession(sessionId);
+                const assistantMessages = (snapshot.messages || []).filter(
+                    (m) =>
+                        m.role === "assistant" &&
+                        Boolean((m.content || "").trim())
+                );
+                const latest = assistantMessages[assistantMessages.length - 1];
+                const createdAtMs = latest ? Date.parse(latest.created_at) : 0;
+                if (latest && createdAtMs >= sentAtMs - 1500) {
+                    const pending = (snapshot.pending_actions || []).filter((a) => a.message_id === latest.id);
+                    onUpdate({
+                        status: "complete",
+                        job_id: `session-fallback:${sessionId}`,
+                        message_id: latest.id,
+                        response: latest.content,
+                        pending_actions: pending,
+                    });
+                    return;
+                }
+
+                if (attempts < maxAttempts) {
+                    attempts++;
+                    interval = Math.min(interval * 1.2, maxInterval);
+                    timeoutId = setTimeout(poll, interval);
+                } else {
+                    onUpdate({
+                        status: "failed",
+                        job_id: `session-fallback:${sessionId}`,
+                        error: "I'm still working on that. Please retry.",
+                    });
+                }
+            } catch {
+                if (attempts < maxAttempts) {
+                    attempts++;
+                    interval = Math.min(interval * 1.2, maxInterval);
+                    timeoutId = setTimeout(poll, interval);
+                } else {
+                    onUpdate({
+                        status: "failed",
+                        job_id: `session-fallback:${sessionId}`,
+                        error: "Failed to confirm response status.",
+                    });
+                }
+            }
+        };
+
+        poll();
+
+        return () => {
+            stopped = true;
+            if (timeoutId) clearTimeout(timeoutId);
+        };
+    },
+
     async sendMessageWithPolling(
         request: SendMessageRequest,
         callbacks: {
@@ -272,6 +349,7 @@ export const chatService = {
     ): Promise<() => void> {
         // ... (Implementation continues in next chunk due to complexity if needed, but fitting here)
         let cleanup: (() => void) | null = null;
+        const sentAtMs = Date.now();
 
         try {
             const result = await chatService.sendMessage(request);
@@ -298,6 +376,17 @@ export const chatService = {
             callbacks.onError(result.error || 'Unexpected response');
             return () => { };
         } catch (error) {
+            if (isTimeoutError(error)) {
+                callbacks.onProcessing?.(`session-fallback:${request.session_id}`, -1);
+                cleanup = chatService.pollSessionForReply(request.session_id, sentAtMs, (jobResult) => {
+                    if (jobResult.status === "complete") {
+                        callbacks.onComplete(jobResult.response || "", jobResult.pending_actions || []);
+                    } else if (jobResult.status === "failed") {
+                        callbacks.onError(jobResult.error || "Processing failed");
+                    }
+                });
+                return () => cleanup?.();
+            }
             const message = error instanceof Error ? error.message : 'Network error';
             callbacks.onError(message);
             return () => cleanup?.();

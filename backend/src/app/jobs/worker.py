@@ -19,6 +19,7 @@ from app.jobs.queue import queue_service
 from app.jobs.trial_warnings import handle_check_trial_expirations, get_next_trial_check_time
 from app.jobs.webhook_health import handle_check_webhook_health, get_next_webhook_health_check_time
 from app.handlers.vault_handlers import handle_vault_ingest, handle_vault_proposal_cleanup
+from app.infra.config import get_settings
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -1384,11 +1385,19 @@ def _update_message_failed(db, message_id: int, error: str):
     try:
         msg = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
         if msg:
-            msg.content = "I apologize, but I encountered an error processing your request. Please try again."
+            logger.error(
+                "chat_async_message_failed message_id=%s session_id=%s internal_error=%s",
+                message_id,
+                msg.session_id,
+                error,
+            )
+            user_error = "I couldn't complete that right now. Please try again."
+            msg.content = user_error
             msg.message_metadata = {
                 **(msg.message_metadata or {}),
                 "status": "failed",
-                "error": error
+                "error": user_error,
+                "internal_error": error,
             }
             db.commit()
     except Exception as e:
@@ -1504,16 +1513,18 @@ TASK_HANDLERS = {
     "cleanup_stuck_chat_messages": handle_cleanup_stuck_chat_messages,
     "chat_cleanup": handle_chat_cleanup,
     "generate_briefing": handle_generate_briefing,
-    "generate_digest": handle_generate_digest,
-    "deliver_digest": handle_deliver_digest,
+    # DORMANT: "generate_digest": handle_generate_digest,
+    # DORMANT: "deliver_digest": handle_deliver_digest,
     "email_backfill": handle_email_backfill,
     "process_chat_message": handle_process_chat_message,
     "renew_gmail_watches": handle_renew_gmail_watches,
     "check_trial_expirations": handle_check_trial_expirations,
     "check_webhook_health": handle_check_webhook_health,
-    "vault_ingest": handle_vault_ingest,
-    "vault_proposal_cleanup": handle_vault_proposal_cleanup,
 }
+
+if get_settings().PROPOSALS_ENABLED:
+    TASK_HANDLERS["vault_ingest"] = handle_vault_ingest
+    TASK_HANDLERS["vault_proposal_cleanup"] = handle_vault_proposal_cleanup
 
 
 def _notify_permanent_failure(task_id: int, task_type: str, payload: dict, error: str, user_id: str):
@@ -1566,7 +1577,9 @@ def schedule_cleanup_jobs_if_needed(db):
     from app.data.models import TaskQueue
     from app.jobs.queue import enqueue_task
 
-    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations", "check_webhook_health", "vault_proposal_cleanup"]
+    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations", "check_webhook_health"]
+    if get_settings().PROPOSALS_ENABLED:
+        cleanup_jobs.append("vault_proposal_cleanup")
 
     for task_type in cleanup_jobs:
         existing = db.query(TaskQueue).filter(

@@ -9,14 +9,26 @@ Processing Strategy: Optimistic Sync with Async Fallback
 """
 import time
 from collections import defaultdict
-from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional, List, Dict
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 
 import logging
-from app.security.auth import get_current_user, get_db_for_user, require_active_subscription, require_credits_available, AuthenticatedUser as User
+from app.security.auth import (
+    get_current_user,
+    get_db_for_user,
+    require_active_subscription,
+    require_credits_available,
+    require_admin_user,
+    AuthenticatedUser as User,
+)
+from app.infra.database import get_db
 from app.chat.service import ChatService, ProcessingStatus
+from app.services.chat_metrics import summarize_chat_metrics
+from app.services.action_chips import get_cached_action_chips
+from app.services.warm_cache import get_warm_cache_service
+from app.services.mention_context import MentionContextService
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +102,70 @@ class PendingActionResponse(BaseModel):
     created_at: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class MentionSuggestionResponse(BaseModel):
+    kind: str
+    ref: str
+    label: str
+    display_label: Optional[str] = None
+    subtitle: Optional[str] = None
+    last_seen_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    search_text: Optional[str] = None
+
+
+class ActionChipResponse(BaseModel):
+    id: str
+    label: str
+    prompt: str
+
+
+class ChatMetricsResponse(BaseModel):
+    days: int
+    total_calls: int
+    successful_calls: int
+    failed_calls: int
+    latency_ms_p50: float
+    latency_ms_p90: float
+    latency_ms_p95: float
+    prompt_tokens_total: int
+    prompt_tokens_avg: float
+    repeated_prefix_rate_avg: float
+    repeated_prefix_rate_weighted: float
+    calls_by_model: Dict[str, int]
+    calls_by_path: Dict[str, int]
+
+@router.get("/action-chips", response_model=List[ActionChipResponse])
+async def get_action_chips(
+    limit: int = Query(default=5, ge=1, le=8),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    """
+    Fast, deterministic personalized action chips for new chat sessions.
+    Uses lightweight DB reads only (no LLM calls).
+    """
+    return get_cached_action_chips(
+        db=db,
+        warm_cache=get_warm_cache_service(),
+        tenant_id="default",
+        user_id=user.user_id,
+        limit=limit,
+    )
+
+
+@router.get("/metrics", response_model=ChatMetricsResponse)
+def get_chat_metrics(
+    days: int = Query(default=7, ge=1, le=30),
+    user_id: Optional[str] = Query(default=None, min_length=1, max_length=255),
+    model: Optional[str] = Query(default=None, min_length=1, max_length=120),
+    _admin: User = Depends(require_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Admin-only chat model metrics: token volume, latency percentiles, repeated-prefix rate."""
+    return summarize_chat_metrics(db=db, days=days, user_id=user_id, model=model)
 
 
 # =============================================================================
@@ -303,6 +379,7 @@ async def get_job_status(
     result = service.get_job_status(job_id)
 
     if result.status == ProcessingStatus.FAILED and result.error == "Job not found":
+        logger.warning("Chat job polling failed: user=%s job_id=%s reason=not_found", user.user_id, job_id)
         raise HTTPException(status_code=404, detail="Job not found")
 
     response = {
@@ -317,6 +394,13 @@ async def get_job_status(
         response["response"] = result.response
         response["pending_actions"] = result.pending_actions or []
     elif result.status == ProcessingStatus.FAILED:
+        logger.error(
+            "Chat job failed: user=%s job_id=%s message_id=%s error=%s",
+            user.user_id,
+            job_id,
+            result.message_id,
+            result.error,
+        )
         response["error"] = result.error
 
     return response
@@ -351,6 +435,42 @@ async def get_messages(
             for m in messages
         ]
     }
+
+
+@router.get("/mentions", response_model=List[MentionSuggestionResponse])
+async def suggest_mentions(
+    q: str = Query(default=""),
+    limit: int = Query(default=8, ge=1, le=500),
+    session_id: Optional[str] = Query(default="default"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    service = MentionContextService(
+        db=db,
+        warm_cache=get_warm_cache_service(),
+        tenant_id="default",
+        user_id=user.user_id,
+        session_id=session_id or "default",
+    )
+    return service.suggest_mentions(query=q, limit=limit)
+
+
+@router.get("/slash-suggestions", response_model=List[MentionSuggestionResponse])
+async def suggest_slash(
+    q: str = Query(default=""),
+    limit: int = Query(default=8, ge=1, le=500),
+    session_id: Optional[str] = Query(default="default"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    service = MentionContextService(
+        db=db,
+        warm_cache=get_warm_cache_service(),
+        tenant_id="default",
+        user_id=user.user_id,
+        session_id=session_id or "default",
+    )
+    return service.suggest_memory_entries(query=q, limit=limit)
 
 
 # =============================================================================

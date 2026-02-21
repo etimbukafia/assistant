@@ -29,6 +29,7 @@ export interface ManualTaskRequest {
     description?: string;
     priority?: 'urgent' | 'high' | 'normal' | 'low';
     deadline_at?: string;
+    status?: 'approved' | 'waiting_for';
 }
 
 export interface UpdateTaskRequest {

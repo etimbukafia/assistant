@@ -22,7 +22,16 @@ api.interceptors.request.use(async (config) => {
         const supabase = createClient();
         let { data: { session } } = await supabase.auth.getSession();
 
-        // If no session (expired/missing), try refreshing before giving up
+        // Supabase loads the session from storage asynchronously on first render.
+        // If we get null, wait briefly and retry before sending a tokenless request
+        // (which would cause a 401 → refresh → retry cycle and slow down page load).
+        if (!session?.access_token) {
+            await new Promise(r => setTimeout(r, 300));
+            const { data: { session: retried } } = await supabase.auth.getSession();
+            session = retried;
+        }
+
+        // Still no session - try a full refresh before giving up
         if (!session?.access_token) {
             const { data: { session: refreshed } } = await supabase.auth.refreshSession();
             session = refreshed;

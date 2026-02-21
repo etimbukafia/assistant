@@ -1,128 +1,535 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, useCallback, useMemo } from "react";
+import { toast } from "sonner";
+import { Plus, User, Link2, X, Trash2 } from "lucide-react";
+import { useMentionComposer } from "@/hooks/useMentionComposer";
+import { useDiaryEntries, useDiaryContacts, useDiaryMutations } from "@/hooks/useVault";
+import type { DiaryEntryType, DiaryContextEntry, DiaryContact } from "@/services/vault";
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
-import { DonnaText } from "@/components/ui/DonnaText";
-import { DonnaCard, DonnaCardContent, DonnaCardHeader, DonnaCardTitle } from "@/components/ui/DonnaCard";
-import { DonnaButton } from "@/components/ui/DonnaButton";
-import { Input } from "@/components/ui/input";
-import { useVaultNotes, useVaultProposals, useVaultContacts, useVaultStats, useVaultMutations } from "@/hooks/useVault";
+// ── Constants ──────────────────────────────────────────────────────────────
+const CARD_SHADOW = "0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)";
 
-export default function VaultPage() {
-  const [query, setQuery] = useState("");
+const ENTRY_TYPES: { value: DiaryEntryType; label: string }[] = [
+    { value: "insight", label: "Note" },
+    { value: "decision", label: "Decision" },
+    { value: "commitment", label: "Commitment" },
+    { value: "preferences", label: "Preference" },
+    { value: "relationships", label: "Watch" },
+];
 
-  const notesQuery = useVaultNotes({ q: query || undefined, limit: 50 });
-  const proposalsQuery = useVaultProposals("pending");
-  const contactsQuery = useVaultContacts();
-  const statsQuery = useVaultStats();
-  const mutations = useVaultMutations();
+const TYPE_COLORS: Record<DiaryEntryType, string> = {
+    insight: "border-obsidian/30 text-obsidian/70 bg-obsidian/[0.04]",
+    decision: "border-copper/40 text-copper bg-copper/[0.06]",
+    commitment: "border-sage/40 text-sage bg-sage/[0.06]",
+    preferences: "border-teal/40 text-teal bg-teal/[0.06]",
+    relationships: "border-burgundy/40 text-burgundy bg-burgundy/[0.06]",
+};
 
-  return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      <header className="space-y-1">
-        <DonnaText variant="h1" className="text-auburn">Vault</DonnaText>
-        <DonnaText variant="body" className="text-muted-foreground">
-          Long-lived, editable context for people, projects, decisions, and commitments.
-        </DonnaText>
-      </header>
+const ENTITY_ICONS: Record<string, string> = {
+    contact: "👤",
+    task: "✓",
+    event: "📅",
+    thread: "✉",
+    message: "💬",
+};
 
-      <DonnaCard>
-        <DonnaCardHeader>
-          <DonnaCardTitle className="text-sm uppercase tracking-wider text-muted-foreground">
-            Observability
-          </DonnaCardTitle>
-        </DonnaCardHeader>
-        <DonnaCardContent className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <DonnaText variant="caption" className="text-muted-foreground">Notes</DonnaText>
-            <DonnaText variant="h3">{statsQuery.data?.total_notes ?? 0}</DonnaText>
-          </div>
-          <div>
-            <DonnaText variant="caption" className="text-muted-foreground">Pending Proposals</DonnaText>
-            <DonnaText variant="h3">{statsQuery.data?.proposals_pending ?? 0}</DonnaText>
-          </div>
-          <div>
-            <DonnaText variant="caption" className="text-muted-foreground">Acceptance Rate</DonnaText>
-            <DonnaText variant="h3">{Math.round((statsQuery.data?.proposal_acceptance_rate ?? 0) * 100)}%</DonnaText>
-          </div>
-          <div>
-            <DonnaText variant="caption" className="text-muted-foreground">Context Hit Rate</DonnaText>
-            <DonnaText variant="h3">{Math.round((statsQuery.data?.context_hit_rate ?? 0) * 100)}%</DonnaText>
-          </div>
-        </DonnaCardContent>
-      </DonnaCard>
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-      <Tabs defaultValue="notes">
-        <TabsList>
-          <TabsTrigger value="notes">Notes</TabsTrigger>
-          <TabsTrigger value="proposals">Proposals</TabsTrigger>
-          <TabsTrigger value="contacts">Contacts</TabsTrigger>
-        </TabsList>
+function groupEntriesByDate(entries: DiaryContextEntry[]) {
+    const groups: { dateLabel: string; entries: DiaryContextEntry[] }[] = [];
+    const seen = new Map<string, number>();
 
-        <TabsContent value="notes" className="space-y-4">
-          <Input
-            placeholder="Search vault notes..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="max-w-md"
-          />
-          <div className="grid md:grid-cols-2 gap-4">
-            {notesQuery.data?.notes?.map((n) => (
-              <DonnaCard key={n.id}>
-                <DonnaCardHeader>
-                  <DonnaCardTitle>{n.title}</DonnaCardTitle>
-                </DonnaCardHeader>
-                <DonnaCardContent>
-                  <DonnaText variant="caption" className="uppercase text-muted-foreground">{n.note_type}</DonnaText>
-                  <DonnaText variant="body" className="line-clamp-4 mt-2">{n.body || "No content"}</DonnaText>
-                </DonnaCardContent>
-              </DonnaCard>
-            ))}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="proposals" className="space-y-4">
-          {(proposalsQuery.data?.proposals || []).map((p) => (
-            <DonnaCard key={p.id}>
-              <DonnaCardContent className="p-4 flex items-center justify-between gap-4">
-                <div>
-                  <DonnaText variant="body" className="font-medium">{p.diff_summary || p.proposal_type}</DonnaText>
-                  <DonnaText variant="caption" className="text-muted-foreground">
-                    {p.source_type} • confidence {Math.round((p.confidence || 0) * 100)}%
-                  </DonnaText>
-                </div>
-                <div className="flex gap-2">
-                  <DonnaButton onClick={() => mutations.approveProposal.mutate(p.id)}>Approve</DonnaButton>
-                  <DonnaButton
-                    variant="outline"
-                    onClick={() => mutations.rejectProposal.mutate({ id: p.id, payload: { category: "not_relevant" } })}
-                  >
-                    Reject
-                  </DonnaButton>
-                </div>
-              </DonnaCardContent>
-            </DonnaCard>
-          ))}
-        </TabsContent>
-
-        <TabsContent value="contacts" className="space-y-4">
-          {(contactsQuery.data?.contacts || []).map((c) => (
-            <DonnaCard key={c.email}>
-              <DonnaCardContent className="p-4 flex items-center justify-between">
-                <div>
-                  <DonnaText variant="body" className="font-medium">{c.name || c.email}</DonnaText>
-                  <DonnaText variant="caption" className="text-muted-foreground">{c.email} • {c.message_count} msgs</DonnaText>
-                </div>
-                <DonnaButton onClick={() => mutations.promoteContact.mutate({ email: c.email, display_name: c.name })}>
-                  Promote
-                </DonnaButton>
-              </DonnaCardContent>
-            </DonnaCard>
-          ))}
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
+    for (const entry of entries) {
+        const date = new Date(entry.created_at);
+        const label = date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+        if (!seen.has(label)) {
+            seen.set(label, groups.length);
+            groups.push({ dateLabel: label, entries: [] });
+        }
+        groups[seen.get(label)!].entries.push(entry);
+    }
+    return groups;
 }
 
+function renderContentWithMentions(content: string, links: DiaryContextEntry["links"]) {
+    if (!links.length) return <span>{content}</span>;
+
+    const parts: React.ReactNode[] = [];
+    let remaining = content;
+    let key = 0;
+
+    for (const link of links) {
+        const token = `@${link.display_name}`;
+        const idx = remaining.indexOf(token);
+        if (idx === -1) continue;
+        if (idx > 0) parts.push(<span key={key++}>{remaining.slice(0, idx)}</span>);
+        parts.push(
+            <mark key={key++} className="bg-primary/10 text-primary rounded px-0.5 not-italic font-medium">
+                {token}
+            </mark>
+        );
+        remaining = remaining.slice(idx + token.length);
+    }
+    if (remaining) parts.push(<span key={key++}>{remaining}</span>);
+    return <>{parts}</>;
+}
+
+// ── Sub-components ─────────────────────────────────────────────────────────
+
+function EntryCard({ entry, onDelete }: { entry: DiaryContextEntry; onDelete: (id: number) => void }) {
+    const typeLabel = ENTRY_TYPES.find((t) => t.value === entry.type)?.label ?? entry.type;
+    const time = new Date(entry.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+
+    return (
+        <div
+            className="bg-white border border-border rounded-[14px] p-4 space-y-3 teeks-bubble-in group"
+            style={{ boxShadow: CARD_SHADOW }}
+        >
+            <div className="flex items-center justify-between gap-2">
+                <span className={`text-[10px] font-bold uppercase tracking-[1.2px] px-2 py-0.5 rounded-full border font-inter ${TYPE_COLORS[entry.type]}`}>
+                    {typeLabel}
+                </span>
+                <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-muted-foreground font-inter">{time}</span>
+                    <button
+                        type="button"
+                        onClick={() => onDelete(entry.id)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-burgundy"
+                        aria-label="Delete entry"
+                    >
+                        <Trash2 size={13} />
+                    </button>
+                </div>
+            </div>
+
+            <p className="text-sm text-foreground leading-relaxed font-inter whitespace-pre-wrap">
+                {renderContentWithMentions(entry.content, entry.links ?? [])}
+            </p>
+
+            {entry.links && entry.links.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1 border-t border-border/40">
+                    {entry.links.map((link, i) => (
+                        <span
+                            key={i}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground border border-border/60 rounded-full px-2 py-0.5 font-inter"
+                        >
+                            <span>{ENTITY_ICONS[link.entity_type] ?? <Link2 size={10} />}</span>
+                            {link.display_name}
+                        </span>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ContactCard({ contact, onDelete }: { contact: DiaryContact; onDelete: (id: number) => void }) {
+    return (
+        <div
+            className="bg-white border border-border rounded-[8px] p-3 space-y-1 group relative"
+            style={{ boxShadow: CARD_SHADOW }}
+        >
+            <button
+                type="button"
+                onClick={() => onDelete(contact.id)}
+                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-burgundy"
+                aria-label="Delete contact"
+            >
+                <Trash2 size={12} />
+            </button>
+            <p className="text-sm font-semibold text-foreground font-inter pr-4">{contact.name}</p>
+            {(contact.role || contact.organization) && (
+                <p className="text-[11px] text-muted-foreground font-inter">
+                    {[contact.role, contact.organization].filter(Boolean).join(" · ")}
+                </p>
+            )}
+            {contact.email && (
+                <p className="text-[11px] text-primary/80 font-inter">{contact.email}</p>
+            )}
+            {contact.notes && (
+                <p className="text-[11px] text-muted-foreground font-inter italic mt-1">{contact.notes}</p>
+            )}
+        </div>
+    );
+}
+
+// ── Main page ──────────────────────────────────────────────────────────────
+
+export default function DiaryPage() {
+    const [activeView, setActiveView] = useState<"diary" | "people">("diary");
+
+    // Composer state
+    const [content, setContent] = useState("");
+    const [entryType, setEntryType] = useState<DiaryEntryType>("insight");
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // People state
+    const [contactSearch, setContactSearch] = useState("");
+    const [showNewContact, setShowNewContact] = useState(false);
+    const [newContact, setNewContact] = useState({ name: "", email: "", role: "", organization: "", notes: "" });
+
+    // Data
+    const { data: entriesData, isLoading: entriesLoading } = useDiaryEntries();
+    const { data: contacts = [], isLoading: contactsLoading } = useDiaryContacts(contactSearch || undefined);
+    const { createEntry, deleteEntry, createContact, deleteContact } = useDiaryMutations();
+
+    // @mention support — cast textarea ref to satisfy hook's HTMLInputElement type
+    const {
+        listboxId,
+        mentionContext,
+        mentionSuggestions,
+        activeSuggestionIndex,
+        loadingSuggestions,
+        selectedMentions,
+        parseMentions,
+        onInputChange,
+        onInputKeyDown,
+        applySuggestion,
+        clearMentionState,
+    } = useMentionComposer({
+        inputValue: content,
+        setInputValue: setContent,
+        inputRef: textareaRef as unknown as React.RefObject<HTMLInputElement | null>,
+        sessionId: "diary",
+    });
+
+    const entries = useMemo(() => entriesData ?? [], [entriesData]);
+    const grouped = useMemo(() => groupEntriesByDate([...entries].reverse()), [entries]);
+
+    const showDropdown = Boolean(mentionContext || loadingSuggestions);
+
+    const handleSubmit = useCallback(async () => {
+        const trimmed = content.trim();
+        if (!trimmed) return;
+
+        const links = parseMentions(trimmed).map((m) => ({
+            entity_type: m.kind,
+            entity_id: m.ref,
+            display_name: m.label,
+        }));
+
+        try {
+            await createEntry.mutateAsync({ type: entryType, content: trimmed, links });
+            setContent("");
+            clearMentionState();
+        } catch {
+            toast.error("That didn't save. Try again.");
+        }
+    }, [content, entryType, parseMentions, createEntry, clearMentionState]);
+
+    const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        // Let mention composer handle navigation when dropdown is open
+        onInputKeyDown(e as unknown as React.KeyboardEvent<HTMLInputElement>);
+
+        // Cmd/Ctrl+Enter submits the entry
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !mentionSuggestions.length) {
+            e.preventDefault();
+            handleSubmit();
+        }
+    }, [onInputKeyDown, mentionSuggestions.length, handleSubmit]);
+
+    const handleDeleteEntry = useCallback(async (id: number) => {
+        try {
+            await deleteEntry.mutateAsync(id);
+        } catch {
+            toast.error("That didn't delete. Try again.");
+        }
+    }, [deleteEntry]);
+
+    const handleSaveContact = useCallback(async () => {
+        if (!newContact.name.trim()) {
+            toast.error("Name is required.");
+            return;
+        }
+        try {
+            await createContact.mutateAsync({
+                name: newContact.name.trim(),
+                email: newContact.email.trim() || null,
+                role: newContact.role.trim() || null,
+                organization: newContact.organization.trim() || null,
+                notes: newContact.notes.trim() || null,
+            });
+            setNewContact({ name: "", email: "", role: "", organization: "", notes: "" });
+            setShowNewContact(false);
+        } catch (err: any) {
+            toast.error(err?.response?.data?.detail || "Could not save contact.");
+        }
+    }, [newContact, createContact]);
+
+    const handleDeleteContact = useCallback(async (id: number) => {
+        try {
+            await deleteContact.mutateAsync(id);
+        } catch {
+            toast.error("That didn't delete. Try again.");
+        }
+    }, [deleteContact]);
+
+    return (
+        <div className="max-w-3xl mx-auto space-y-8">
+            {/* ── Header ── */}
+            <div>
+                <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground mb-2 font-inter">
+                    Diary
+                </p>
+                <h1 className="font-playfair text-[28px] font-semibold text-foreground leading-tight tracking-tight">
+                    EA Diary
+                </h1>
+            </div>
+
+            {/* ── View toggle ── */}
+            <div className="flex gap-2">
+                {(["diary", "people"] as const).map((view) => (
+                    <button
+                        key={view}
+                        type="button"
+                        onClick={() => setActiveView(view)}
+                        className={`rounded-full border px-4 py-1.5 text-[13px] font-medium transition-all font-inter capitalize ${
+                            activeView === view
+                                ? "border-obsidian bg-obsidian text-white"
+                                : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
+                        }`}
+                    >
+                        {view === "diary" ? "Diary" : "People"}
+                    </button>
+                ))}
+            </div>
+
+            {/* ══ DIARY VIEW ══ */}
+            {activeView === "diary" && (
+                <div className="space-y-6">
+                    {/* Composer */}
+                    <div
+                        className="bg-white border border-border rounded-[14px] p-4 space-y-3"
+                        style={{ boxShadow: CARD_SHADOW }}
+                    >
+                        {/* Type chips */}
+                        <div className="flex flex-wrap gap-2">
+                            {ENTRY_TYPES.map((t) => (
+                                <button
+                                    key={t.value}
+                                    type="button"
+                                    onClick={() => setEntryType(t.value)}
+                                    className={`rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-[1.2px] transition-all font-inter ${
+                                        entryType === t.value
+                                            ? TYPE_COLORS[t.value]
+                                            : "border-border/60 text-muted-foreground hover:border-border hover:text-foreground"
+                                    }`}
+                                >
+                                    {t.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Textarea + mention dropdown */}
+                        <div className="relative">
+                            {showDropdown && (
+                                <div
+                                    id={listboxId}
+                                    role="listbox"
+                                    className="absolute bottom-full mb-1 left-0 right-0 bg-white border border-border rounded-[10px] shadow-lg overflow-hidden z-50 max-h-56 overflow-y-auto"
+                                    style={{ boxShadow: "0 4px 16px rgba(0,0,0,0.10)" }}
+                                >
+                                    {loadingSuggestions && !mentionSuggestions.length ? (
+                                        <div className="px-3 py-2 text-xs text-muted-foreground font-inter">
+                                            <span className="teeks-dot" style={{ animationDelay: "0ms" }} />
+                                            <span className="teeks-dot mx-0.5" style={{ animationDelay: "200ms" }} />
+                                            <span className="teeks-dot" style={{ animationDelay: "400ms" }} />
+                                        </div>
+                                    ) : mentionSuggestions.length === 0 ? (
+                                        <div className="px-3 py-2 text-xs text-muted-foreground font-inter">No results</div>
+                                    ) : (
+                                        mentionSuggestions.map((s, i) => (
+                                            <button
+                                                key={s.key}
+                                                type="button"
+                                                role="option"
+                                                aria-selected={i === activeSuggestionIndex}
+                                                onClick={() => applySuggestion(s)}
+                                                className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors font-inter ${
+                                                    i === activeSuggestionIndex ? "bg-linen" : "hover:bg-linen/60"
+                                                }`}
+                                            >
+                                                <span className="text-[10px] font-bold uppercase tracking-[1px] text-muted-foreground w-14 shrink-0">
+                                                    {s.kind}
+                                                </span>
+                                                <span className="text-sm font-medium text-foreground">{s.display}</span>
+                                                {s.subtitle && (
+                                                    <span className="text-xs text-muted-foreground truncate">{s.subtitle}</span>
+                                                )}
+                                            </button>
+                                        ))
+                                    )}
+                                </div>
+                            )}
+
+                            <textarea
+                                ref={textareaRef}
+                                value={content}
+                                onChange={(e) => onInputChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+                                onKeyDown={handleKeyDown}
+                                placeholder="Write something to remember… @mention to link"
+                                rows={4}
+                                className="w-full resize-none rounded-[8px] border border-border bg-linen/20 px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary transition-colors"
+                            />
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                            {selectedMentions.length > 0 ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                    {selectedMentions.map((m) => (
+                                        <span
+                                            key={`${m.kind}:${m.ref}`}
+                                            className="inline-flex items-center gap-1 text-[11px] font-medium text-primary border border-primary/30 rounded-full px-2 py-0.5 font-inter"
+                                        >
+                                            @{m.label}
+                                        </span>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="text-[11px] text-muted-foreground/60 font-inter">⌘↵ to save</p>
+                            )}
+                            <button
+                                type="button"
+                                onClick={handleSubmit}
+                                disabled={!content.trim() || createEntry.isPending}
+                                className="rounded-[8px] bg-primary px-4 py-2 text-[13px] font-semibold text-white hover:bg-primary/90 active:scale-[0.97] transition-all disabled:opacity-40 font-inter"
+                            >
+                                {createEntry.isPending ? "Saving…" : "Save"}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Entry feed */}
+                    {entriesLoading ? (
+                        <p className="text-sm text-muted-foreground font-inter">Loading entries…</p>
+                    ) : grouped.length === 0 ? (
+                        <p className="py-12 text-sm text-muted-foreground font-inter text-center">
+                            Nothing here yet. Write your first entry above.
+                        </p>
+                    ) : (
+                        <div className="space-y-8">
+                            {grouped.map((group) => (
+                                <div key={group.dateLabel} className="space-y-3">
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter whitespace-nowrap">
+                                            {group.dateLabel}
+                                        </span>
+                                        <div className="flex-1 h-px bg-border/40" />
+                                    </div>
+                                    <div className="space-y-3">
+                                        {group.entries.map((entry) => (
+                                            <EntryCard
+                                                key={entry.id}
+                                                entry={entry}
+                                                onDelete={handleDeleteEntry}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* ══ PEOPLE VIEW ══ */}
+            {activeView === "people" && (
+                <div className="space-y-5">
+                    {/* Search + add button */}
+                    <div className="flex items-center gap-3">
+                        <input
+                            type="text"
+                            value={contactSearch}
+                            onChange={(e) => setContactSearch(e.target.value)}
+                            placeholder="Search people…"
+                            className="flex-1 rounded-[8px] border border-border bg-white px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary transition-colors"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowNewContact((v) => !v)}
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-[8px] text-[13px] font-medium text-primary border border-primary/25 bg-primary/[0.04] hover:bg-primary/[0.09] active:scale-[0.98] transition-all font-inter shrink-0"
+                        >
+                            {showNewContact ? <X size={13} /> : <Plus size={13} strokeWidth={2.5} />}
+                            {showNewContact ? "Cancel" : "New contact"}
+                        </button>
+                    </div>
+
+                    {/* New contact form */}
+                    {showNewContact && (
+                        <div
+                            className="bg-white border border-border rounded-[14px] p-4 space-y-3"
+                            style={{ boxShadow: CARD_SHADOW }}
+                        >
+                            <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                                New contact
+                            </p>
+                            <div className="grid grid-cols-2 gap-3">
+                                <input
+                                    placeholder="Name *"
+                                    value={newContact.name}
+                                    onChange={(e) => setNewContact((p) => ({ ...p, name: e.target.value }))}
+                                    className="rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
+                                />
+                                <input
+                                    placeholder="Email"
+                                    value={newContact.email}
+                                    onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
+                                    className="rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
+                                />
+                                <input
+                                    placeholder="Role"
+                                    value={newContact.role}
+                                    onChange={(e) => setNewContact((p) => ({ ...p, role: e.target.value }))}
+                                    className="rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
+                                />
+                                <input
+                                    placeholder="Organization"
+                                    value={newContact.organization}
+                                    onChange={(e) => setNewContact((p) => ({ ...p, organization: e.target.value }))}
+                                    className="rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
+                                />
+                            </div>
+                            <textarea
+                                placeholder="Notes (optional)"
+                                value={newContact.notes}
+                                onChange={(e) => setNewContact((p) => ({ ...p, notes: e.target.value }))}
+                                rows={2}
+                                className="w-full resize-none rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
+                            />
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleSaveContact}
+                                    disabled={!newContact.name.trim() || createContact.isPending}
+                                    className="rounded-[8px] bg-primary px-4 py-2 text-[13px] font-semibold text-white hover:bg-primary/90 active:scale-[0.97] transition-all disabled:opacity-40 font-inter"
+                                >
+                                    {createContact.isPending ? "Saving…" : "Save contact"}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Contact grid */}
+                    {contactsLoading ? (
+                        <p className="text-sm text-muted-foreground font-inter">Loading people…</p>
+                    ) : contacts.length === 0 ? (
+                        <p className="py-12 text-sm text-muted-foreground font-inter text-center">
+                            {contactSearch ? "No people match that search." : "No people yet. Add your first contact above."}
+                        </p>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                            {contacts.map((contact) => (
+                                <ContactCard
+                                    key={contact.id}
+                                    contact={contact}
+                                    onDelete={handleDeleteContact}
+                                />
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}

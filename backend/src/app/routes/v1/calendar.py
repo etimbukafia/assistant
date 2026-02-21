@@ -14,8 +14,22 @@ from app.data.schemas import (
 from app.services.calendar import CalendarService
 from app.services.briefing import generate_briefing_for_event, generate_follow_ups_for_event
 from app.agents.modules.scheduling import SchedulingModule
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 
 router = APIRouter(prefix="/calendar", tags=["Calendar"])
+cache_coordinator = EntityCacheCoordinator()
+
+
+def _tenant_id() -> str:
+    return "default"
+
+
+def _prewarm_action_chips(db: Session, user_id: str) -> None:
+    cache_coordinator.prewarm_action_chips(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user_id,
+    )
 
 @router.post("/events", response_model=CalendarEventResponse)
 def create_calendar_event(
@@ -46,6 +60,9 @@ def create_calendar_event(
     event = db.query(CalendarEvent).filter(CalendarEvent.id == result["event_id"]).first()
 
     calendar_cache.invalidate_all(user.user_id)
+    if event:
+        cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event.id))
+    _prewarm_action_chips(db, user.user_id)
 
     return event
 
@@ -125,6 +142,8 @@ def create_manual_calendar_event(
             db.commit()
 
     calendar_cache.invalidate_all(user.user_id)
+    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(calendar_event.id))
+    _prewarm_action_chips(db, user.user_id)
 
     return calendar_event
 
@@ -255,6 +274,8 @@ def update_calendar_event(
     db.commit()
 
     calendar_cache.invalidate_all(user.user_id)
+    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event.id))
+    _prewarm_action_chips(db, user.user_id)
 
     db.refresh(event)
     return event
@@ -284,6 +305,8 @@ def delete_calendar_event(
     db.commit()
 
     calendar_cache.invalidate_all(user.user_id)
+    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event.id))
+    _prewarm_action_chips(db, user.user_id)
 
     return {"success": True}
 
@@ -310,6 +333,8 @@ async def sync_calendar_events(
         )
 
         calendar_cache.invalidate_all(user.user_id)
+        cache_coordinator.invalidate_action_chips(_tenant_id(), user.user_id)
+        _prewarm_action_chips(db, user.user_id)
 
         return {
             "success": True,
@@ -452,6 +477,8 @@ def generate_meeting_briefing(
         raise HTTPException(status_code=500, detail="Failed to generate briefing")
 
     calendar_cache.invalidate_event(user.user_id, event_id)
+    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event_id))
+    _prewarm_action_chips(db, user.user_id)
 
     db.refresh(event)
     return {
@@ -489,5 +516,7 @@ def generate_meeting_followups(
         raise HTTPException(status_code=500, detail="Failed to generate follow-ups")
 
     calendar_cache.invalidate_event(user.user_id, event_id)
+    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event_id))
+    _prewarm_action_chips(db, user.user_id)
 
     return result

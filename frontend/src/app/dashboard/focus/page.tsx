@@ -56,6 +56,7 @@ export default function FocusPage() {
         <div className="max-w-3xl mx-auto space-y-8">
             <FocusHeader goalsCompleted={goalsCompleted} goalsTotal={goalsTotal} />
 
+            {/* DORMANT: Weekly target and frog task
             <WeeklyTargetInput
                 value={dailyFocus?.weekly_target ?? null}
                 onSave={handleUpdateWeeklyTarget}
@@ -69,8 +70,11 @@ export default function FocusPage() {
                 onComplete={complete.mutate}
                 onStart={start.mutate}
             />
+            */}
 
+            {/* DORMANT: Daily goals
             <DailyGoals goals={goals} onUpdate={handleUpdateGoals} />
+            */}
 
             <ActiveTasksList />
         </div>

@@ -59,6 +59,9 @@ class Settings:
     # Trial
     TRIAL_DURATION_DAYS: int = int(os.getenv("TRIAL_DURATION_DAYS", "7"))
 
+    # Vault proposals (human review queue) - currently unhooked by default
+    PROPOSALS_ENABLED: bool = os.getenv("PROPOSALS_ENABLED", "false").lower() == "true"
+
 
     def validate(self) -> list[str]:
         """

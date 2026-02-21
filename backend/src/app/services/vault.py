@@ -13,7 +13,6 @@ from app.data.models import (
     VaultNote,
     VaultLink,
     VaultProposal,
-    ContactContext,
 )
 
 
@@ -243,64 +242,6 @@ class VaultService:
                 ))
         self.db.commit()
 
-    def promote_contact(self, contact_email: str, display_name: Optional[str] = None) -> VaultNote:
-        email = contact_email.lower()
-        note = self.get_note_by_email(email)
-        if not note:
-            title = display_name or email.split("@")[0]
-            note = self.create_note(
-                note_type="person",
-                title=title,
-                body="",
-                frontmatter={"email": email, "aliases": [display_name] if display_name else []},
-                canonical_email=email,
-                source="manual",
-            )
-
-        contact = self.db.query(ContactContext).filter(
-            ContactContext.user_id == self.user_id,
-            ContactContext.contact_email == email,
-        ).first()
-        if not contact:
-            contact = ContactContext(
-                user_id=self.user_id,
-                contact_email=email,
-                contact_name=display_name or note.title,
-            )
-            self.db.add(contact)
-        contact.promoted = True
-        contact.vault_note_id = note.id
-        aliases = contact.aliases or []
-        if display_name and display_name not in aliases:
-            aliases.append(display_name)
-        contact.aliases = aliases
-        self.db.commit()
-        return note
-
-    def get_mentionable_contacts(self, q: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
-        query = self.db.query(ContactContext).filter(
-            ContactContext.user_id == self.user_id,
-            ContactContext.promoted == True,  # noqa: E712
-        )
-        if q:
-            like_query = f"%{q.strip()}%"
-            query = query.filter(
-                or_(
-                    ContactContext.contact_email.ilike(like_query),
-                    ContactContext.contact_name.ilike(like_query),
-                )
-            )
-        contacts = query.order_by(ContactContext.updated_at.desc()).limit(max(1, min(limit, 25))).all()
-        out: List[Dict[str, Any]] = []
-        for c in contacts:
-            out.append({
-                "email": c.contact_email,
-                "name": c.contact_name,
-                "aliases": c.aliases or [],
-                "vault_note_id": c.vault_note_id,
-            })
-        return out
-
     def render_note_as_markdown(self, note_id: int) -> str:
         note = self.get_note(note_id)
         if not note:
@@ -313,32 +254,6 @@ class VaultService:
         lines.append("")
         lines.append(note.body or "")
         return "\n".join(lines)
-
-    def get_mentionable_notes(self, q: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
-        query = self.db.query(VaultNote).filter(
-            VaultNote.user_id == self.user_id,
-            VaultNote.status == "active",
-        )
-        if q:
-            like_query = f"%{q.strip()}%"
-            query = query.filter(
-                or_(
-                    VaultNote.title.ilike(like_query),
-                    VaultNote.slug.ilike(like_query),
-                    VaultNote.body.ilike(like_query),
-                )
-            )
-        rows = query.order_by(VaultNote.updated_at.desc()).limit(max(1, min(limit, 25))).all()
-        return [
-            {
-                "note_id": n.id,
-                "slug": n.slug,
-                "note_type": n.note_type,
-                "title": n.title,
-                "label": f"@knowledge/{n.slug}",
-            }
-            for n in rows
-        ]
 
     def export_vault(self) -> bytes:
         notes = self.db.query(VaultNote).filter(VaultNote.user_id == self.user_id).all()

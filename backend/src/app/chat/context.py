@@ -2,7 +2,6 @@
 Chat Context Manager
 
 Manages conversation state and context injection for AI Chat.
-Integrates with ContextBuilder for memory systems.
 """
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field, asdict
@@ -11,15 +10,10 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.data.models import (
-    ChatSession, ChatMessage, Message, Task, CalendarEvent,
-    UserSettings, PrincipalMemory
+    ChatSession, ChatMessage, Message, Task, CalendarEvent, DailyFocus
 )
-from app.intelligence.context_builder import ContextBuilder
-from app.services.vault_context import VaultContextService
 from app.security.prompt_sanitizer import (
     sanitize_for_prompt,
-    wrap_user_content,
-    detect_injection_attempt,
     sanitize_email_content,
     sanitize_task_content
 )
@@ -54,6 +48,7 @@ class ConversationState:
     # Pending interactions
     pending_options: List[Dict] = field(default_factory=list)  # for disambiguation
     pending_confirmation: Optional[Dict] = None
+    deferred_actions: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -74,7 +69,8 @@ class ConversationState:
             workflow_data=data.get("workflow_data", {}),
             awaiting_input=data.get("awaiting_input"),
             pending_options=data.get("pending_options", []),
-            pending_confirmation=data.get("pending_confirmation")
+            pending_confirmation=data.get("pending_confirmation"),
+            deferred_actions=data.get("deferred_actions", []),
         )
 
 
@@ -98,8 +94,6 @@ class ChatContextManager:
     def __init__(self, db: Session, user_id: str):
         self.db = db
         self.user_id = user_id
-        self.context_builder = ContextBuilder(db, user_id)
-        self.vault_context_service = VaultContextService(db, user_id)
     
     def get_session_state(self, session: ChatSession) -> ConversationState:
         """Load ConversationState from session."""
@@ -290,27 +284,7 @@ class ChatContextManager:
             safe_name = sanitize_for_prompt(state.user_first_name)
             parts.append(f"The user's first name is {safe_name}. Address them by name when appropriate.")
 
-        # 1. Memory context (preferences, patterns)
-        memory_context = self.context_builder.build_context(
-            context_type=context_type,
-            sender_email=None,  # Can be overridden if we have current email
-            include_patterns=True
-        )
-        if memory_context:
-            # Memory context is from DB, sanitize it
-            safe_memory = sanitize_for_prompt(memory_context)
-            parts.append(f"User preferences: {safe_memory}")
-
-        # 1.5 Vault context
-        vault_context = self.vault_context_service.build_context_packet(
-            participant_emails=[],
-            context_type=context_type,
-        )
-        if vault_context:
-            safe_vault = sanitize_for_prompt(vault_context)
-            parts.append(f"Long-term context: {safe_vault}")
-
-        # 2. Current entity context (already sanitized by get_current_entity_context)
+        # 1. Current entity context (already sanitized by get_current_entity_context)
         entity_context = self.get_current_entity_context(state)
         if entity_context.get("current_email"):
             email = entity_context["current_email"]
@@ -326,7 +300,7 @@ class ChatContextManager:
                 f"Currently discussing task: <data>{task['title']}</data> (status: {task['status']})"
             )
 
-        # 3. Work context summary (if command mode)
+        # 2. Work context summary (if command mode)
         if session.session_type == "command":
             work_ctx = self.get_work_context(state)
 
@@ -342,7 +316,7 @@ class ChatContextManager:
                 email_count = len(work_ctx["recent_emails_needing_reply"])
                 parts.append(f"{email_count} emails awaiting reply.")
 
-        # 4. Workflow state
+        # 3. Workflow state
         if state.active_workflow:
             parts.append(f"Active workflow: {state.active_workflow}")
             if state.awaiting_input:

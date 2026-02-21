@@ -25,8 +25,25 @@ from core.events import emit_event
 from app.processors.ai import AIProcessor
 from app.services.thread_state import ThreadStateService
 from core.cache import thread_cache
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
+cache_coordinator = EntityCacheCoordinator()
+
+
+def _tenant_id() -> str:
+    return "default"
+
+
+def _invalidate_thread_and_prewarm(db: Session, user_id: str, thread_id: str) -> None:
+    if not thread_id:
+        return
+    cache_coordinator.invalidate_thread(_tenant_id(), user_id, thread_id)
+    cache_coordinator.prewarm_action_chips(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user_id,
+    )
 
 # Global AI processor (stateless)
 ai_processor = AIProcessor()
@@ -270,6 +287,14 @@ def sync_sent_messages(
             thread_ids_updated.append(thread_id)
 
     db.commit()
+    for thread_id in thread_ids_updated:
+        cache_coordinator.invalidate_thread(_tenant_id(), user.user_id, thread_id)
+    if thread_ids_updated:
+        cache_coordinator.prewarm_action_chips(
+            db=db,
+            tenant_id=_tenant_id(),
+            user_id=user.user_id,
+        )
 
     # Update contact reply rates for threads where user replied
     # This powers Layer 3 relationship-based filtering
@@ -715,7 +740,7 @@ def send_reply(
 
         db.commit()
 
-        thread_cache.invalidate(message.user_id, message.thread_id)
+        _invalidate_thread_and_prewarm(db, message.user_id, message.thread_id)
 
         return SendReplyResponse(
             sent=True,
@@ -774,7 +799,7 @@ def reprocess_message(message_id: int, db: Session = Depends(get_db_for_user)):
 
     db.commit()
 
-    thread_cache.invalidate(message.user_id, message.thread_id)
+    _invalidate_thread_and_prewarm(db, message.user_id, message.thread_id)
 
     return {"message": "Message reprocessed successfully"}
 
@@ -801,7 +826,7 @@ def update_message_status(
     message.status = status
     db.commit()
 
-    thread_cache.invalidate(user.user_id, message.thread_id)
+    _invalidate_thread_and_prewarm(db, user.user_id, message.thread_id)
 
     return {"message": f"Message marked as {status}", "id": message_id, "status": status}
 
@@ -822,7 +847,7 @@ def mark_message_done(
     message.status = "done"
     db.commit()
 
-    thread_cache.invalidate(user.user_id, message.thread_id)
+    _invalidate_thread_and_prewarm(db, user.user_id, message.thread_id)
 
     # Track pattern for learning (especially if marked done without replying)
     track_message_action(db, "mark_done", message)
@@ -844,7 +869,7 @@ def archive_message(
     message.status = "archived"
     db.commit()
 
-    thread_cache.invalidate(user.user_id, message.thread_id)
+    _invalidate_thread_and_prewarm(db, user.user_id, message.thread_id)
 
     return {"message": "Message archived", "id": message_id}
 
@@ -876,7 +901,7 @@ def delete_message(
     db.delete(message)
     db.commit()
 
-    thread_cache.invalidate(user.user_id, thread_id)
+    _invalidate_thread_and_prewarm(db, user.user_id, thread_id)
 
     return {"message": "Message deleted", "id": message_id}
 

@@ -1,6 +1,6 @@
 from datetime import datetime, date, timezone, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
@@ -67,12 +67,12 @@ def _parse_date(date_str: str | None) -> date:
 
 @router.get("/daily", response_model=DailyFocusResponse)
 def get_daily_focus(
-    date: str = None,
+    date_str: str = Query(None, alias="date"),
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     """Get daily focus for a given date (default: today). Creates empty row if none exists."""
-    focus_date = _parse_date(date)
+    focus_date = _parse_date(date_str)
     row = _get_or_create(db, user.user_id, focus_date)
     return _to_response(row)
 
@@ -80,12 +80,12 @@ def get_daily_focus(
 @router.put("/daily", response_model=DailyFocusResponse)
 def update_daily_focus(
     request: DailyFocusUpdateRequest,
-    date: str = None,
+    date_str: str = Query(None, alias="date"),
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     """Upsert daily focus. Validates goals (max 3) and frog_task ownership."""
-    focus_date = _parse_date(date)
+    focus_date = _parse_date(date_str)
     row = _get_or_create(db, user.user_id, focus_date)
 
     if request.goals is not None:

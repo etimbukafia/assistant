@@ -4,68 +4,73 @@
 
 @layer base {
   :root {
-    /* Base - Boutique Stationery (Light Mode) */
-    --background: 34 22% 96%;
-    /* #F9F6F2 (Linen) */
-    --foreground: 0 0% 2%;
-    /* #050505 (Obsidian) */
+    /* =========================================================================
+       Teeks Design Tokens — Permanent Ink Palette
+       ========================================================================= */
 
-    /* Cards - Physically present on the desk */
+    /* Background */
+    --background: 38 30% 92%;
+    /* #F5F0E8 Ivory Paper */
+    --foreground: 240 4% 10%;
+    /* #18181B Ink Black   */
+
+    /* Surfaces */
     --card: 0 0% 100%;
     /* #FFFFFF */
-    --card-foreground: 0 0% 2%;
+    --card-foreground: 240 4% 10%;
 
-    /* Popovers - Elevated paper */
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 2%;
+    --popover-foreground: 240 4% 10%;
 
-    /* Primary - Auburn (Executive Action) */
-    --primary: 0 46% 34%;
-    /* #7E2E2E */
-    --primary-foreground: 34 22% 96%;
+    /* Primary — Peony. One per screen. On the action that matters. */
+    --primary: 336 68% 44%;
+    /* #C2185B */
+    --primary-foreground: 0 0% 100%;
 
-    /* Secondary - Copper (Warmth) */
-    --secondary: 20 66% 56%;
-    /* #D97745 */
-    --secondary-foreground: 34 22% 96%;
+    /* Secondary — Brass. Action mode, warm interactive. */
+    --secondary: 30 26% 47%;
+    /* #A07850 */
+    --secondary-foreground: 0 0% 100%;
 
-    /* Muted - For secondary text/borders */
-    --muted: 34 10% 90%;
-    /* Slightly darker linen */
-    --muted-foreground: 220 9% 46%;
-    /* #6B7280 */
+    /* Muted */
+    --muted: 38 16% 90%;
+    /* near Ivory */
+    --muted-foreground: 240 4% 46%;
+    /* #71717A Stone */
 
-    /* Accent - Teal (Precision/Selection) */
-    --accent: 196 65% 29%;
-    /* #1A5F7A */
-    --accent-foreground: 34 22% 96%;
+    /* Accent — Deep Slate. Precision, links, informational. */
+    --accent: 213 35% 26%;
+    /* #334155 */
+    --accent-foreground: 0 0% 100%;
 
-    /* Destructive - Burgundy (Urgent) */
-    --destructive: 345 100% 25%;
-    /* #800020 */
-    --destructive-foreground: 34 22% 96%;
+    /* Destructive — Carmine. Urgent, errors, dangerous actions. */
+    --destructive: 0 50% 35%;
+    /* #9B1C1C */
+    --destructive-foreground: 0 0% 100%;
 
     /* Borders & Inputs */
-    --border: 220 13% 91%;
-    /* #E5E7EB - Soft grey, not harsh */
-    --input: 220 13% 91%;
-    --ring: 0 46% 34%;
-    /* Auburn focus ring */
+    --border: 38 16% 86%;
+    /* #E4E0D8 Hairline */
+    --input: 38 16% 86%;
+    --ring: 336 68% 44%;
+    /* Peony focus ring */
 
-    /* Radius - Consistent softness */
+    /* Radius */
     --radius: 0.5rem;
+    /* 8pt — component level */
   }
 
-  /* Cross-browser scrollbar styling */
+  /* ===========================================================================
+     Scrollbars — subtle, on-brand
+     =========================================================================== */
   * {
     scrollbar-width: thin;
-    scrollbar-color: hsl(var(--auburn) / 0.3) transparent;
+    scrollbar-color: hsl(336 68% 44% / 0.25) transparent;
   }
 
-  /* WebKit Scrollbar */
   *::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
   }
 
   *::-webkit-scrollbar-track {
@@ -73,12 +78,12 @@
   }
 
   *::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--auburn) / 0.3);
+    background-color: hsl(336 68% 44% / 0.25);
     border-radius: 20px;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(var(--auburn) / 0.5);
+    background-color: hsl(336 68% 44% / 0.45);
   }
 }
 
@@ -91,25 +96,84 @@
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
     font-feature-settings: "rlig" 1, "calt" 1;
-    /* Executive feel: Slightly tighter tracking for body */
     letter-spacing: -0.01em;
   }
 
-  /* Typography Scale */
+  /* ===========================================================================
+     Typography — Playfair for authority, Inter for everything else
+     =========================================================================== */
   h1,
   h2,
   h3,
   h4,
   h5,
   h6 {
-    @apply font-playfair tracking-tight text-obsidian;
+    @apply font-playfair tracking-tight;
+    color: hsl(var(--foreground));
   }
 
   p,
   span,
   div,
   input,
-  button {
+  button,
+  textarea {
     @apply font-inter;
   }
+
+  /* ===========================================================================
+     Motion — respect the user's preference
+     =========================================================================== */
+  @media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ===========================================================================
+   Typing Indicator — three Peony dots (never a spinner)
+   "A spinner means the system is struggling. Dots mean thinking." — motion_specs.md
+   =========================================================================== */
+@keyframes teeks-dot-pulse {
+  0%, 80%, 100% {
+    transform: scale(0.72);
+    opacity: 0.25;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.teeks-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: hsl(var(--primary));
+  animation: teeks-dot-pulse 1.4s ease-in-out infinite;
+}
+
+/* ===========================================================================
+   Message Bubble Entrance — opacity + translateY per motion_specs.md §4
+   =========================================================================== */
+@keyframes teeks-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.teeks-bubble-in {
+  animation: teeks-bubble-in 200ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }

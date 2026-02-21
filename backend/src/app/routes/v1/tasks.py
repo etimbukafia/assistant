@@ -12,9 +12,29 @@ from app.data.schemas import (
 )
 from app.intelligence.pattern_tracker import track_task_action
 from app.jobs.queue import enqueue_task
-from core.cache import thread_cache
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
+cache_coordinator = EntityCacheCoordinator()
+
+
+def _tenant_id() -> str:
+    return "default"
+
+
+def _invalidate_thread_and_prewarm(db: Session, user_id: str, thread_id: str) -> None:
+    if not thread_id:
+        return
+    cache_coordinator.invalidate_thread(_tenant_id(), user_id, thread_id)
+    cache_coordinator.prewarm_action_chips(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user_id,
+    )
+
+
+def _invalidate_task(user_id: str, task_id: int) -> None:
+    cache_coordinator.invalidate_task(_tenant_id(), user_id, str(task_id))
 
 @router.get("/", response_model=TasksListResponse)
 def get_tasks(
@@ -106,7 +126,8 @@ def create_task(
         message.extracted_tasks = [t for t in message.extracted_tasks if not _task_matches(t, request.title)]
         db.commit()
 
-    thread_cache.invalidate(user.user_id, message.thread_id)
+    _invalidate_thread_and_prewarm(db, user.user_id, message.thread_id)
+    _invalidate_task(user.user_id, task.id)
 
     # Build response with source message
     task_dict = {
@@ -187,9 +208,9 @@ def create_manual_task(
         task_type="other",
         task_signal="explicit",  # Manual tasks are always explicit
         priority=request.priority,
-        status="approved",  # Manual tasks start as approved
+        status=request.status,
         confidence_score=1.0,  # User-created = full confidence
-        approved_at=datetime.now(timezone.utc),
+        approved_at=datetime.now(timezone.utc) if request.status == "approved" else None,
         # Deadline fields
         deadline=request.deadline,
         deadline_source="explicit" if request.deadline else None,
@@ -200,6 +221,7 @@ def create_manual_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    _invalidate_task(user.user_id, task.id)
 
     return task
 
@@ -290,7 +312,8 @@ def approve_task(
     db.commit()
 
     if task.thread_id:
-        thread_cache.invalidate(user.user_id, task.thread_id)
+        _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)
+    _invalidate_task(user.user_id, task.id)
 
     # Track pattern for learning
     track_task_action(db, "approve", task, task.user_id or user.user_id)
@@ -324,7 +347,8 @@ def dismiss_task(
     db.commit()
 
     if task.thread_id:
-        thread_cache.invalidate(user.user_id, task.thread_id)
+        _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)
+    _invalidate_task(user.user_id, task.id)
 
     # Track pattern for learning
     track_task_action(db, "dismiss", task, task.user_id or user.user_id)
@@ -388,7 +412,8 @@ def update_task(
     db.commit()
 
     if task.thread_id:
-        thread_cache.invalidate(user.user_id, task.thread_id)
+        _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)
+    _invalidate_task(user.user_id, task.id)
 
     db.refresh(task)
 
@@ -409,6 +434,8 @@ def start_task(task_id: int, db: Session = Depends(get_db_for_user)):
 
     task.status = "in_progress"
     db.commit()
+    if task.user_id:
+        _invalidate_task(task.user_id, task.id)
 
     return {"message": "Task started", "task_id": task_id}
 
@@ -430,7 +457,8 @@ def complete_task(
     db.commit()
 
     if task.thread_id:
-        thread_cache.invalidate(user.user_id, task.thread_id)
+        _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)
+    _invalidate_task(user.user_id, task.id)
 
     return {"message": "Task completed", "task_id": task_id}
 
@@ -449,5 +477,7 @@ def snooze_task(
     task.snoozed_until = request.snooze_until
     task.status = "snoozed"
     db.commit()
+    if task.user_id:
+        _invalidate_task(task.user_id, task.id)
 
     return {"message": "Task snoozed", "snoozed_until": request.snooze_until}

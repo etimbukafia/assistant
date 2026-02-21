@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { DonnaText } from "@/components/ui/DonnaText";
 import { Settings, LogOut, Inbox, BookOpen, MessageSquare, Target, Calendar } from "lucide-react";
@@ -8,12 +9,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { chatService } from "@/services/chat";
 
 export default function DashboardLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
+    const queryClient = useQueryClient();
     const { signOut, settings } = useAuth();
     const pathname = usePathname();
     const prevSyncCompletedRef = useRef<boolean | null>(null);
@@ -34,10 +37,47 @@ export default function DashboardLayout({
         prevSyncCompletedRef.current = settings.initial_sync_completed;
     }, [settings?.initial_sync_completed, settings]);
 
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        let cancelled = false;
+
+        const prefetch = () => {
+            if (cancelled) return;
+            queryClient
+                .prefetchQuery({
+                    queryKey: ["chat", "action-chips", 5],
+                    queryFn: () => chatService.getActionChips(5),
+                    staleTime: 10 * 60 * 1000,
+                })
+                .catch(() => {
+                    // Non-blocking best-effort prefetch
+                });
+        };
+
+        const w = window as Window & {
+            requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+            cancelIdleCallback?: (id: number) => void;
+        };
+
+        if (typeof w.requestIdleCallback === "function") {
+            const idleId = w.requestIdleCallback(() => prefetch(), { timeout: 1000 });
+            return () => {
+                cancelled = true;
+                if (typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(idleId);
+            };
+        }
+
+        const timer = window.setTimeout(prefetch, 0);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [queryClient]);
+
     const navItems = [
         { href: "/dashboard/chat", label: "Chat", icon: <MessageSquare size={18} /> },
         { href: "/dashboard/focus", label: "Focus", icon: <Target size={18} /> },
-        { href: "/dashboard/vault", label: "Knowledge", icon: <BookOpen size={18} /> },
+        { href: "/dashboard/vault", label: "Diary", icon: <BookOpen size={18} /> },
         { href: "/dashboard/inbox", label: "Inbox", icon: <Inbox size={18} /> },
         { href: "/dashboard/calendar", label: "Calendar", icon: <Calendar size={18} /> },
         { href: "/dashboard/settings", label: "Settings", icon: <Settings size={18} /> },

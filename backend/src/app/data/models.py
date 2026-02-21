@@ -3,7 +3,21 @@ SQLAlchemy models for the assistant application
 
 These models match the database migrations in backend/migrations/.
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, JSON, Float, ForeignKey, Date
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime,
+    Boolean,
+    JSON,
+    Float,
+    ForeignKey,
+    Date,
+    CheckConstraint,
+    UniqueConstraint,
+    Index,
+)
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import relationship
 
@@ -651,6 +665,107 @@ class ContactContext(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class ContextEntry(Base):
+    """Structured long-term memory entry for assistant/executive/contact/thread/message/event context."""
+    __tablename__ = "context_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    type = Column(String, nullable=False, index=True)  # decision|commitment|preferences|insight|relationships
+    content = Column(Text, nullable=False)
+    entity_type = Column(String, nullable=False, index=True)  # assistant|executive|contact|thread|message|event
+    entity_id = Column(String, nullable=True, index=True)
+    created_by = Column(String, nullable=False, default="You")  # Teeks|You
+    importance_level = Column(String, nullable=False, default="normal", index=True)  # low|normal|high
+    status = Column(String, nullable=False, default="active", index=True)  # active|resolved|stale|archived
+    expires_at = Column(DateTime, nullable=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('decision','commitment','preferences','insight','relationships')",
+            name="ck_context_entries_type",
+        ),
+        CheckConstraint(
+            "entity_type IN ('assistant','contact','thread','message','event','executive')",
+            name="ck_context_entries_entity_type",
+        ),
+        CheckConstraint(
+            "created_by IN ('Teeks','You')",
+            name="ck_context_entries_created_by",
+        ),
+        CheckConstraint(
+            "importance_level IN ('low','normal','high')",
+            name="ck_context_entries_importance_level",
+        ),
+        CheckConstraint(
+            "status IN ('active','resolved','stale','archived')",
+            name="ck_context_entries_status",
+        ),
+        Index("ix_context_entries_user_entity", "user_id", "entity_type", "entity_id"),
+        Index("ix_context_entries_user_type", "user_id", "type"),
+    )
+
+    links = relationship("DiaryEntryLink", back_populates="entry", cascade="all, delete-orphan", lazy="selectin")
+
+
+class DiaryEntryLink(Base):
+    """Multiple entity links for a single diary context entry (from @mentions)."""
+    __tablename__ = "diary_entry_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entry_id = Column(Integer, ForeignKey("context_entries.id", ondelete="CASCADE"), nullable=False, index=True)
+    entity_type = Column(String(50), nullable=False)   # contact|thread|message|event|task
+    entity_id = Column(Text, nullable=False)            # email for contacts, ref for others
+    display_name = Column(Text, nullable=False)         # @label shown to user
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    entry = relationship("ContextEntry", back_populates="links")
+
+
+class Contact(Base):
+    """User-managed contact catalog for mention resolution and context scoping."""
+    __tablename__ = "contacts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False, index=True)
+    email = Column(String, nullable=True, index=True)
+    role = Column(String, nullable=True)
+    organization = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "email", name="uq_contacts_user_email"),
+    )
+
+
+class EntityReference(Base):
+    """Catalog of user-friendly entity references for thread/event/message mention resolution."""
+    __tablename__ = "entity_references"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    entity_type = Column(String, nullable=False, index=True)  # thread|message|event
+    display_name = Column(String, nullable=False, index=True)
+    ref = Column(String, nullable=False, index=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "entity_type IN ('thread','message','event')",
+            name="ck_entity_references_type",
+        ),
+        UniqueConstraint("user_id", "entity_type", "display_name", name="uq_entity_refs_user_type_name"),
+        UniqueConstraint("user_id", "entity_type", "ref", name="uq_entity_refs_user_type_ref"),
+    )
+
+
 class VaultNote(Base):
     """Knowledge vault note (Markdown + frontmatter)."""
     __tablename__ = "vault_notes"
@@ -918,4 +1033,34 @@ class TokenUsage(Base):
     output_tokens = Column(Integer, nullable=False, default=0)
     cost_usd = Column(Float, nullable=False, default=0.0)
     operation = Column(String, nullable=False, index=True)  # email_processing | chat | scheduling | etc.
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class ChatModelCallMetric(Base):
+    """Per-call chat model metrics for latency/prompt-cache decisioning."""
+    __tablename__ = "chat_model_call_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    session_id = Column(String, nullable=False, index=True)
+    model = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False, index=True)  # genai | orchestrator
+    path = Column(String, nullable=False, index=True)  # native | fallback
+
+    latency_ms = Column(Integer, nullable=False, default=0)
+    prompt_chars = Column(Integer, nullable=False, default=0)
+    response_chars = Column(Integer, nullable=False, default=0)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+
+    repeated_prefix_chars = Column(Integer, nullable=False, default=0)
+    repeated_prefix_rate = Column(Float, nullable=False, default=0.0)
+    prompt_prefix_signature = Column(JSON, default=dict)
+
+    tool_definitions_count = Column(Integer, nullable=False, default=0)
+    tool_calls_count = Column(Integer, nullable=False, default=0)
+
+    success = Column(Boolean, nullable=False, default=True)
+    error_type = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

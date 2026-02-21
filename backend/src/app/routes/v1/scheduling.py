@@ -7,9 +7,25 @@ from app.integrations.gmail import GmailClient, get_gmail_client
 from app.data.models import SchedulingSuggestion, Message, Task
 from app.data.schemas import SchedulingSuggestionResponse, SchedulingSuggestionSendRequest
 from app.agents.modules.scheduling import SchedulingModule
-from core.cache import thread_cache
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 
 router = APIRouter(prefix="/scheduling", tags=["Scheduling"])
+cache_coordinator = EntityCacheCoordinator()
+
+
+def _tenant_id() -> str:
+    return "default"
+
+
+def _invalidate_thread_and_prewarm(db: Session, user_id: str, thread_id: str) -> None:
+    if not thread_id:
+        return
+    cache_coordinator.invalidate_thread(_tenant_id(), user_id, thread_id)
+    cache_coordinator.prewarm_action_chips(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user_id,
+    )
 
 @router.get("/suggestions")
 def get_scheduling_suggestions(
@@ -107,7 +123,7 @@ def send_scheduling_suggestion(
         db.commit()
 
         if suggestion.thread_id:
-            thread_cache.invalidate(user.user_id, suggestion.thread_id)
+            _invalidate_thread_and_prewarm(db, user.user_id, suggestion.thread_id)
 
         return {
             "success": True,
@@ -138,7 +154,7 @@ def dismiss_scheduling_suggestion(
     db.commit()
 
     if suggestion.thread_id:
-        thread_cache.invalidate(user.user_id, suggestion.thread_id)
+        _invalidate_thread_and_prewarm(db, user.user_id, suggestion.thread_id)
 
     return {"success": True, "message": "Suggestion dismissed"}
 

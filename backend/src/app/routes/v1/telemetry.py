@@ -102,14 +102,13 @@ def telemetry_dashboard(
         event_rows = event_rows.filter(UITelemetryEvent.event_name == filter_event_name)
     event_rows = event_rows.group_by(UITelemetryEvent.event_name).all()
     event_counts = {name: count for name, count in event_rows}
+    # Proposals are currently unhooked; hide legacy proposal telemetry from admin views.
+    event_counts.pop("proposal_approved", None)
+    event_counts.pop("proposal_bulk_approved", None)
 
     chip_clicked = event_counts.get("chat_chip_clicked", 0)
     message_sent = event_counts.get("chat_message_sent", 0)
-    action_approved = (
-        event_counts.get("chat_action_approved", 0) +
-        event_counts.get("proposal_approved", 0) +
-        event_counts.get("proposal_bulk_approved", 0)
-    )
+    action_approved = event_counts.get("chat_action_approved", 0)
     funnel = TelemetryFunnelResponse(
         chip_clicked=chip_clicked,
         message_sent=message_sent,
@@ -130,8 +129,6 @@ def telemetry_dashboard(
                 "chat_chip_clicked",
                 "chat_message_sent",
                 "chat_action_approved",
-                "proposal_approved",
-                "proposal_bulk_approved",
             ]
         ),
     )
@@ -155,7 +152,7 @@ def telemetry_dashboard(
             by_day[key].chip_clicked = int(count)
         elif event_name == "chat_message_sent":
             by_day[key].message_sent = int(count)
-        elif event_name in {"chat_action_approved", "proposal_approved", "proposal_bulk_approved"}:
+        elif event_name == "chat_action_approved":
             by_day[key].action_approved += int(count)
 
     return TelemetryDashboardResponse(

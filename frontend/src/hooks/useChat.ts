@@ -55,9 +55,47 @@ export function useChatMessages(sessionId: string | null) {
     };
 }
 
+export function useChatActionChips(options?: { limit?: number; enabled?: boolean }) {
+    const { limit = 5, enabled = true } = options || {};
+    return useQuery({
+        queryKey: ['chat', 'action-chips', limit],
+        queryFn: () => chatService.getActionChips(limit),
+        enabled,
+        staleTime: 10 * 60 * 1000,
+        gcTime: 30 * 60 * 1000,
+        refetchOnWindowFocus: false,
+    });
+}
+
 export function useChat() {
     const queryClient = useQueryClient();
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(loadCurrentSessionId);
+
+    type ChatSessionQueryData = {
+        session: {
+            id: string;
+            session_type: 'command' | 'reflection';
+            title?: string | null;
+            created_at: string;
+            last_activity_at: string;
+            message_count?: number;
+        };
+        messages: Array<{
+            id: number;
+            role: 'user' | 'assistant' | 'system';
+            content: string;
+            created_at: string;
+            metadata?: Record<string, unknown> | null;
+        }>;
+        pending_actions: Array<{
+            id: string;
+            message_id?: number;
+            action_type: string;
+            action_data: Record<string, unknown>;
+            status: string;
+            created_at: string;
+        }>;
+    };
 
     const updateCurrentSession = useCallback((sessionId: string | null) => {
         setCurrentSessionId(sessionId);
@@ -94,9 +132,54 @@ export function useChat() {
                 });
             });
         },
+        onMutate: async (variables) => {
+            const queryKey = ['chat', 'session', variables.session_id] as const;
+            await queryClient.cancelQueries({ queryKey });
+
+            const previous = queryClient.getQueryData<ChatSessionQueryData>(queryKey);
+            const nowIso = new Date().toISOString();
+            const optimisticId = -Date.now();
+            const optimisticMessage = {
+                id: optimisticId,
+                role: 'user' as const,
+                content: variables.content,
+                created_at: nowIso,
+                metadata: {
+                    status: 'optimistic',
+                    mentions: variables.mentions || [],
+                },
+            };
+
+            if (previous) {
+                queryClient.setQueryData<ChatSessionQueryData>(queryKey, {
+                    ...previous,
+                    messages: [...(previous.messages || []), optimisticMessage],
+                });
+            } else {
+                queryClient.setQueryData<ChatSessionQueryData>(queryKey, {
+                    session: {
+                        id: variables.session_id,
+                        session_type: variables.mode === 'reflection' ? 'reflection' : 'command',
+                        title: null,
+                        created_at: nowIso,
+                        last_activity_at: nowIso,
+                        message_count: 1,
+                    },
+                    messages: [optimisticMessage],
+                    pending_actions: [],
+                });
+            }
+
+            return { previous, queryKey };
+        },
         onSuccess: (data, variables) => {
             queryClient.invalidateQueries({ queryKey: ['chat', 'session', variables.session_id] });
             queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] });
+        },
+        onError: (_error, _variables, context) => {
+            if (context?.previous && context.queryKey) {
+                queryClient.setQueryData(context.queryKey, context.previous);
+            }
         },
     });
 

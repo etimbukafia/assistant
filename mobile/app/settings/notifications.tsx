@@ -129,6 +129,7 @@ export default function NotificationSettingsScreen() {
                             />
                         </View>
 
+                        {/* DORMANT: Digest notification toggle
                         <View style={styles.settingRow}>
                             <View style={[styles.iconContainer, { backgroundColor: Colors.accentPrecision + '15' }]}>
                                 <Ionicons name="mail" size={20} color={Colors.accentPrecision} />
@@ -147,6 +148,7 @@ export default function NotificationSettingsScreen() {
                                 disabled={isUpdating || !pushEnabled}
                             />
                         </View>
+                        */}
 
                         <View style={[styles.settingRow, { borderBottomWidth: 0 }]}>
                             <View style={[styles.iconContainer, { backgroundColor: Colors.accentPrecision + '15' }]}>

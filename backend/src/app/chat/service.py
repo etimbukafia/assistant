@@ -19,14 +19,34 @@ import asyncio
 import uuid
 import re
 import logging
+import time
 
 from sqlalchemy.orm import Session
 
-from app.data.models import ChatSession, ChatMessage, ChatPendingAction, Task, PrincipalMemory, TaskQueue, UserSettings, ContactContext, Message, VaultNote
+from app.data.models import (
+    ChatSession,
+    ChatMessage,
+    ChatPendingAction,
+    Task,
+    PrincipalMemory,
+    TaskQueue,
+    UserSettings,
+    ContactContext,
+    Message,
+    VaultNote,
+    Contact,
+    EntityReference,
+    ContextEntry,
+)
 from app.jobs.queue import queue_service
 from .orchestrator import ChatOrchestrator
+from app.services.hot_context_cache import get_hot_context_cache_service
+from app.services.mention_context import MentionContextService
+from app.services.warm_cache import get_warm_cache_service
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 
 logger = logging.getLogger(__name__)
+cache_coordinator = EntityCacheCoordinator()
 
 # Timeout for synchronous processing (seconds)
 SYNC_TIMEOUT_SECONDS = 30.0
@@ -94,6 +114,11 @@ TOOL_INTENT_PATTERNS = [
 
 # Compiled patterns for efficiency
 _TOOL_INTENT_RE = [re.compile(p, re.IGNORECASE) for p in TOOL_INTENT_PATTERNS]
+_EMAIL_DRAFT_RE = re.compile(r"\b(draft|write|compose|reply)\b.*\b(email|message|response)\b", re.IGNORECASE)
+_EMAIL_SCOPE_HINT_RE = re.compile(
+    r"(@\S+|\bthread\b|\bmessage\b|\breply to\b|\brespond to\b|\babout\b|\bregarding\b|\bfrom\b)",
+    re.IGNORECASE,
+)
 
 
 def detect_tool_intent(message: str) -> bool:
@@ -103,8 +128,18 @@ def detect_tool_intent(message: str) -> bool:
     Used to decide between sync and async processing paths.
     Returns True if the message appears to need tools.
     """
+    text = (message or "").strip()
+    if not text:
+        return False
+
+    # Generic draft-email requests should stay on the sync path unless scoped.
+    # Example (no tools needed): "Draft an email for me. It should say..."
+    # Example (tools likely needed): "Draft a reply to @Sarah about @Q3 Budget"
+    if _EMAIL_DRAFT_RE.search(text) and not _EMAIL_SCOPE_HINT_RE.search(text):
+        return False
+
     for pattern in _TOOL_INTENT_RE:
-        if pattern.search(message):
+        if pattern.search(text):
             return True
     return False 
 
@@ -244,10 +279,12 @@ class ChatService:
         resolved_contacts = []
         resolved_emails = []
         resolved_knowledge = []
+        resolved_memory = []
+        resolved_entities = []
 
         for mention in mentions or []:
-            mtype = mention.get("type")
-            ref_id = mention.get("ref_id", "")
+            mtype = (mention.get("type") or mention.get("kind") or "").strip().lower()
+            ref_id = (mention.get("ref_id") or mention.get("ref") or "").strip()
             label = mention.get("label")
 
             if mtype == "contact":
@@ -255,16 +292,28 @@ class ChatService:
                 if "@" in ref_id:
                     email = self._sanitize_mention_text(ref_id.lower(), max_len=254)
                 else:
-                    contact = self.db.query(ContactContext).filter(
-                        ContactContext.user_id == self.user_id,
-                        (ContactContext.contact_email == ref_id) |
-                        (ContactContext.contact_name.ilike(ref_id))
-                    ).first()
+                    contact = (
+                        self.db.query(Contact)
+                        .filter(
+                            Contact.user_id == self.user_id,
+                            (Contact.email == ref_id.lower()) | (Contact.name.ilike(ref_id)),
+                        )
+                        .first()
+                    )
                     if contact:
-                        email = contact.contact_email
+                        email = (contact.email or "").lower()
+                    if not email:
+                        legacy_contact = self.db.query(ContactContext).filter(
+                            ContactContext.user_id == self.user_id,
+                            (ContactContext.contact_email == ref_id) |
+                            (ContactContext.contact_name.ilike(ref_id))
+                        ).first()
+                        if legacy_contact:
+                            email = legacy_contact.contact_email
                 if email:
                     safe_label = self._sanitize_mention_text(label or email, max_len=180)
                     resolved_contacts.append({"email": email, "label": safe_label or email})
+                    resolved_entities.append({"kind": "contact", "ref": email, "label": safe_label or email})
 
             elif mtype == "email":
                 # Prefer stable message id when provided
@@ -293,6 +342,11 @@ class ChatService:
                         "sender": self._sanitize_mention_text(msg.sender, max_len=220),
                         "thread_id": msg.thread_id,
                     })
+                    resolved_entities.append({
+                        "kind": "message",
+                        "ref": f"msg:{msg.id}",
+                        "label": self._sanitize_mention_text(label or msg.subject or str(msg.id), max_len=220),
+                    })
             elif mtype == "knowledge":
                 note_id = mention.get("metadata", {}).get("note_id")
                 note = None
@@ -318,8 +372,99 @@ class ChatService:
                         "title": self._sanitize_mention_text(note.title, max_len=220),
                         "note_type": self._sanitize_mention_text(note.note_type, max_len=64),
                     })
+            elif mtype == "task":
+                task = None
+                if ref_id.isdigit():
+                    task = self.db.query(Task).filter(
+                        Task.user_id == self.user_id,
+                        Task.id == int(ref_id)
+                    ).first()
+                if not task:
+                    lookup = self._sanitize_mention_text(label or ref_id, max_len=220)
+                    if lookup:
+                        task = self.db.query(Task).filter(
+                            Task.user_id == self.user_id,
+                            Task.title.ilike(lookup)
+                        ).order_by(Task.updated_at.desc()).first()
+                if task:
+                    task_label = self._sanitize_mention_text(task.title or f"Task {task.id}", max_len=220)
+                    resolved_entities.append(
+                        {
+                            "kind": "task",
+                            "ref": str(task.id),
+                            "label": task_label,
+                        }
+                    )
+                elif ref_id:
+                    resolved_entities.append(
+                        {
+                            "kind": "task",
+                            "ref": self._sanitize_mention_text(ref_id, max_len=220),
+                            "label": self._sanitize_mention_text(label or ref_id, max_len=220),
+                        }
+                    )
+            elif mtype in {"thread", "event", "message"}:
+                entity = (
+                    self.db.query(EntityReference)
+                    .filter(
+                        EntityReference.user_id == self.user_id,
+                        EntityReference.entity_type == mtype,
+                        (EntityReference.ref == ref_id) | (EntityReference.display_name.ilike(ref_id))
+                    )
+                    .order_by(EntityReference.updated_at.desc())
+                    .first()
+                )
+                if entity:
+                    resolved_entities.append(
+                        {
+                            "kind": mtype,
+                            "ref": self._sanitize_mention_text(entity.ref, max_len=220),
+                            "label": self._sanitize_mention_text(label or entity.display_name, max_len=220),
+                        }
+                    )
+                elif ref_id:
+                    resolved_entities.append(
+                        {
+                            "kind": mtype,
+                            "ref": self._sanitize_mention_text(ref_id, max_len=220),
+                            "label": self._sanitize_mention_text(label or ref_id, max_len=220),
+                        }
+                    )
+            elif mtype == "memory":
+                entry = None
+                entry_id = None
+                if ref_id.startswith("ctx:"):
+                    raw_id = ref_id.split(":", 1)[1]
+                    if raw_id.isdigit():
+                        entry_id = int(raw_id)
+                elif ref_id.isdigit():
+                    entry_id = int(ref_id)
+                if entry_id:
+                    entry = self.db.query(ContextEntry).filter(
+                        ContextEntry.id == entry_id,
+                        ContextEntry.user_id == self.user_id,
+                    ).first()
+                if entry:
+                    resolved_memory.append(
+                        {
+                            "id": entry.id,
+                            "type": self._sanitize_mention_text(entry.type, max_len=64),
+                            "content": self._sanitize_mention_text(entry.content, max_len=500),
+                            "entity_type": self._sanitize_mention_text(entry.entity_type, max_len=64),
+                            "entity_id": self._sanitize_mention_text(entry.entity_id, max_len=220),
+                            "status": self._sanitize_mention_text(getattr(entry, "status", None), max_len=32),
+                            "importance_level": self._sanitize_mention_text(entry.importance_level, max_len=32),
+                            "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+                        }
+                    )
 
-        return {"contacts": resolved_contacts, "emails": resolved_emails, "knowledge": resolved_knowledge}
+        return {
+            "contacts": resolved_contacts,
+            "emails": resolved_emails,
+            "knowledge": resolved_knowledge,
+            "memory": resolved_memory,
+            "entities": resolved_entities,
+        }
     
     def get_messages(
         self,
@@ -591,6 +736,16 @@ class ChatService:
         self.db.add(event)
         self.db.commit()
         self.db.refresh(event)
+        cache_coordinator.invalidate_event(
+            tenant_id="default",
+            user_id=self.user_id,
+            event_id=str(event.id),
+        )
+        cache_coordinator.prewarm_action_chips(
+            db=self.db,
+            tenant_id="default",
+            user_id=self.user_id,
+        )
         
         return {"event_id": event.id, "title": event.title}
     
@@ -609,6 +764,16 @@ class ChatService:
         
         event.status = "cancelled"
         self.db.commit()
+        cache_coordinator.invalidate_event(
+            tenant_id="default",
+            user_id=self.user_id,
+            event_id=str(event_id),
+        )
+        cache_coordinator.prewarm_action_chips(
+            db=self.db,
+            tenant_id="default",
+            user_id=self.user_id,
+        )
         
         return {"event_id": event_id, "status": "cancelled"}
     
@@ -640,6 +805,16 @@ class ChatService:
         event.start_time = new_start
         event.end_time = new_end
         self.db.commit()
+        cache_coordinator.invalidate_event(
+            tenant_id="default",
+            user_id=self.user_id,
+            event_id=str(event_id),
+        )
+        cache_coordinator.prewarm_action_chips(
+            db=self.db,
+            tenant_id="default",
+            user_id=self.user_id,
+        )
         
         return {"event_id": event_id, "new_start_time": data["new_start_time"]}
     
@@ -708,17 +883,76 @@ class ChatService:
                 status=ProcessingStatus.FAILED,
                 error="Session not found"
             )
+        started_at = time.perf_counter()
 
         mentions = mentions or []
+        mentions_started = time.perf_counter()
         resolved_mentions = self._resolve_mentions(mentions)
+        mentions_ms = int((time.perf_counter() - mentions_started) * 1000)
+        logger.info(
+            "chat_mentions_resolved user=%s session=%s mentions_in=%s contacts=%s emails=%s knowledge=%s memory=%s entities=%s",
+            self.user_id,
+            session_id,
+            len(mentions),
+            len(resolved_mentions.get("contacts", [])),
+            len(resolved_mentions.get("emails", [])),
+            len(resolved_mentions.get("knowledge", [])),
+            len(resolved_mentions.get("memory", [])),
+            len(resolved_mentions.get("entities", [])),
+        )
+        mention_entities = resolved_mentions.get("entities", [])
+        if mention_entities:
+            prefetch_started = time.perf_counter()
+            mention_service = MentionContextService(
+                db=self.db,
+                warm_cache=get_warm_cache_service(),
+                tenant_id="default",
+                user_id=self.user_id,
+                session_id=session_id,
+            )
+            prefetch = mention_service.prefetch_for_mentions(
+                mentions=[
+                    {
+                        "kind": item.get("kind"),
+                        "ref": item.get("ref"),
+                        "label": item.get("label"),
+                    }
+                    for item in mention_entities
+                ]
+            )
+            resolved_mentions["mention_prefetch"] = prefetch
+            selected_entries = prefetch.get("selected_entries") or []
+            if selected_entries:
+                get_hot_context_cache_service().merge_context_entries(
+                    tenant_id="default",
+                    user_id=self.user_id,
+                    session_id=session_id,
+                    entries=selected_entries,
+                )
+            logger.info(
+                "chat_mentions_prefetch user=%s session=%s selected_entries=%s duration_ms=%s",
+                self.user_id,
+                session_id,
+                len(selected_entries),
+                int((time.perf_counter() - prefetch_started) * 1000),
+            )
 
         # Save user message
+        persist_started = time.perf_counter()
         user_msg = self.add_message(
             session_id,
             "user",
             content,
             metadata={"mentions": mentions, "resolved_mentions": resolved_mentions}
         )
+        get_hot_context_cache_service().append_message(
+            tenant_id="default",
+            user_id=self.user_id,
+            session_id=session_id,
+            role="user",
+            content=content,
+        )
+        persist_ms = int((time.perf_counter() - persist_started) * 1000)
 
         # Auto-generate title from first message if not set
         if not session.title:
@@ -729,35 +963,76 @@ class ChatService:
 
         # REFLECTION MODE: Always synchronous
         if session.session_type == "reflection":
-            return await self._process_sync(session, content, user_msg.id, mention_context=resolved_mentions)
+            process_started = time.perf_counter()
+            result = await self._process_sync(session, content, user_msg.id, mention_context=resolved_mentions)
+            logger.info(
+                "chat_send_timing user=%s session=%s mode=reflection mentions_ms=%s persist_ms=%s process_ms=%s total_ms=%s",
+                self.user_id,
+                session_id,
+                mentions_ms,
+                persist_ms,
+                int((time.perf_counter() - process_started) * 1000),
+                int((time.perf_counter() - started_at) * 1000),
+            )
+            return result
 
         # ACTION MODE: Optimistic sync with async fallback
         # Check if message likely needs tools
         if detect_tool_intent(content):
             logger.info(f"Tool intent detected, using async path for session {session_id}")
-            return self._enqueue_async(
+            result = self._enqueue_async(
                 session,
                 content,
                 user_msg.id,
                 mentions=mentions,
                 mention_context=resolved_mentions,
             )
+            logger.info(
+                "chat_send_timing user=%s session=%s mode=action path=async_intent mentions_ms=%s persist_ms=%s total_ms=%s",
+                self.user_id,
+                session_id,
+                mentions_ms,
+                persist_ms,
+                int((time.perf_counter() - started_at) * 1000),
+            )
+            return result
 
         # Try synchronous processing with timeout
+        process_started = time.perf_counter()
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._process_sync(session, content, user_msg.id, mention_context=resolved_mentions),
                 timeout=SYNC_TIMEOUT_SECONDS
             )
+            logger.info(
+                "chat_send_timing user=%s session=%s mode=action path=sync mentions_ms=%s persist_ms=%s process_ms=%s total_ms=%s",
+                self.user_id,
+                session_id,
+                mentions_ms,
+                persist_ms,
+                int((time.perf_counter() - process_started) * 1000),
+                int((time.perf_counter() - started_at) * 1000),
+            )
+            return result
         except asyncio.TimeoutError:
             logger.info(f"Sync timeout, falling back to async for session {session_id}")
-            return self._enqueue_async(
+            result = self._enqueue_async(
                 session,
                 content,
                 user_msg.id,
                 mentions=mentions,
                 mention_context=resolved_mentions,
             )
+            logger.info(
+                "chat_send_timing user=%s session=%s mode=action path=sync_timeout_async mentions_ms=%s persist_ms=%s process_ms=%s total_ms=%s",
+                self.user_id,
+                session_id,
+                mentions_ms,
+                persist_ms,
+                int((time.perf_counter() - process_started) * 1000),
+                int((time.perf_counter() - started_at) * 1000),
+            )
+            return result
 
     async def _process_sync(
         self,
@@ -802,6 +1077,13 @@ class ChatService:
                 result.get("response", ""),
                 metadata={"state": result.get("state", {})}
             )
+            get_hot_context_cache_service().append_message(
+                tenant_id="default",
+                user_id=self.user_id,
+                session_id=session.id,
+                role="assistant",
+                content=assistant_msg.content,
+            )
 
             # Create pending actions
             pending_actions = []
@@ -834,10 +1116,15 @@ class ChatService:
             )
 
         except Exception as e:
-            logger.error(f"Sync processing failed: {e}")
+            logger.error(
+                "chat_sync_processing_failed user=%s session=%s",
+                self.user_id,
+                session.id,
+                exc_info=True,
+            )
             return ChatResponse(
                 status=ProcessingStatus.FAILED,
-                error=str(e)
+                error="I couldn't complete that right now. Please try again."
             )
 
     def _enqueue_async(
@@ -922,6 +1209,11 @@ class ChatService:
                 break
 
         if not message:
+            logger.warning(
+                "chat_job_not_found user=%s job_id=%s",
+                self.user_id,
+                job_id,
+            )
             return ChatResponse(
                 status=ProcessingStatus.FAILED,
                 error="Job not found"
@@ -943,7 +1235,13 @@ class ChatService:
                     "timed_out_at": datetime.now(timezone.utc).isoformat()
                 }
                 self.db.commit()
-                logger.warning(f"Auto-expired stuck job {job_id} (message {message.id})")
+                logger.warning(
+                    "chat_job_timeout user=%s session=%s job_id=%s message_id=%s",
+                    self.user_id,
+                    message.session_id,
+                    job_id,
+                    message.id,
+                )
                 
                 return ChatResponse(
                     status=ProcessingStatus.FAILED,
@@ -960,6 +1258,14 @@ class ChatService:
 
         # Check if timed out (already expired by another path)
         if metadata.get("status") == "timeout":
+            logger.warning(
+                "chat_job_timeout_reported user=%s session=%s job_id=%s message_id=%s error=%s",
+                self.user_id,
+                message.session_id,
+                job_id,
+                message.id,
+                metadata.get("error", "Processing timed out"),
+            )
             return ChatResponse(
                 status=ProcessingStatus.FAILED,
                 job_id=job_id,
@@ -969,6 +1275,15 @@ class ChatService:
 
         # Check if failed
         if metadata.get("status") == "failed":
+            logger.error(
+                "chat_job_failed user=%s session=%s job_id=%s message_id=%s user_error=%s internal_error=%s",
+                self.user_id,
+                message.session_id,
+                job_id,
+                message.id,
+                metadata.get("error", "Processing failed"),
+                metadata.get("internal_error"),
+            )
             return ChatResponse(
                 status=ProcessingStatus.FAILED,
                 job_id=job_id,

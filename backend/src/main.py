@@ -19,7 +19,6 @@ from app.routes.v1 import (
     digests,
     scheduling,
     calendar,
-    memory,
     gdpr,
     system,
     chat,
@@ -31,6 +30,7 @@ from app.routes.v1 import (
     vault,
     focus,
     telemetry,
+    action_tools,
 )
 from app.handlers.webhook_handlers import router as billing_router
 from app.security.rate_limiter import RateLimitMiddleware
@@ -183,10 +183,9 @@ app.include_router(auth.router, prefix="/v1")
 app.include_router(messages.router, prefix="/v1")
 app.include_router(tasks.router, prefix="/v1")
 app.include_router(settings.router, prefix="/v1")
-app.include_router(digests.router, prefix="/v1")
+# DORMANT: app.include_router(digests.router, prefix="/v1")
 app.include_router(scheduling.router, prefix="/v1")
 app.include_router(calendar.router, prefix="/v1")
-app.include_router(memory.router, prefix="/v1")
 app.include_router(gdpr.router, prefix="/v1")
 app.include_router(system.router, prefix="/v1")
 app.include_router(chat.router, prefix="/v1")
@@ -199,6 +198,7 @@ app.include_router(onboarding.router, prefix="/v1")
 app.include_router(vault.router, prefix="/v1")
 app.include_router(focus.router, prefix="/v1")
 app.include_router(telemetry.router, prefix="/v1")
+app.include_router(action_tools.router, prefix="/v1")
 
 
 @app.get("/")

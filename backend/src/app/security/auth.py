@@ -181,6 +181,7 @@ def verify_jwt(token: str, jwt_secret: str, supabase_url: str = "") -> dict:
                 signing_key.key,
                 algorithms=["ES256"],
                 audience="authenticated",
+                leeway=timedelta(seconds=10),  # Tolerate up to 10s clock skew for iat/exp
                 options={
                     "verify_exp": True,
                     "verify_aud": True,
@@ -202,6 +203,7 @@ def verify_jwt(token: str, jwt_secret: str, supabase_url: str = "") -> dict:
                 jwt_secret,
                 algorithms=["HS256"],
                 audience="authenticated",
+                leeway=timedelta(seconds=10),  # Tolerate up to 10s clock skew for iat/exp
                 options={
                     "verify_exp": True,
                     "verify_aud": True,

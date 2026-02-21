@@ -1,14 +1,22 @@
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.data.models import ContactContext, VaultProposal, VaultNote, VaultMetricsDaily, Message
+from app.data.models import (
+    VaultProposal,
+    VaultNote,
+    VaultMetricsDaily,
+    Contact,
+    ContextEntry,
+    DiaryEntryLink,
+    EntityReference,
+)
 from app.data.schemas import (
     VaultNoteCreate,
     VaultNoteUpdate,
@@ -17,12 +25,17 @@ from app.data.schemas import (
     VaultProposalResponse,
     VaultProposalsListResponse,
     VaultProposalRejectRequest,
-    ContactPromoteRequest,
-    MentionableContactsResponse,
-    MentionableEmailsResponse,
-    MentionableNotesResponse,
-    MeetingPrepResponse,
     VaultStatsResponse,
+    ContactCreate,
+    ContactUpdate,
+    ContactResponse,
+    ContextEntryCreate,
+    ContextEntryUpdate,
+    ContextEntryResponse,
+    ContextEntityType,
+    EntityReferenceCreate,
+    EntityReferenceUpdate,
+    EntityReferenceResponse,
 )
 from app.security.auth import (
     get_current_user,
@@ -31,15 +44,77 @@ from app.security.auth import (
     AuthenticatedUser,
 )
 from app.services.vault import VaultService
-from app.services.vault_context import VaultContextService
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 from app.intelligence.pattern_tracker import PatternTracker
+from app.infra.config import get_settings
 
 
 router = APIRouter(prefix="/vault", tags=["Vault"])
 
 
-class MeetingPrepRequest(BaseModel):
-    event_id: int
+cache_coordinator = EntityCacheCoordinator()
+
+
+def _tenant_id_for_user(_: AuthenticatedUser) -> str:
+    # Main backend is currently single-tenant from API perspective.
+    return "default"
+
+
+def _prewarm_action_chips_cache(db: Session, user: AuthenticatedUser) -> None:
+    tenant_id = _tenant_id_for_user(user)
+    cache_coordinator.prewarm_action_chips(
+        db=db,
+        tenant_id=tenant_id,
+        user_id=user.user_id,
+    )
+
+
+def _assert_proposals_enabled() -> None:
+    if not get_settings().PROPOSALS_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def _validate_diary_entity_reference(db: Session, user_id: str, payload: ContextEntryCreate) -> None:
+    entity_type = payload.entity_type.value
+    entity_id = (payload.entity_id or "").strip()
+
+    if entity_type in {"assistant", "executive"}:
+        return
+
+    if not entity_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This memory must be linked to a contact, thread, message, or event.",
+        )
+
+    if entity_type == "contact":
+        contact = (
+            db.query(Contact)
+            .filter(
+                Contact.user_id == user_id,
+                func.lower(Contact.email) == entity_id.lower(),
+            )
+            .first()
+        )
+        if not contact:
+            raise HTTPException(status_code=400, detail="Contact reference not found for this user.")
+        return
+
+    if entity_type in {"thread", "message", "event"}:
+        ref = (
+            db.query(EntityReference)
+            .filter(
+                EntityReference.user_id == user_id,
+                EntityReference.entity_type == entity_type,
+                EntityReference.ref == entity_id,
+            )
+            .first()
+        )
+        if not ref:
+            raise HTTPException(status_code=400, detail=f"{entity_type.title()} reference not found for this user.")
+        return
+
+    raise HTTPException(status_code=400, detail="Invalid entity reference.")
 
 
 @router.get("/notes", response_model=VaultNotesListResponse)
@@ -142,6 +217,7 @@ def list_proposals(
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
+    _assert_proposals_enabled()
     service = VaultService(db, user.user_id)
     proposals, total = service.list_proposals(status=status, limit=limit, offset=offset)
     return VaultProposalsListResponse(proposals=proposals, total=total)
@@ -152,6 +228,7 @@ def proposals_count(
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
+    _assert_proposals_enabled()
     count = db.query(VaultProposal).filter(
         VaultProposal.user_id == user.user_id,
         VaultProposal.status == "pending",
@@ -165,6 +242,7 @@ def approve_proposal(
     user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user),
 ):
+    _assert_proposals_enabled()
     service = VaultService(db, user.user_id)
     proposal = service.approve_proposal(proposal_id)
     if not proposal:
@@ -191,6 +269,7 @@ def reject_proposal(
     user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user),
 ):
+    _assert_proposals_enabled()
     service = VaultService(db, user.user_id)
     proposal = service.reject_proposal(proposal_id, request.reason, request.category)
     if not proposal:
@@ -221,6 +300,7 @@ def bulk_approve(
     user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user),
 ):
+    _assert_proposals_enabled()
     service = VaultService(db, user.user_id)
     approved = 0
     for pid in request.proposal_ids:
@@ -228,109 +308,6 @@ def bulk_approve(
         if proposal and proposal.status == "approved":
             approved += 1
     return {"approved": approved, "requested": len(request.proposal_ids)}
-
-
-@router.get("/contacts/candidates")
-def contact_candidates(
-    limit: int = 50,
-    user: AuthenticatedUser = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user),
-):
-    contacts = db.query(ContactContext).filter(
-        ContactContext.user_id == user.user_id,
-        ContactContext.promoted == False,  # noqa: E712
-    ).all()
-    ranked = sorted(
-        contacts,
-        key=lambda c: (c.contact_metadata or {}).get("message_count", 0),
-        reverse=True,
-    )
-    ranked = ranked[:limit]
-    return {
-        "contacts": [
-            {
-                "email": c.contact_email,
-                "name": c.contact_name,
-                "message_count": (c.contact_metadata or {}).get("message_count", 0),
-            }
-            for c in ranked
-        ]
-    }
-
-
-@router.post("/contacts/{email}/promote", response_model=VaultNoteResponse)
-def promote_contact(
-    email: str,
-    request: ContactPromoteRequest,
-    user: AuthenticatedUser = Depends(require_active_subscription),
-    db: Session = Depends(get_db_for_user),
-):
-    service = VaultService(db, user.user_id)
-    return service.promote_contact(email, display_name=request.display_name)
-
-
-@router.get("/contacts/mentionable", response_model=MentionableContactsResponse)
-def mentionable_contacts(
-    q: Optional[str] = Query(default=None),
-    limit: int = 10,
-    user: AuthenticatedUser = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user),
-):
-    service = VaultService(db, user.user_id)
-    return {"contacts": service.get_mentionable_contacts(q=q, limit=limit)}
-
-@router.get("/emails/mentionable", response_model=MentionableEmailsResponse)
-def mentionable_emails(
-    q: Optional[str] = Query(default=None),
-    limit: int = 10,
-    user: AuthenticatedUser = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user),
-):
-    query = db.query(Message).filter(
-        Message.user_id == user.user_id,
-    )
-    if q:
-        like_query = f"%{q.strip()}%"
-        query = query.filter(
-            (Message.subject.ilike(like_query)) |
-            (Message.sender.ilike(like_query)) |
-            (Message.thread_id.ilike(like_query))
-        )
-    rows = query.order_by(Message.received_at.desc()).limit(max(1, min(limit, 25))).all()
-    return {
-        "emails": [
-            {
-                "message_id": m.id,
-                "subject": m.subject,
-                "sender": m.sender,
-                "thread_id": m.thread_id,
-                "received_at": m.received_at,
-                "label": f"@email/{m.subject or '(no subject)'} ({m.sender or 'unknown'})",
-            }
-            for m in rows
-        ]
-    }
-
-
-@router.get("/notes/mentionable", response_model=MentionableNotesResponse)
-def mentionable_notes(
-    q: Optional[str] = Query(default=None),
-    limit: int = 10,
-    user: AuthenticatedUser = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user),
-):
-    service = VaultService(db, user.user_id)
-    return {"notes": service.get_mentionable_notes(q=q, limit=limit)}
-
-
-@router.post("/prep/meeting", response_model=MeetingPrepResponse)
-def prep_meeting(
-    request: MeetingPrepRequest,
-    user: AuthenticatedUser = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user),
-):
-    service = VaultContextService(db, user.user_id)
-    return service.build_meeting_prep(request.event_id)
 
 
 @router.get("/export")
@@ -359,6 +336,499 @@ def search_vault(
     service = VaultService(db, user.user_id)
     notes = service.search_notes(q, note_type=note_type, limit=limit)
     return VaultNotesListResponse(notes=notes, total=len(notes))
+
+
+@router.get("/diary/context-entries", response_model=List[ContextEntryResponse])
+def list_context_entries(
+    entity_type: Optional[ContextEntityType] = None,
+    entity_id: Optional[str] = None,
+    entry_type: Optional[str] = Query(default=None, alias="type"),
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    query = db.query(ContextEntry).filter(ContextEntry.user_id == user.user_id)
+    if entity_type:
+        query = query.filter(ContextEntry.entity_type == entity_type.value)
+    if entity_id:
+        query = query.filter(ContextEntry.entity_id == entity_id)
+    if entry_type:
+        query = query.filter(ContextEntry.type == entry_type)
+    return query.order_by(ContextEntry.created_at.desc()).all()
+
+
+@router.post("/diary/context-entries", response_model=ContextEntryResponse)
+def create_context_entry(
+    payload: ContextEntryCreate,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    if payload.status.value == "stale" and payload.expires_at is None:
+        raise HTTPException(status_code=400, detail="Stale entries must include an expiry date.")
+
+    _validate_diary_entity_reference(db=db, user_id=user.user_id, payload=payload)
+    entry = ContextEntry(
+        user_id=user.user_id,
+        type=payload.type.value,
+        content=payload.content.strip(),
+        entity_type=payload.entity_type.value,
+        entity_id=(payload.entity_id or "").strip() or None,
+        created_by=payload.created_by.value,
+        importance_level=payload.importance_level.value,
+        status=payload.status.value,
+        expires_at=payload.expires_at,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.add(entry)
+    db.flush()  # get entry.id before committing
+
+    for link in payload.links:
+        db.add(DiaryEntryLink(
+            entry_id=entry.id,
+            entity_type=link.entity_type,
+            entity_id=link.entity_id,
+            display_name=link.display_name,
+        ))
+
+    db.commit()
+    db.refresh(entry)
+    cache_coordinator.invalidate_from_context_entry(_tenant_id_for_user(user), entry)
+    _prewarm_action_chips_cache(db, user)
+    return entry
+
+
+@router.put("/diary/context-entries/{entry_id}", response_model=ContextEntryResponse)
+def update_context_entry(
+    entry_id: int,
+    payload: ContextEntryUpdate,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    entry = (
+        db.query(ContextEntry)
+        .filter(ContextEntry.id == entry_id, ContextEntry.user_id == user.user_id)
+        .first()
+    )
+    if not entry:
+        raise HTTPException(status_code=404, detail="Context entry not found.")
+
+    prior_entry = ContextEntry(
+        user_id=entry.user_id,
+        type=entry.type,
+        content=entry.content,
+        entity_type=entry.entity_type,
+        entity_id=entry.entity_id,
+        created_by=entry.created_by,
+        importance_level=entry.importance_level,
+        status=entry.status,
+        expires_at=entry.expires_at,
+    )
+
+    if payload.content is not None:
+        entry.content = payload.content.strip()
+    if payload.importance_level is not None:
+        entry.importance_level = payload.importance_level.value
+    if payload.status is not None:
+        entry.status = payload.status.value
+    if "expires_at" in payload.model_fields_set:
+        entry.expires_at = payload.expires_at
+    if entry.status == "stale" and entry.expires_at is None:
+        raise HTTPException(status_code=400, detail="Stale entries must include an expiry date.")
+
+    entry.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(entry)
+    cache_coordinator.invalidate_from_context_entry(
+        _tenant_id_for_user(user),
+        entry,
+        prior_entry=prior_entry,
+    )
+    _prewarm_action_chips_cache(db, user)
+    return entry
+
+
+@router.delete("/diary/context-entries/{entry_id}")
+def delete_context_entry(
+    entry_id: int,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    entry = (
+        db.query(ContextEntry)
+        .filter(ContextEntry.id == entry_id, ContextEntry.user_id == user.user_id)
+        .first()
+    )
+    if not entry:
+        raise HTTPException(status_code=404, detail="Context entry not found.")
+
+    prior_entry = ContextEntry(
+        user_id=entry.user_id,
+        type=entry.type,
+        content=entry.content,
+        entity_type=entry.entity_type,
+        entity_id=entry.entity_id,
+        created_by=entry.created_by,
+        importance_level=entry.importance_level,
+        status=entry.status,
+        expires_at=entry.expires_at,
+    )
+    db.delete(entry)
+    db.commit()
+    cache_coordinator.invalidate_from_context_entry(_tenant_id_for_user(user), prior_entry)
+    _prewarm_action_chips_cache(db, user)
+    return {"deleted": True, "id": entry_id}
+
+
+@router.get("/diary/contacts", response_model=List[ContactResponse])
+def list_diary_contacts(
+    q: Optional[str] = Query(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    query = db.query(Contact).filter(Contact.user_id == user.user_id)
+    if q:
+        q_norm = q.strip()
+        query = query.filter(
+            or_(
+                Contact.name.ilike(f"%{q_norm}%"),
+                Contact.email.ilike(f"%{q_norm}%"),
+                Contact.organization.ilike(f"%{q_norm}%"),
+            )
+        )
+    return query.order_by(Contact.name.asc()).all()
+
+
+@router.post("/diary/contacts", response_model=ContactResponse)
+def create_diary_contact(
+    payload: ContactCreate,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    name = payload.name.strip()
+    email = (payload.email or "").strip().lower()
+    if not name:
+        raise HTTPException(status_code=400, detail="Contact name is required.")
+
+    if not email:
+        existing_name = (
+            db.query(Contact)
+            .filter(
+                Contact.user_id == user.user_id,
+                func.lower(Contact.name) == name.lower(),
+            )
+            .first()
+        )
+        if existing_name:
+            raise HTTPException(
+                status_code=409,
+                detail="A contact with this name already exists. Add an email if this is a different person.",
+            )
+
+    if email:
+        existing_email = (
+            db.query(Contact)
+            .filter(Contact.user_id == user.user_id, func.lower(Contact.email) == email.lower())
+            .first()
+        )
+        if existing_email:
+            raise HTTPException(status_code=409, detail="A contact with this email already exists.")
+
+    now = datetime.now(timezone.utc)
+    contact = Contact(
+        user_id=user.user_id,
+        name=name,
+        email=email or None,
+        role=(payload.role or "").strip() or None,
+        organization=(payload.organization or "").strip() or None,
+        notes=(payload.notes or "").strip() or None,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+    if contact.email:
+        cache_coordinator.invalidate_contact(_tenant_id_for_user(user), user.user_id, contact.email)
+    _prewarm_action_chips_cache(db, user)
+    return contact
+
+
+@router.put("/diary/contacts/{contact_id}", response_model=ContactResponse)
+def update_diary_contact(
+    contact_id: int,
+    payload: ContactUpdate,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    contact = (
+        db.query(Contact)
+        .filter(Contact.id == contact_id, Contact.user_id == user.user_id)
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found.")
+
+    old_email = (contact.email or "").lower()
+    next_name = (payload.name.strip() if payload.name is not None else contact.name).strip()
+    if not next_name:
+        raise HTTPException(status_code=400, detail="Contact name cannot be empty.")
+
+    next_email = (payload.email if payload.email is not None else contact.email) or ""
+    next_email = next_email.strip().lower()
+
+    if next_email:
+        existing_email = (
+            db.query(Contact)
+            .filter(
+                Contact.user_id == user.user_id,
+                func.lower(Contact.email) == next_email.lower(),
+                Contact.id != contact.id,
+            )
+            .first()
+        )
+        if existing_email:
+            raise HTTPException(status_code=409, detail="A contact with this email already exists.")
+    else:
+        existing_name = (
+            db.query(Contact)
+            .filter(
+                Contact.user_id == user.user_id,
+                func.lower(Contact.name) == next_name.lower(),
+                Contact.id != contact.id,
+            )
+            .first()
+        )
+        if existing_name:
+            raise HTTPException(
+                status_code=409,
+                detail="A contact with this name already exists. Add an email if this is a different person.",
+            )
+
+    contact.name = next_name
+    contact.email = next_email or None
+    if payload.role is not None:
+        contact.role = payload.role.strip() or None
+    if payload.organization is not None:
+        contact.organization = payload.organization.strip() or None
+    if payload.notes is not None:
+        contact.notes = payload.notes.strip() or None
+    contact.updated_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(contact)
+    tenant_id = _tenant_id_for_user(user)
+    if old_email:
+        cache_coordinator.invalidate_contact(tenant_id, user.user_id, old_email)
+    if contact.email:
+        cache_coordinator.invalidate_contact(tenant_id, user.user_id, contact.email)
+    _prewarm_action_chips_cache(db, user)
+    return contact
+
+
+@router.delete("/diary/contacts/{contact_id}")
+def delete_diary_contact(
+    contact_id: int,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    contact = (
+        db.query(Contact)
+        .filter(Contact.id == contact_id, Contact.user_id == user.user_id)
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found.")
+    email = (contact.email or "").lower()
+    db.delete(contact)
+    db.commit()
+    if email:
+        cache_coordinator.invalidate_contact(_tenant_id_for_user(user), user.user_id, email)
+    _prewarm_action_chips_cache(db, user)
+    return {"deleted": True, "id": contact_id}
+
+
+@router.get("/diary/entity-references", response_model=List[EntityReferenceResponse])
+def list_entity_references(
+    entity_type: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    query = db.query(EntityReference).filter(EntityReference.user_id == user.user_id)
+    if entity_type:
+        query = query.filter(EntityReference.entity_type == entity_type)
+    if q:
+        q_norm = q.strip()
+        query = query.filter(
+            or_(
+                EntityReference.display_name.ilike(f"%{q_norm}%"),
+                EntityReference.ref.ilike(f"%{q_norm}%"),
+            )
+        )
+    return query.order_by(EntityReference.entity_type.asc(), EntityReference.display_name.asc()).all()
+
+
+@router.post("/diary/entity-references", response_model=EntityReferenceResponse)
+def create_entity_reference(
+    payload: EntityReferenceCreate,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    display_name = payload.display_name.strip()
+    ref = payload.ref.strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="Display name is required.")
+    if not ref:
+        raise HTTPException(status_code=400, detail="Reference is required.")
+
+    existing_name = (
+        db.query(EntityReference)
+        .filter(
+            EntityReference.user_id == user.user_id,
+            EntityReference.entity_type == payload.entity_type.value,
+            func.lower(EntityReference.display_name) == display_name.lower(),
+        )
+        .first()
+    )
+    if existing_name:
+        raise HTTPException(status_code=409, detail="An entity with this name already exists.")
+
+    existing_ref = (
+        db.query(EntityReference)
+        .filter(
+            EntityReference.user_id == user.user_id,
+            EntityReference.entity_type == payload.entity_type.value,
+            func.lower(EntityReference.ref) == ref.lower(),
+        )
+        .first()
+    )
+    if existing_ref:
+        raise HTTPException(status_code=409, detail="An entity with this reference already exists.")
+
+    now = datetime.now(timezone.utc)
+    entity = EntityReference(
+        user_id=user.user_id,
+        entity_type=payload.entity_type.value,
+        display_name=display_name,
+        ref=ref,
+        notes=(payload.notes or "").strip() or None,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(entity)
+    db.commit()
+    db.refresh(entity)
+    tenant_id = _tenant_id_for_user(user)
+    if entity.entity_type == "thread":
+        cache_coordinator.invalidate_thread(tenant_id, user.user_id, entity.ref)
+    elif entity.entity_type == "event":
+        cache_coordinator.invalidate_event(tenant_id, user.user_id, entity.ref)
+    elif entity.entity_type == "message":
+        cache_coordinator.invalidate_message(tenant_id, user.user_id, entity.ref)
+    _prewarm_action_chips_cache(db, user)
+    return entity
+
+
+@router.put("/diary/entity-references/{entity_id}", response_model=EntityReferenceResponse)
+def update_entity_reference(
+    entity_id: int,
+    payload: EntityReferenceUpdate,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    entity = (
+        db.query(EntityReference)
+        .filter(EntityReference.id == entity_id, EntityReference.user_id == user.user_id)
+        .first()
+    )
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity reference not found.")
+
+    old_ref = entity.ref
+    if payload.display_name is not None:
+        display_name = payload.display_name.strip()
+        if not display_name:
+            raise HTTPException(status_code=400, detail="Display name cannot be empty.")
+        existing_name = (
+            db.query(EntityReference)
+            .filter(
+                EntityReference.user_id == user.user_id,
+                EntityReference.entity_type == entity.entity_type,
+                func.lower(EntityReference.display_name) == display_name.lower(),
+                EntityReference.id != entity.id,
+            )
+            .first()
+        )
+        if existing_name:
+            raise HTTPException(status_code=409, detail="An entity with this name already exists.")
+        entity.display_name = display_name
+
+    if payload.ref is not None:
+        ref = payload.ref.strip()
+        if not ref:
+            raise HTTPException(status_code=400, detail="Reference cannot be empty.")
+        existing_ref = (
+            db.query(EntityReference)
+            .filter(
+                EntityReference.user_id == user.user_id,
+                EntityReference.entity_type == entity.entity_type,
+                func.lower(EntityReference.ref) == ref.lower(),
+                EntityReference.id != entity.id,
+            )
+            .first()
+        )
+        if existing_ref:
+            raise HTTPException(status_code=409, detail="An entity with this reference already exists.")
+        entity.ref = ref
+
+    if payload.notes is not None:
+        entity.notes = payload.notes.strip() or None
+
+    entity.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(entity)
+
+    tenant_id = _tenant_id_for_user(user)
+    refs_to_invalidate = {old_ref, entity.ref}
+    for ref in refs_to_invalidate:
+        if entity.entity_type == "thread":
+            cache_coordinator.invalidate_thread(tenant_id, user.user_id, ref)
+        elif entity.entity_type == "event":
+            cache_coordinator.invalidate_event(tenant_id, user.user_id, ref)
+        elif entity.entity_type == "message":
+            cache_coordinator.invalidate_message(tenant_id, user.user_id, ref)
+    _prewarm_action_chips_cache(db, user)
+    return entity
+
+
+@router.delete("/diary/entity-references/{entity_id}")
+def delete_entity_reference(
+    entity_id: int,
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user),
+):
+    entity = (
+        db.query(EntityReference)
+        .filter(EntityReference.id == entity_id, EntityReference.user_id == user.user_id)
+        .first()
+    )
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity reference not found.")
+
+    entity_type = entity.entity_type
+    ref = entity.ref
+    db.delete(entity)
+    db.commit()
+
+    tenant_id = _tenant_id_for_user(user)
+    if entity_type == "thread":
+        cache_coordinator.invalidate_thread(tenant_id, user.user_id, ref)
+    elif entity_type == "event":
+        cache_coordinator.invalidate_event(tenant_id, user.user_id, ref)
+    elif entity_type == "message":
+        cache_coordinator.invalidate_message(tenant_id, user.user_id, ref)
+    _prewarm_action_chips_cache(db, user)
+    return {"deleted": True, "id": entity_id}
 
 
 @router.get("/stats", response_model=VaultStatsResponse)

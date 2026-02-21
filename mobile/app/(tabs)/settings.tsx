@@ -144,6 +144,7 @@ export default function SettingsHubScreen() {
                             subtitle="Working hours, buffers, sync"
                             onPress={() => router.push('/settings/calendar' as any)}
                         />
+                        {/* DORMANT: Digests settings
                         <SettingRow
                             icon="mail-outline"
                             iconColor={Colors.accentSecondary}
@@ -151,6 +152,7 @@ export default function SettingsHubScreen() {
                             subtitle="Briefing delivery times"
                             onPress={() => router.push('/settings/digests' as any)}
                         />
+                        */}
                     </View>
                 </View>
 

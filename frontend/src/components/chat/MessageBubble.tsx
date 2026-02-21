@@ -1,6 +1,5 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { DonnaText } from "@/components/ui/DonnaText"
 
 interface MessageBubbleProps {
     role: 'user' | 'assistant' | 'system';
@@ -13,28 +12,35 @@ export function MessageBubble({ role, content, timestamp }: MessageBubbleProps) 
 
     return (
         <div className={cn(
-            "flex w-full mb-4",
+            "flex w-full teeks-bubble-in",
             isUser ? "justify-end" : "justify-start"
         )}>
             <div className={cn(
-                "max-w-[80%] p-3",
+                "max-w-[78%] px-[14px] py-[10px]",
                 isUser
-                    ? "bg-auburn text-white rounded-2xl rounded-tr-sm shadow-md"
-                    : "bg-white border border-border/40 text-foreground rounded-2xl rounded-tl-sm shadow-sm"
-            )}>
-                <DonnaText variant="body" className={cn(
-                    "text-sm whitespace-pre-wrap",
+                    // User: Peony (#C2185B via --primary), send corner collapses — design_system.md §5
+                    ? "bg-primary text-primary-foreground rounded-2xl rounded-br-[4px] shadow-sm"
+                    // Assistant: white surface, hairline border, receive corner collapses
+                    : "bg-white border border-border text-foreground rounded-2xl rounded-bl-[4px]"
+            )}
+            style={!isUser ? { boxShadow: '0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)' } : undefined}
+            >
+                <p className={cn(
+                    "text-sm leading-[1.55] whitespace-pre-wrap font-inter",
                     isUser ? "text-white" : "text-foreground"
                 )}>
                     {content}
-                </DonnaText>
+                </p>
                 {timestamp && (
-                    <div className={cn(
-                        "text-[10px] mt-1 opacity-70",
-                        isUser ? "text-white/80 text-right" : "text-muted-foreground"
-                    )}>
+                    <time
+                        dateTime={timestamp}
+                        className={cn(
+                            "block text-[10px] mt-1.5 font-inter",
+                            isUser ? "text-right text-white/60" : "text-muted-foreground/70"
+                        )}
+                    >
                         {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </div>
+                    </time>
                 )}
             </div>
         </div>

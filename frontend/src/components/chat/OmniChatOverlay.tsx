@@ -54,8 +54,9 @@ export function OmniChatOverlay() {
         inputValue,
         setInputValue,
         inputRef,
+        sessionId: currentSessionId || "default",
         onMentionSelected: (mention) => {
-            trackUIEvent("mention_selected", { mention_type: mention.type, source: "overlay" })
+            trackUIEvent("mention_selected", { mention_type: mention.kind, source: "overlay" })
         },
     })
 

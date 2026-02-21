@@ -1,6 +1,7 @@
 ﻿from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from enum import Enum
 
 class MessageBase(BaseModel):
     subject: str
@@ -255,6 +256,7 @@ class ManualTaskCreateRequest(BaseModel):
     description: Optional[str] = None
     priority: str = "normal"
     deadline: Optional[datetime] = None
+    status: str = "approved"
 
 
 class TaskUpdateRequest(BaseModel):
@@ -555,6 +557,164 @@ class ContactContextListResponse(BaseModel):
     total: int
 
 
+
+# ========================================
+# Structured Memory / Diary Schemas
+# ========================================
+
+class ContextType(str, Enum):
+    decision = "decision"
+    commitment = "commitment"
+    preferences = "preferences"
+    insight = "insight"
+    relationships = "relationships"
+
+
+class ContextEntityType(str, Enum):
+    assistant = "assistant"
+    contact = "contact"
+    thread = "thread"
+    message = "message"
+    event = "event"
+    executive = "executive"
+
+
+class ContextCreatedBy(str, Enum):
+    teeks = "Teeks"
+    you = "You"
+
+
+class ContextImportanceLevel(str, Enum):
+    low = "low"
+    normal = "normal"
+    high = "high"
+
+
+class ContextEntryStatus(str, Enum):
+    active = "active"
+    resolved = "resolved"
+    stale = "stale"
+    archived = "archived"
+
+
+class ContextEntryBase(BaseModel):
+    user_id: str
+    type: ContextType
+    content: str
+    entity_type: ContextEntityType
+    entity_id: Optional[str] = None
+    created_by: ContextCreatedBy
+    created_at: datetime
+    importance_level: ContextImportanceLevel = ContextImportanceLevel.normal
+    status: ContextEntryStatus = ContextEntryStatus.active
+    expires_at: Optional[datetime] = None
+
+
+class DiaryEntryLinkSchema(BaseModel):
+    entity_type: str
+    entity_id: str
+    display_name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContextEntryCreate(BaseModel):
+    type: ContextType
+    content: str
+    entity_type: ContextEntityType = ContextEntityType.executive
+    entity_id: Optional[str] = None
+    created_by: ContextCreatedBy = ContextCreatedBy.you
+    importance_level: ContextImportanceLevel = ContextImportanceLevel.normal
+    status: ContextEntryStatus = ContextEntryStatus.active
+    expires_at: Optional[datetime] = None
+    links: List[DiaryEntryLinkSchema] = []
+
+
+class ContextEntryUpdate(BaseModel):
+    content: Optional[str] = None
+    importance_level: Optional[ContextImportanceLevel] = None
+    status: Optional[ContextEntryStatus] = None
+    expires_at: Optional[datetime] = None
+
+
+class ContextEntryResponse(ContextEntryBase):
+    id: int
+    updated_at: datetime
+    links: List[DiaryEntryLinkSchema] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContactCreate(BaseModel):
+    name: str
+    email: Optional[str] = None
+    role: Optional[str] = None
+    organization: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ContactUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    organization: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ContactResponse(BaseModel):
+    id: int
+    user_id: str
+    name: str
+    email: Optional[str] = None
+    role: Optional[str] = None
+    organization: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EntityReferenceType(str, Enum):
+    thread = "thread"
+    message = "message"
+    event = "event"
+
+
+class EntityReferenceCreate(BaseModel):
+    entity_type: EntityReferenceType
+    display_name: str
+    ref: str
+    notes: Optional[str] = None
+
+
+class EntityReferenceUpdate(BaseModel):
+    display_name: Optional[str] = None
+    ref: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class EntityReferenceResponse(BaseModel):
+    id: int
+    user_id: str
+    entity_type: EntityReferenceType
+    display_name: str
+    ref: str
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MentionSuggestionResponse(BaseModel):
+    kind: str
+    ref: str
+    label: str
+    display_label: Optional[str] = None
+    subtitle: Optional[str] = None
+
+
 # ========================================
 # Vault Schemas
 # ========================================
@@ -633,55 +793,6 @@ class VaultProposalsListResponse(BaseModel):
 class VaultProposalRejectRequest(BaseModel):
     reason: Optional[str] = None
     category: str = Field(pattern="^(not_relevant|duplicate|inaccurate|too_minor|other)$")
-
-
-class ContactPromoteRequest(BaseModel):
-    display_name: Optional[str] = None
-
-
-class MentionableContactItem(BaseModel):
-    email: str
-    name: Optional[str] = None
-    aliases: List[str] = []
-    vault_note_id: Optional[int] = None
-
-
-class MentionableContactsResponse(BaseModel):
-    contacts: List[MentionableContactItem]
-
-
-class MentionableEmailItem(BaseModel):
-    message_id: int
-    subject: Optional[str] = None
-    sender: Optional[str] = None
-    thread_id: Optional[str] = None
-    received_at: Optional[datetime] = None
-    label: str
-
-
-class MentionableEmailsResponse(BaseModel):
-    emails: List[MentionableEmailItem]
-
-
-class MentionableNoteItem(BaseModel):
-    note_id: int
-    slug: str
-    note_type: str
-    title: str
-    label: str
-
-
-class MentionableNotesResponse(BaseModel):
-    notes: List[MentionableNoteItem]
-
-
-class MeetingPrepResponse(BaseModel):
-    summary: str
-    participants: List[str] = []
-    open_items: List[str] = []
-    decisions: List[str] = []
-    related_threads: List[Dict[str, Any]] = []
-    warnings: List[str] = []
 
 
 class VaultStatsResponse(BaseModel):

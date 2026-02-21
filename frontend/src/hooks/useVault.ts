@@ -3,49 +3,32 @@ import {
   fetchVaultNotes,
   createVaultNote,
   updateVaultNote,
-  fetchVaultProposals,
-  bulkApproveVaultProposals,
-  approveVaultProposal,
-  rejectVaultProposal,
-  fetchVaultContactCandidates,
-  promoteVaultContact,
-  fetchVaultStats,
+  fetchDiaryContextEntries,
+  createDiaryContextEntry,
+  deleteDiaryContextEntry,
+  fetchDiaryContacts,
+  createDiaryContact,
+  deleteDiaryContact,
   VaultNoteType,
+  DiaryEntryType,
+  DiaryImportance,
+  DiaryEntryLink,
 } from "@/services/vault";
 
 export const vaultKeys = {
   all: ["vault"] as const,
   notes: (params?: Record<string, unknown>) => [...vaultKeys.all, "notes", params] as const,
-  proposals: (status = "pending") => [...vaultKeys.all, "proposals", status] as const,
-  contacts: () => [...vaultKeys.all, "contacts"] as const,
-  stats: () => [...vaultKeys.all, "stats"] as const,
+};
+
+export const diaryKeys = {
+  entries: (params?: Record<string, unknown>) => ["diary", "entries", params] as const,
+  contacts: (q?: string) => ["diary", "contacts", q] as const,
 };
 
 export function useVaultNotes(params?: { note_type?: VaultNoteType; q?: string; limit?: number; offset?: number }) {
   return useQuery({
     queryKey: vaultKeys.notes(params),
     queryFn: () => fetchVaultNotes(params),
-  });
-}
-
-export function useVaultProposals(status = "pending") {
-  return useQuery({
-    queryKey: vaultKeys.proposals(status),
-    queryFn: () => fetchVaultProposals(status),
-  });
-}
-
-export function useVaultContacts() {
-  return useQuery({
-    queryKey: vaultKeys.contacts(),
-    queryFn: fetchVaultContactCandidates,
-  });
-}
-
-export function useVaultStats() {
-  return useQuery({
-    queryKey: vaultKeys.stats(),
-    queryFn: fetchVaultStats,
   });
 }
 
@@ -65,23 +48,55 @@ export function useVaultMutations() {
         updateVaultNote(noteId, payload),
       onSuccess: invalidateAll,
     }),
-    approveProposal: useMutation({
-      mutationFn: approveVaultProposal,
-      onSuccess: invalidateAll,
-    }),
-    bulkApprove: useMutation({
-      mutationFn: bulkApproveVaultProposals,
-      onSuccess: invalidateAll,
-    }),
-    rejectProposal: useMutation({
-      mutationFn: ({ id, payload }: { id: number; payload: { category: string; reason?: string } }) =>
-        rejectVaultProposal(id, payload),
-      onSuccess: invalidateAll,
-    }),
-    promoteContact: useMutation({
-      mutationFn: ({ email, display_name }: { email: string; display_name?: string }) =>
-        promoteVaultContact(email, display_name),
-      onSuccess: invalidateAll,
-    }),
   };
+}
+
+// ── Diary hooks ─────────────────────────────────────────────────────────────
+
+export function useDiaryEntries(params?: { type?: DiaryEntryType }) {
+  return useQuery({
+    queryKey: diaryKeys.entries(params),
+    queryFn: () => fetchDiaryContextEntries(params),
+  });
+}
+
+export function useDiaryContacts(q?: string) {
+  return useQuery({
+    queryKey: diaryKeys.contacts(q),
+    queryFn: () => fetchDiaryContacts(q),
+  });
+}
+
+export function useDiaryMutations() {
+  const qc = useQueryClient();
+  const invalidateEntries = () => qc.invalidateQueries({ queryKey: ["diary", "entries"] });
+  const invalidateContacts = () => qc.invalidateQueries({ queryKey: ["diary", "contacts"] });
+
+  const createEntry = useMutation({
+    mutationFn: (payload: {
+      type: DiaryEntryType;
+      content: string;
+      importance_level?: DiaryImportance;
+      links?: DiaryEntryLink[];
+    }) => createDiaryContextEntry(payload),
+    onSuccess: invalidateEntries,
+  });
+
+  const deleteEntry = useMutation({
+    mutationFn: (id: number) => deleteDiaryContextEntry(id),
+    onSuccess: invalidateEntries,
+  });
+
+  const createContact = useMutation({
+    mutationFn: (payload: { name: string; email?: string | null; role?: string | null; organization?: string | null; notes?: string | null }) =>
+      createDiaryContact(payload),
+    onSuccess: invalidateContacts,
+  });
+
+  const deleteContact = useMutation({
+    mutationFn: (id: number) => deleteDiaryContact(id),
+    onSuccess: invalidateContacts,
+  });
+
+  return { createEntry, deleteEntry, createContact, deleteContact };
 }
