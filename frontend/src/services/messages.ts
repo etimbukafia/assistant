@@ -41,7 +41,7 @@ export interface Task {
     type?: string;
     task_signal?: string;
     priority: 'urgent' | 'high' | 'normal' | 'low';
-    status: 'pending_approval' | 'approved' | 'in_progress' | 'completed' | 'dismissed' | 'waiting_for';
+    status: 'pending_approval' | 'approved' | 'in_progress' | 'completed' | 'dismissed';
     approved_at?: string;
     completed_at?: string;
     dismissed_at?: string;

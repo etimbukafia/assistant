@@ -35,7 +35,6 @@ export function TaskItem({
     const isCompleted = task.status === "completed";
     const isDismissed = task.status === "dismissed";
     const isPending = task.status === "pending_approval";
-    const isWaiting = task.status === "waiting_for";
     const isActive = task.status === "approved" || task.status === "in_progress";
     const isSelectable = Boolean(onSelect) && (isPending || (allowSelectActive && isActive));
 
@@ -58,20 +57,16 @@ export function TaskItem({
                     }
                     : undefined
             }
-            className={`w-full text-left flex items-center gap-3 rounded-[8px] px-3 py-2.5 transition-all duration-150 border ${
-                isClickable
-                    // focus ring uses --primary (Peony), not auburn — design_system.md §1
-                    ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 hover:-translate-y-px"
-                    : "cursor-default"
-            } ${
-                isCompleted || isDismissed
+            className={`w-full text-left flex items-center gap-3 rounded-[8px] px-3 py-2.5 transition-all duration-150 border ${isClickable
+                // focus ring uses --primary (Peony), not auburn — design_system.md §1
+                ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 hover:-translate-y-px"
+                : "cursor-default"
+                } ${isCompleted || isDismissed
                     ? "opacity-50 border-border/40 bg-linen/60"
                     : isPending
-                    ? "border-dashed border-copper/60 bg-white"
-                    : isWaiting
-                    ? "border-teal/40 bg-white"
-                    : "border-border/60 bg-white"
-            }`}
+                        ? "border-dashed border-copper/60 bg-white"
+                        : "border-border/60 bg-white"
+                }`}
             style={!isCompleted && !isDismissed ? { boxShadow: CARD_SHADOW } : undefined}
         >
             {isSelectable && (
@@ -81,9 +76,8 @@ export function TaskItem({
                         stop(event);
                         onSelect?.(task.id);
                     }}
-                    className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                        selected ? "bg-obsidian border-obsidian" : "border-border/60 hover:border-obsidian/50"
-                    }`}
+                    className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${selected ? "bg-obsidian border-obsidian" : "border-border/60 hover:border-obsidian/50"
+                        }`}
                     aria-label={selected ? "Deselect task" : "Select task"}
                 >
                     {selected && <Check size={10} className="text-white" />}
@@ -92,23 +86,21 @@ export function TaskItem({
 
             {/* Status circle */}
             <div
-                className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center ${
-                    isCompleted
-                        ? "bg-sage border-sage"
-                        : isPending
+                className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center ${isCompleted
+                    ? "bg-sage border-sage"
+                    : isPending
                         ? "border-copper border-dashed"
                         : isActive
-                        ? "border-sage/60"
-                        : "border-faint/50"
-                }`}
+                            ? "border-sage/60"
+                            : "border-faint/50"
+                    }`}
             >
                 {isCompleted && <Check size={10} className="text-white" />}
             </div>
 
             <div className="flex-1 min-w-0">
-                <span className={`text-sm font-inter ${
-                    isCompleted ? "line-through text-faint" : "text-obsidian"
-                }`}>
+                <span className={`text-sm font-inter ${isCompleted ? "line-through text-faint" : "text-obsidian"
+                    }`}>
                     {task.title}
                 </span>
             </div>
@@ -142,15 +134,6 @@ export function TaskItem({
                             <Check size={10} />
                         </button>
                     </>
-                )}
-                {isWaiting && onStart && (
-                    <button
-                        type="button"
-                        onClick={(event) => { stop(event); onStart?.(task.id); }}
-                        className="text-[11px] font-semibold px-2 py-1 rounded-[6px] border border-teal/30 text-teal hover:bg-teal/10 transition-colors font-inter"
-                    >
-                        Start
-                    </button>
                 )}
                 {isActive && onComplete && (
                     <button

@@ -20,14 +20,14 @@ import { Plus } from "lucide-react";
 const PAGE_SIZE = 5;
 const CARD_SHADOW = '0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)';
 
-type TaskTab = "inbox" | "active" | "waiting" | "done";
+type TaskTab = "inbox" | "active" | "today";
+type TodayStatus = "all" | "pending" | "active" | "done";
 type SortMode = "default" | "priority" | "deadline";
 
 const TAB_LABELS: Record<TaskTab, string> = {
     inbox: "Pending",
     active: "Active",
-    waiting: "Waiting",
-    done: "Done",
+    today: "Today",
 };
 
 const SORT_LABELS: Record<SortMode, string> = {
@@ -36,11 +36,32 @@ const SORT_LABELS: Record<SortMode, string> = {
     deadline: "Deadline",
 };
 
-const FILTER_BY_TAB: Record<TaskTab, { status?: string[]; priority?: string[] }> = {
+// «today» has no status filter here — it uses today_start/today_end instead
+const FILTER_BY_TAB: Record<TaskTab, { status?: string[] }> = {
     inbox: { status: ["pending_approval"] },
     active: { status: ["approved", "in_progress"] },
-    waiting: { status: ["waiting_for"] },
-    done: { status: ["completed"] },
+    today: { status: undefined }, // all non-dismissed, filtered by date
+};
+
+// Returns [start, end] ISO strings for the current local day
+function todayRange(): [string, string] {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+    return [start.toISOString(), end.toISOString()];
+}
+
+const TODAY_STATUS_LABELS: Record<TodayStatus, string> = {
+    all: "All",
+    pending: "Pending",
+    active: "In Progress",
+    done: "Done",
+};
+const TODAY_STATUS_FILTER: Record<TodayStatus, string[] | undefined> = {
+    all: undefined,
+    pending: ["pending_approval"],
+    active: ["approved", "in_progress"],
+    done: ["completed"],
 };
 
 const toLocalInputValue = (iso: string) => {
@@ -63,18 +84,15 @@ const tabClasses: Record<TaskTab, { active: string; idle: string }> = {
         active: "border-sage bg-sage text-white",
         idle: "border-sage/30 text-sage/80 hover:border-sage/60 hover:text-sage",
     },
-    waiting: {
-        active: "border-teal bg-teal text-white",
-        idle: "border-teal/30 text-teal/80 hover:border-teal/60 hover:text-teal",
-    },
-    done: {
-        active: "border-obsidian bg-obsidian text-white",
-        idle: "border-obsidian/30 text-obsidian/60 hover:border-obsidian/60 hover:text-obsidian",
+    today: {
+        active: "border-primary bg-primary text-white",
+        idle: "border-primary/30 text-primary/80 hover:border-primary/60 hover:text-primary",
     },
 };
 
 export const ActiveTasksList = () => {
     const [activeTab, setActiveTab] = useState<TaskTab>("inbox");
+    const [todayStatus, setTodayStatus] = useState<TodayStatus>("all");
     const [sortMode, setSortMode] = useState<SortMode>("default");
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
     const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
@@ -88,32 +106,42 @@ export const ActiveTasksList = () => {
     const [createDescription, setCreateDescription] = useState("");
     const [createPriority, setCreatePriority] = useState<Task["priority"]>("normal");
     const [createDeadline, setCreateDeadline] = useState("");
-    const [createStatus, setCreateStatus] = useState<"approved" | "waiting_for">("approved");
+    const [createStatus] = useState<"approved">("approved");
 
     const { approve, dismiss, complete, start, update, createManual, isAnyPending } = useTaskMutations();
     const statsQuery = useTaskStats();
 
     const queryFilters = FILTER_BY_TAB[activeTab];
+    const [todayStart, todayEnd] = todayRange();
+
+    // For "today" tab apply sub-status filter on top
+    const effectiveStatus = activeTab === "today"
+        ? TODAY_STATUS_FILTER[todayStatus]
+        : queryFilters.status;
 
     const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage } = useInfiniteQuery({
         queryKey: [
             "tasks",
             activeTab,
-            queryFilters.status?.join(",") ?? null,
-            queryFilters.priority?.join(",") ?? null,
+            effectiveStatus?.join(",") ?? null,
+            activeTab === "today" ? todayStatus : null,
         ],
         initialPageParam: 0,
         queryFn: ({ pageParam }) =>
             getTasksInfinite({
                 pageParam,
                 pageSize: PAGE_SIZE,
-                status: queryFilters.status,
-                priority: queryFilters.priority,
+                status: effectiveStatus,
+                ...(activeTab === "today" && { today_start: todayStart, today_end: todayEnd }),
             }),
         getNextPageParam: (lastPage) => lastPage.nextPage,
     });
 
-    const tasks = useMemo(() => data?.pages.flatMap((page) => page.tasks ?? []) ?? [], [data]);
+    // Client-side: always hide dismissed tasks regardless of tab
+    const tasks = useMemo(
+        () => (data?.pages.flatMap((page) => page.tasks ?? []) ?? []).filter((t) => t.status !== "dismissed"),
+        [data]
+    );
 
     const sortedTasks = useMemo(() => {
         const priorityWeight: Record<Task["priority"], number> = {
@@ -135,7 +163,7 @@ export const ActiveTasksList = () => {
 
         // default: status weight → priority → deadline
         const statusWeight: Record<Task["status"], number> = {
-            pending_approval: 0, approved: 1, in_progress: 1, waiting_for: 2, completed: 3, dismissed: 4,
+            pending_approval: 0, approved: 1, in_progress: 1, completed: 3, dismissed: 4,
         };
         return list.sort((a, b) => {
             const statusDelta = statusWeight[a.status] - statusWeight[b.status];
@@ -209,53 +237,75 @@ export const ActiveTasksList = () => {
     const counts: Record<TaskTab, number> = {
         inbox: safeCount(stats?.pending_approval),
         active: safeCount(stats ? stats.approved + stats.in_progress : 0),
-        waiting: safeCount(stats?.waiting_for ?? 0),
-        done: safeCount(stats?.completed),
+        today: 0, // Today badge would require a separate stat query; omit for now
     };
 
     const handleSaveDetails = () => {
         if (!selectedTask) return;
-        const payload: {
-            title?: string; description?: string; priority?: "urgent" | "high" | "normal" | "low";
-            deadline?: string | null; confirm_deadline?: boolean; clear_deadline?: boolean;
-            scheduled_reminder_at?: string | null;
-        } = {};
-
-        if (draftTitle.trim() && draftTitle.trim() !== selectedTask.title) payload.title = draftTitle.trim();
-        if ((draftDescription ?? "") !== (selectedTask.description ?? "")) payload.description = draftDescription;
+        // Task is still an optimistic placeholder — real id not yet assigned by server
+        if (selectedTask.id < 0) return;
 
         const currentImportant = selectedTask.priority === "urgent" || selectedTask.priority === "high";
+
+        const payload: {
+            title?: string;
+            description?: string;
+            priority?: "urgent" | "high" | "normal" | "low";
+            deadline?: string | null;
+            confirm_deadline?: boolean;
+            clear_deadline?: boolean;
+            scheduled_reminder_at?: string | null;
+        } = {
+            // Always send current draft values — backend no-ops unchanged fields
+            title: draftTitle.trim() || selectedTask.title,
+            description: draftDescription,
+        };
+
+        // Priority: map important toggle → priority string
         if (draftImportant !== currentImportant) {
             payload.priority = draftImportant
                 ? (selectedTask.priority === "urgent" ? "urgent" : "high")
                 : "normal";
         }
 
-        const currentDeadline = selectedTask.deadline_at ? toLocalInputValue(selectedTask.deadline_at) : "";
-        if (draftDeadline !== currentDeadline) {
-            if (draftDeadline) { payload.deadline = new Date(draftDeadline).toISOString(); payload.confirm_deadline = true; }
-            else if (selectedTask.deadline_at) { payload.clear_deadline = true; }
+        // Deadline
+        const currentDeadlineLocal = selectedTask.deadline_at ? toLocalInputValue(selectedTask.deadline_at) : "";
+        if (draftDeadline !== currentDeadlineLocal) {
+            if (draftDeadline) {
+                payload.deadline = new Date(draftDeadline).toISOString();
+                payload.confirm_deadline = true;
+            } else {
+                // Always send clear_deadline when field is empty — backend no-ops if no deadline exists
+                payload.clear_deadline = true;
+            }
         }
 
-        const currentReminder = selectedTask.scheduled_reminder_at ? toLocalInputValue(selectedTask.scheduled_reminder_at) : "";
-        if (draftReminder !== currentReminder) {
-            payload.scheduled_reminder_at = draftReminder ? new Date(draftReminder).toISOString() : null;
+        // Reminder
+        const currentReminderLocal = selectedTask.scheduled_reminder_at
+            ? toLocalInputValue(selectedTask.scheduled_reminder_at)
+            : "";
+        if (draftReminder !== currentReminderLocal) {
+            payload.scheduled_reminder_at = draftReminder
+                ? new Date(draftReminder).toISOString()
+                : null;
         }
 
-        if (Object.keys(payload).length) update.mutate({ taskId: selectedTask.id, data: payload });
+        update.mutate({ taskId: selectedTask.id, data: payload });
+        setDetailTaskId(null);
     };
 
-    const handleCreateTask = async () => {
+    const handleCreateTask = () => {
         if (!createTitle.trim()) return;
-        await createManual.mutateAsync({
+        // Close and reset immediately — optimistic update handles the list
+        setCreateOpen(false);
+        setCreateTitle(""); setCreateDescription(""); setCreatePriority("normal"); setCreateDeadline("");
+        createManual.mutate({
             title: createTitle.trim(),
             description: createDescription.trim() ? createDescription.trim() : undefined,
             priority: createPriority,
-            deadline_at: createDeadline ? new Date(createDeadline).toISOString() : undefined,
+            deadline: createDeadline ? new Date(createDeadline).toISOString() : undefined,
             status: createStatus,
         });
-        setCreateTitle(""); setCreateDescription(""); setCreatePriority("normal"); setCreateDeadline(""); setCreateStatus("approved");
-        setCreateOpen(false);
     };
 
     return (
@@ -285,7 +335,7 @@ export const ActiveTasksList = () => {
                             <button
                                 key={tab}
                                 type="button"
-                                onClick={() => { setActiveTab(tab); setSortMode("default"); }}
+                                onClick={() => { setActiveTab(tab); setSortMode("default"); setTodayStatus("all"); }}
                                 className={`${tabBase} ${activeTab === tab ? tabClasses[tab].active : tabClasses[tab].idle}`}
                             >
                                 {label}
@@ -294,26 +344,46 @@ export const ActiveTasksList = () => {
                     })}
                 </div>
 
-                {/* Sort controls */}
-                <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
-                        Sort
-                    </span>
-                    {(Object.keys(SORT_LABELS) as SortMode[]).map((mode) => (
-                        <button
-                            key={mode}
-                            type="button"
-                            onClick={() => setSortMode(mode)}
-                            className={`${sortBase} ${
-                                sortMode === mode
+                {/* Secondary controls: Today status chips OR sort buttons */}
+                {activeTab === "today" ? (
+                    <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                            Show
+                        </span>
+                        {(Object.keys(TODAY_STATUS_LABELS) as TodayStatus[]).map((s) => (
+                            <button
+                                key={s}
+                                type="button"
+                                onClick={() => setTodayStatus(s)}
+                                className={`${sortBase} ${todayStatus === s
+                                    ? "border-primary/50 bg-primary/[0.08] text-primary"
+                                    : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
+                                    }`}
+                            >
+                                {TODAY_STATUS_LABELS[s]}
+                            </button>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                            Sort
+                        </span>
+                        {(Object.keys(SORT_LABELS) as SortMode[]).map((mode) => (
+                            <button
+                                key={mode}
+                                type="button"
+                                onClick={() => setSortMode(mode)}
+                                className={`${sortBase} ${sortMode === mode
                                     ? "border-obsidian/40 bg-obsidian/[0.06] text-obsidian"
                                     : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
-                            }`}
-                        >
-                            {SORT_LABELS[mode]}
-                        </button>
-                    ))}
-                </div>
+                                    }`}
+                            >
+                                {SORT_LABELS[mode]}
+                            </button>
+                        ))}
+                    </div>
+                )}
             </div>
 
             {/* ── Batch action bar ── */}
@@ -485,9 +555,11 @@ export const ActiveTasksList = () => {
                                 <button
                                     type="button"
                                     onClick={handleSaveDetails}
-                                    className="rounded-[8px] border border-border px-4 py-2 text-[13px] font-semibold text-foreground hover:bg-linen active:scale-[0.97] transition-all font-inter"
+                                    disabled={!!selectedTask && selectedTask.id < 0}
+                                    title={selectedTask && selectedTask.id < 0 ? "Saving task…" : undefined}
+                                    className="rounded-[8px] border border-border px-4 py-2 text-[13px] font-semibold text-foreground hover:bg-linen active:scale-[0.97] transition-all font-inter disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
-                                    Save changes
+                                    {selectedTask && selectedTask.id < 0 ? "Saving…" : "Save changes"}
                                 </button>
                             </div>
                         </div>
@@ -527,37 +599,23 @@ export const ActiveTasksList = () => {
                                 className="font-inter"
                             />
                         </div>
-                        <div className="grid grid-cols-3 gap-4">
-                            <div className="space-y-1.5">
-                                <Label htmlFor="create-status" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Status</Label>
-                                <select
-                                    id="create-status"
-                                    value={createStatus}
-                                    onChange={(e) => setCreateStatus(e.target.value as "approved" | "waiting_for")}
-                                    className="h-9 w-full rounded-[8px] border border-border bg-white px-3 text-sm text-obsidian font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
-                                >
-                                    <option value="approved">Active</option>
-                                    <option value="waiting_for">Waiting</option>
-                                </select>
-                            </div>
-                            <div className="space-y-1.5">
-                                <Label htmlFor="create-priority" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Priority</Label>
-                                <select
-                                    id="create-priority"
-                                    value={createPriority}
-                                    onChange={(e) => setCreatePriority(e.target.value as Task["priority"])}
-                                    className="h-9 w-full rounded-[8px] border border-border bg-white px-3 text-sm text-obsidian font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
-                                >
-                                    <option value="urgent">Urgent</option>
-                                    <option value="high">High</option>
-                                    <option value="normal">Normal</option>
-                                    <option value="low">Low</option>
-                                </select>
-                            </div>
-                            <div className="space-y-1.5">
-                                <Label htmlFor="create-deadline" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Deadline</Label>
-                                <Input id="create-deadline" type="datetime-local" value={createDeadline} onChange={(e) => setCreateDeadline(e.target.value)} className="font-inter" />
-                            </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="create-priority" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Priority</Label>
+                            <select
+                                id="create-priority"
+                                value={createPriority}
+                                onChange={(e) => setCreatePriority(e.target.value as Task["priority"])}
+                                className="h-9 w-full rounded-[8px] border border-border bg-white px-3 text-sm text-obsidian font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
+                            >
+                                <option value="urgent">Urgent</option>
+                                <option value="high">High</option>
+                                <option value="normal">Normal</option>
+                                <option value="low">Low</option>
+                            </select>
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="create-deadline" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Deadline</Label>
+                            <Input id="create-deadline" type="datetime-local" value={createDeadline} onChange={(e) => setCreateDeadline(e.target.value)} className="font-inter" />
                         </div>
                         <div className="flex flex-wrap gap-2 pt-1">
                             <button

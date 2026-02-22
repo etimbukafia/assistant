@@ -9,8 +9,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
+import hashlib
 import json
 import logging
+import os
+import re
 import time
 
 from google.genai import types as genai_types
@@ -22,11 +25,10 @@ from .tools import ChatToolRegistry, ToolResult
 from app.services.genai_client import get_genai_client
 from app.services.context_assembler import ContextAssembler
 from app.services.hot_context_cache import get_hot_context_cache_service
+from app.services.telemetry_writer import get_telemetry_writer
 from app.services.warm_cache import get_warm_cache_service
-from app.services.chat_metrics import build_prompt_text, record_chat_model_metric
 from app.security.prompt_sanitizer import detect_injection_patterns
 from app.security.security_logger import log_injection_attempt
-from core.llm.token_tracking import record_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,10 @@ SHORT_DETAIL_HINTS = {
     "one line",
     "concise",
 }
+CHAT_METRICS_SAMPLE_RATE = max(0.0, min(1.0, float(os.getenv("CHAT_METRICS_SAMPLE_RATE", "1.0"))))
+CHAT_METRICS_PROMPT_MAX_MESSAGES = max(1, int(os.getenv("CHAT_METRICS_PROMPT_MAX_MESSAGES", "6")))
+CHAT_METRICS_PROMPT_MAX_TOTAL_CHARS = max(512, int(os.getenv("CHAT_METRICS_PROMPT_MAX_TOTAL_CHARS", "4096")))
+CHAT_METRICS_PROMPT_MAX_CONTENT_CHARS = max(120, int(os.getenv("CHAT_METRICS_PROMPT_MAX_CONTENT_CHARS", "420")))
 
 # Module-level cached LLM orchestrator (avoids re-init per request)
 _chat_llm = None
@@ -220,15 +226,7 @@ class ChatOrchestrator:
         Returns:
             Dict with 'response', 'pending_actions', 'state_updates'
         """
-        try:
-            return await self._process_message_internal(session, user_message, mention_context=mention_context or {})
-        except Exception as e:
-            logger.error(f"Unexpected error in process_message: {e}", exc_info=True)
-            return {
-                "response": "I apologize, but I encountered an unexpected error. Please try again.",
-                "pending_actions": [],
-                "state": {}
-            }
+        return await self._process_message_internal(session, user_message, mention_context=mention_context or {})
 
     async def _process_message_internal(
         self,
@@ -237,6 +235,7 @@ class ChatOrchestrator:
         mention_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Internal message processing with full error context."""
+        orchestrator_started = time.perf_counter()
         injection_patterns = detect_injection_patterns(user_message)
         if injection_patterns:
             log_injection_attempt(
@@ -283,12 +282,14 @@ class ChatOrchestrator:
             user_name=self.user_name,
         )
         task_context = self._build_task_context_from_state(state)
+        assembly_started = time.perf_counter()
         layers, context_trace = assembler.build_layers_with_trace(
             task_context=task_context,
             include_task=include_task_layer,
             include_session=False,  # Chat history is already injected from DB messages.
             include_structured=include_structured_layer,
         )
+        context_assembly_ms = int((time.perf_counter() - assembly_started) * 1000)
         context_trace["assembly_policy"] = {
             "include_task": include_task_layer,
             "include_structured": include_structured_layer,
@@ -313,36 +314,61 @@ class ChatOrchestrator:
         }
         assembler.log_context_trace(context_trace, user_message)
 
-        messages = [{"role": "system", "content": mode.system_prompt}]
-        layered_payload = {
-            "task": layers.task,
-            "structured": layers.structured,
-        }
-        if layered_payload["task"] or layered_payload["structured"]:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Layered memory JSON: {json.dumps(layered_payload, ensure_ascii=True, separators=(',', ':'))}",
-                }
+        messages = [
+            {
+                "role": "system",
+                "content": self._system_prompt_for_turn(mode.system_prompt, tools_allowed_this_turn),
+            }
+        ]
+        if self._is_smalltalk_minimal(user_message, mention_context or {}):
+            # Ultra-lean prompt for short, no-context smalltalk to cut latency.
+            messages = [
+                {"role": "system", "content": "You are Teeks. Keep responses friendly and under 20 words."},
+                {"role": "user", "content": user_message},
+            ]
+            response_profile = ResponseProfile(
+                task_type="chat",
+                artifact="none",
+                depth="micro",
+                format_style="paragraph",
+                max_output_tokens=80,
+                retry_max_output_tokens=80,
+                enable_richness_retry=False,
             )
-        if mention_context:
-            safe_context = json.dumps(mention_context, ensure_ascii=True, separators=(",", ":"))
-            messages.append({"role": "system", "content": f"Resolved mention context JSON: {safe_context}"})
-        if not tools_allowed_this_turn:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": "Do not call tools on this turn. Respond directly using only the conversation text.",
-                }
-            )
-        messages.append({"role": "system", "content": self._build_response_profile_instruction(response_profile)})
-        for msg in history:
-            messages.append({"role": msg["role"], "content": msg["content"]})
-        messages.append({"role": "user", "content": user_message})
+            tools_allowed_this_turn = False
+        else:
+            layered_payload = {
+                "task": layers.task,
+                "structured": layers.structured,
+            }
+            if layered_payload["task"] or layered_payload["structured"]:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": f"Layered memory JSON: {json.dumps(layered_payload, ensure_ascii=True, separators=(',', ':'))}",
+                    }
+                )
+            if mention_context:
+                safe_context = json.dumps(mention_context, ensure_ascii=True, separators=(",", ":"))
+                messages.append({"role": "system", "content": f"Resolved mention context JSON: {safe_context}"})
+            if not tools_allowed_this_turn:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "Do not call tools on this turn. Respond directly using only the conversation text.",
+                    }
+                )
+            messages.append({"role": "system", "content": self._build_response_profile_instruction(response_profile)})
+            for msg in history:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": user_message})
 
         pending_actions: List[Dict[str, Any]] = []
         tool_execution_records: List[Dict[str, Any]] = []
         tool_results: List[ToolResult] = []
+        llm_prompt_ms_total = 0
+        llm_ms_total = 0
+        llm_calls_total = 0
 
         deferred_from_state = list(state.deferred_actions or [])
         deferred_remaining = list(deferred_from_state)
@@ -373,6 +399,10 @@ class ChatOrchestrator:
                         session_id=session.id,
                         max_output_tokens=response_profile.max_output_tokens,
                     )
+                    llm_timing = response.get("timing", {})
+                    llm_prompt_ms_total += int(llm_timing.get("prompt_ms", 0) or 0)
+                    llm_ms_total += int(llm_timing.get("llm_ms", 0) or 0)
+                    llm_calls_total += 1
                     response_text = (response.get("content") or "").strip()
                     if response_text:
                         assistant_message = response_text
@@ -403,6 +433,10 @@ class ChatOrchestrator:
                                 session_id=session.id,
                                 max_output_tokens=response_profile.retry_max_output_tokens,
                             )
+                            retry_llm_timing = retry_response.get("timing", {})
+                            llm_prompt_ms_total += int(retry_llm_timing.get("prompt_ms", 0) or 0)
+                            llm_ms_total += int(retry_llm_timing.get("llm_ms", 0) or 0)
+                            llm_calls_total += 1
                             retry_text = (retry_response.get("content") or "").strip()
                             if retry_text:
                                 assistant_message = retry_text
@@ -432,6 +466,8 @@ class ChatOrchestrator:
                         tool_name = call["name"]
                         tool_args = call["arguments"]
                         is_action_tool = bool(self.tool_registry.is_action_tool(tool_name))
+                        if tool_name == "draft_email" and self.user_name and not tool_args.get("sender_name"):
+                            tool_args["sender_name"] = self.user_name
 
                         if is_action_tool and action_count >= MAX_ACTION_TOOLS_PER_TURN:
                             record = {
@@ -513,7 +549,7 @@ class ChatOrchestrator:
             if tool_results:
                 assistant_message = self._format_tool_results(tool_results)
             else:
-                assistant_message = "I've handled what I can right now."
+                assistant_message = self._friendly_llm_error(user_message)
 
         has_action_activity = any(bool(item.get("action_tool")) for item in tool_execution_records)
         assistant_message = self._format_action_followup(
@@ -538,7 +574,14 @@ class ChatOrchestrator:
         return {
             "response": assistant_message,
             "pending_actions": pending_actions,
-            "state": state.to_dict()
+            "state": state.to_dict(),
+            "timing": {
+                "context_assembly_ms": context_assembly_ms,
+                "llm_prompt_ms": llm_prompt_ms_total,
+                "llm_ms": llm_ms_total,
+                "llm_calls": llm_calls_total,
+                "orchestration_ms": int((time.perf_counter() - orchestrator_started) * 1000),
+            },
         }
 
     async def _call_llm(
@@ -554,9 +597,15 @@ class ChatOrchestrator:
         Primary path uses native Gemini function-calling.
         Fallback path uses existing text generation + JSON extraction.
         """
-        prompt_text = build_prompt_text(messages)
+        call_started = time.perf_counter()
         tool_definitions_count = len(tools or [])
         safe_session_id = session_id or "unknown"
+        record_metrics = self._should_record_chat_metrics(
+            session_id=safe_session_id,
+            messages=messages,
+            tools=tools or [],
+        )
+        metrics_messages = self._prepare_metrics_messages(messages) if record_metrics else []
 
         client = get_genai_client()
         if client is not None:
@@ -609,14 +658,15 @@ class ChatOrchestrator:
             config_kwargs: Dict[str, Any] = {
                 "system_instruction": system_content,
                 "max_output_tokens": max(120, min(int(max_output_tokens or 300), 1200)),
-                "automatic_function_calling": genai_types.AutomaticFunctionCallingConfig(disable=True),
             }
             if tools:
+                config_kwargs["automatic_function_calling"] = genai_types.AutomaticFunctionCallingConfig(disable=True)
                 declarations = self._to_genai_function_declarations(tools)
                 if declarations:
                     config_kwargs["tools"] = [genai_types.Tool(function_declarations=declarations)]
 
-            started_at = time.perf_counter()
+            llm_started = time.perf_counter()
+            prompt_ms = int((llm_started - call_started) * 1000)
             try:
                 response = client.models.generate_content(
                     model=model_name,
@@ -624,16 +674,14 @@ class ChatOrchestrator:
                     config=genai_types.GenerateContentConfig(**config_kwargs),
                 )
             except Exception as exc:
-                latency_ms = int((time.perf_counter() - started_at) * 1000)
-                try:
-                    record_chat_model_metric(
-                        db=self.db,
-                        user_id=self.user_id,
+                latency_ms = int((time.perf_counter() - llm_started) * 1000)
+                if record_metrics:
+                    self._enqueue_chat_metric(
                         session_id=safe_session_id,
                         model=model_name,
                         provider="genai",
                         path="native",
-                        prompt_text=prompt_text,
+                        messages=metrics_messages,
                         latency_ms=latency_ms,
                         input_tokens=0,
                         output_tokens=0,
@@ -643,11 +691,9 @@ class ChatOrchestrator:
                         error_type=exc.__class__.__name__,
                         response_chars=0,
                     )
-                except Exception:
-                    logger.warning("chat_metrics_record_failed user=%s", self.user_id, exc_info=True)
                 raise
 
-            latency_ms = int((time.perf_counter() - started_at) * 1000)
+            latency_ms = int((time.perf_counter() - llm_started) * 1000)
 
             tool_calls: List[Dict[str, Any]] = []
             for fc in list(response.function_calls or []):
@@ -664,8 +710,7 @@ class ChatOrchestrator:
             input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0) if usage else 0
             output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0) if usage else 0
             if input_tokens > 0 or output_tokens > 0:
-                record_token_usage(
-                    db=self.db,
+                self._enqueue_token_usage(
                     user_id=self.user_id,
                     model=model_name,
                     input_tokens=input_tokens,
@@ -673,29 +718,31 @@ class ChatOrchestrator:
                     operation="chat",
                 )
 
-            try:
-                record_chat_model_metric(
-                    db=self.db,
-                    user_id=self.user_id,
+            if record_metrics:
+                self._enqueue_chat_metric(
                     session_id=safe_session_id,
                     model=model_name,
                     provider="genai",
                     path="native",
-                    prompt_text=prompt_text,
+                    messages=metrics_messages,
                     latency_ms=latency_ms,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     tool_definitions_count=tool_definitions_count,
                     tool_calls_count=len(tool_calls),
                     success=True,
+                    error_type=None,
                     response_chars=len((response.text or "").strip()),
                 )
-            except Exception:
-                logger.warning("chat_metrics_record_failed user=%s", self.user_id, exc_info=True)
 
             return {
                 "content": (response.text or "").strip(),
                 "tool_calls": tool_calls,
+                "timing": {
+                    "prompt_ms": prompt_ms,
+                    "llm_ms": latency_ms,
+                    "total_ms": int((time.perf_counter() - call_started) * 1000),
+                },
             }
 
         orchestrator = _get_chat_llm()
@@ -726,23 +773,22 @@ class ChatOrchestrator:
             tool_desc = self._build_tool_prompt(tools)
             prompt = tool_desc + "\n\n" + prompt
 
-        started_at = time.perf_counter()
+        llm_started = time.perf_counter()
+        prompt_ms = int((llm_started - call_started) * 1000)
         try:
             raw_text = await orchestrator.agenerate_text(
                 prompt=prompt,
                 system_prompt=system_content
             )
         except Exception as exc:
-            latency_ms = int((time.perf_counter() - started_at) * 1000)
-            try:
-                record_chat_model_metric(
-                    db=self.db,
-                    user_id=self.user_id,
+            latency_ms = int((time.perf_counter() - llm_started) * 1000)
+            if record_metrics:
+                self._enqueue_chat_metric(
                     session_id=safe_session_id,
                     model="llm_orchestrator",
                     provider="orchestrator",
                     path="fallback",
-                    prompt_text=prompt_text,
+                    messages=metrics_messages,
                     latency_ms=latency_ms,
                     input_tokens=0,
                     output_tokens=0,
@@ -752,23 +798,20 @@ class ChatOrchestrator:
                     error_type=exc.__class__.__name__,
                     response_chars=0,
                 )
-            except Exception:
-                logger.warning("chat_metrics_record_failed user=%s", self.user_id, exc_info=True)
             raise
 
-        latency_ms = int((time.perf_counter() - started_at) * 1000)
+        latency_ms = int((time.perf_counter() - llm_started) * 1000)
 
         usage = orchestrator.get_token_usage()
         input_tokens = int(usage["input_tokens"] or 0)
         output_tokens = int(usage["output_tokens"] or 0)
         if usage['input_tokens'] > 0 or usage['output_tokens'] > 0:
-            record_token_usage(
-                db=self.db,
+            self._enqueue_token_usage(
                 user_id=self.user_id,
                 model=usage['model'],
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                operation="chat"
+                operation="chat",
             )
         orchestrator.reset_token_usage()
 
@@ -779,30 +822,130 @@ class ChatOrchestrator:
             content = _re.sub(r'```json\s*.*?\s*```', '', content, flags=_re.DOTALL).strip()
             content = _re.sub(r'\{"tool_call"\s*:\s*\{[^}]+\}\s*\}', '', content).strip()
 
-        try:
-            record_chat_model_metric(
-                db=self.db,
-                user_id=self.user_id,
+        if record_metrics:
+            self._enqueue_chat_metric(
                 session_id=safe_session_id,
                 model=usage.get("model") or "llm_orchestrator",
                 provider="orchestrator",
                 path="fallback",
-                prompt_text=prompt_text,
+                messages=metrics_messages,
                 latency_ms=latency_ms,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 tool_definitions_count=tool_definitions_count,
                 tool_calls_count=len(tool_calls),
                 success=True,
+                error_type=None,
                 response_chars=len(content or ""),
             )
-        except Exception:
-            logger.warning("chat_metrics_record_failed user=%s", self.user_id, exc_info=True)
 
         return {
             "content": content,
-            "tool_calls": tool_calls
+            "tool_calls": tool_calls,
+            "timing": {
+                "prompt_ms": prompt_ms,
+                "llm_ms": latency_ms,
+                "total_ms": int((time.perf_counter() - call_started) * 1000),
+            },
         }
+
+    def _should_record_chat_metrics(
+        self,
+        session_id: str,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+    ) -> bool:
+        if tools:
+            return True
+        last_user_message = ""
+        for msg in reversed(messages or []):
+            if (msg.get("role") or "").strip().lower() == "user":
+                last_user_message = str(msg.get("content") or "")
+                break
+        if last_user_message and len(last_user_message.strip()) <= 24 and self._is_no_context_message(last_user_message):
+            return False
+        if CHAT_METRICS_SAMPLE_RATE >= 1.0:
+            return True
+        if CHAT_METRICS_SAMPLE_RATE <= 0.0:
+            return False
+        seed = f"{self.user_id}:{session_id}:{len(messages)}:{len(last_user_message)}"
+        bucket = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16) / 0xFFFFFFFF
+        return bucket < CHAT_METRICS_SAMPLE_RATE
+
+    def _prepare_metrics_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        prepared: List[Dict[str, Any]] = []
+        total_chars = 0
+        for msg in list(messages or [])[-CHAT_METRICS_PROMPT_MAX_MESSAGES:]:
+            role = str(msg.get("role") or "user").strip().lower()
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=True, separators=(",", ":"))
+            content = content[:CHAT_METRICS_PROMPT_MAX_CONTENT_CHARS]
+            line_size = len(role) + 1 + len(content)
+            if total_chars + line_size > CHAT_METRICS_PROMPT_MAX_TOTAL_CHARS:
+                break
+            prepared.append({"role": role, "content": content})
+            total_chars += line_size
+            if total_chars >= CHAT_METRICS_PROMPT_MAX_TOTAL_CHARS:
+                break
+        return prepared
+
+    def _enqueue_chat_metric(
+        self,
+        *,
+        session_id: str,
+        model: str,
+        provider: str,
+        path: str,
+        messages: List[Dict[str, Any]],
+        latency_ms: int,
+        input_tokens: int,
+        output_tokens: int,
+        tool_definitions_count: int,
+        tool_calls_count: int,
+        success: bool,
+        error_type: Optional[str],
+        response_chars: int,
+    ) -> None:
+        try:
+            get_telemetry_writer().enqueue_chat_metric(
+                user_id=self.user_id,
+                session_id=session_id,
+                model=model,
+                provider=provider,
+                path=path,
+                messages=messages,
+                latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                tool_definitions_count=tool_definitions_count,
+                tool_calls_count=tool_calls_count,
+                success=success,
+                error_type=error_type,
+                response_chars=response_chars,
+            )
+        except Exception:
+            logger.warning("chat_metrics_enqueue_failed user=%s", self.user_id, exc_info=True)
+
+    def _enqueue_token_usage(
+        self,
+        *,
+        user_id: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        operation: str,
+    ) -> None:
+        try:
+            get_telemetry_writer().enqueue_token_usage(
+                user_id=user_id,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                operation=operation,
+            )
+        except Exception:
+            logger.warning("token_usage_enqueue_failed user=%s", self.user_id, exc_info=True)
 
     def _to_genai_function_declarations(self, tools: List[Dict[str, Any]]) -> List[genai_types.FunctionDeclaration]:
         declarations: List[genai_types.FunctionDeclaration] = []
@@ -986,6 +1129,16 @@ class ChatOrchestrator:
             enable_richness_retry=depth == "deep",
         )
 
+    def _is_smalltalk_minimal(self, message: str, mention_context: Dict[str, Any]) -> bool:
+        """Detect very short, no-context smalltalk to force a tiny prompt."""
+        if not message:
+            return False
+        if len(message.strip()) > 32:
+            return False
+        if mention_context.get("entities") or mention_context.get("memory"):
+            return False
+        return self._is_no_context_message(message)
+
     def _build_response_profile_instruction(self, profile: ResponseProfile) -> str:
         lines = [
             "Adaptive response policy:",
@@ -1009,6 +1162,7 @@ class ChatOrchestrator:
                 lines.extend(
                     [
                         "- Include a clear subject line and the full email body.",
+                        "- Use plain text only; do not use markdown formatting.",
                         "- If a key detail is missing, make one reasonable assumption and proceed.",
                     ]
                 )
@@ -1026,6 +1180,16 @@ class ChatOrchestrator:
             )
 
         return "\n".join(lines)
+
+    def _system_prompt_for_turn(self, system_prompt: str, tools_allowed: bool) -> str:
+        """Drop tool instructions on turns where tools are explicitly disabled."""
+        if tools_allowed:
+            return system_prompt
+        marker = "\n\nAvailable tools:"
+        marker_index = (system_prompt or "").find(marker)
+        if marker_index < 0:
+            return system_prompt
+        return system_prompt[:marker_index].rstrip()
 
     def _is_under_detailed_response(self, response_text: str, profile: ResponseProfile) -> bool:
         if profile.task_type not in {"draft", "plan", "analysis"}:
@@ -1246,6 +1410,15 @@ class ChatOrchestrator:
                 continue
             _append_unique(deferred, self._action_title_from_output(item))
 
+        completed_action_count = len(completed)
+        failed_action_count = len(failed)
+        deferred_action_count = len(deferred)
+
+        # For a single successful action, return the artifact as-is.
+        # Appending "I've completed ..." degrades draft readability.
+        if completed_action_count == 1 and failed_action_count == 0 and deferred_action_count == 0:
+            return self._normalize_single_action_reply(reply, tool_outputs)
+
         clauses: List[str] = []
         if completed:
             done = ", ".join([f'"{value}"' for value in completed])
@@ -1266,6 +1439,32 @@ class ChatOrchestrator:
                 base = f"{base}."
             return f"{base} {' '.join(clauses)}"
         return " ".join(clauses)
+
+    def _normalize_single_action_reply(self, reply: str, tool_outputs: List[Dict[str, Any]]) -> str:
+        text = (reply or "").strip()
+        if not text:
+            return text
+
+        # If the only action was email drafting, normalize markdown emphasis
+        # that can leak from model formatting into plain chat bubbles.
+        action_tools = [
+            item for item in tool_outputs
+            if bool(item.get("action_tool")) or (item.get("name") in ACTION_TOOL_NAMES)
+        ]
+        if len(action_tools) != 1:
+            return text
+
+        only = action_tools[0]
+        if only.get("name") != "draft_email":
+            return text
+
+        text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL)
+        text = re.sub(r"__(.*?)__", r"\1", text, flags=re.DOTALL)
+        replacement_name = (self.user_name or "").strip()
+        text = re.sub(r"\[(?:your\s*name)\]", replacement_name, text, flags=re.IGNORECASE)
+        text = re.sub(r"[ \t]{2,}", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
     
     def _format_tool_results(self, results: List[ToolResult]) -> str:
         """Format tool results into a human-readable response."""
@@ -1273,7 +1472,7 @@ class ChatOrchestrator:
         
         for result in results:
             if not result.success:
-                parts.append(f"I encountered an issue: {result.error}")
+                parts.append(self._humanize_tool_error(result.error))
             elif result.data:
                 # Format based on data type
                 if "emails" in result.data:
@@ -1306,13 +1505,102 @@ class ChatOrchestrator:
                 elif "message" in result.data:
                     parts.append(result.data["message"])
                 elif "body" in result.data and "subject" in result.data:
-                    parts.append(f"Draft ready: {result.data.get('subject')}")
+                    parts.append(self._render_email_draft(result.data))
                 elif "agenda" in result.data and "meeting_subject" in result.data:
-                    parts.append(f"Meeting brief ready: {result.data.get('meeting_subject')}")
+                    parts.append(self._render_meeting_brief(result.data))
                 elif "summary" in result.data:
                     parts.append(str(result.data.get("summary")))
         
-        return "\n".join(parts) if parts else "Done."
+        return "\n".join(parts) if parts else "I couldn't complete that request right now."
+
+    def _humanize_tool_error(self, error: Optional[str]) -> str:
+        text = " ".join(str(error or "").split()).strip().lower()
+        if not text:
+            return "I couldn't complete that action right now."
+        if "draft" in text or "email" in text or "reply" in text:
+            return "I couldn't draft that email right now."
+        if "meeting" in text or "brief" in text or "prep" in text:
+            return "I couldn't prepare that meeting brief right now."
+        if "task" in text:
+            return "I couldn't complete that task action right now."
+        if "calendar" in text or "event" in text:
+            return "I couldn't complete that calendar action right now."
+        return "I couldn't complete that action right now."
+
+    def _render_email_draft(self, payload: Dict[str, Any]) -> str:
+        subject = " ".join(str(payload.get("subject") or "").split()).strip()
+        body = str(payload.get("body") or "").strip()
+        recipient = " ".join(str(payload.get("recipient") or "").split()).strip()
+
+        lines: List[str] = []
+        if subject:
+            lines.append(f"Subject: {subject}")
+        if recipient:
+            lines.append(f"To: {recipient}")
+        if body:
+            if lines:
+                lines.append("")
+            lines.append(body)
+
+        if lines:
+            return "\n".join(lines).strip()
+        return "I drafted that email, but the content came back empty."
+
+    def _render_meeting_brief(self, payload: Dict[str, Any]) -> str:
+        subject = (payload.get("meeting_subject") or payload.get("event_id") or "Meeting").strip()
+        summary = (payload.get("summary") or "").strip()
+        start_at = payload.get("start_at")
+        end_at = payload.get("end_at")
+        location = (payload.get("location") or "").strip()
+
+        def _clean_lines(values: Any, limit: int) -> List[str]:
+            if not isinstance(values, list):
+                return []
+            out: List[str] = []
+            for value in values:
+                text = " ".join(str(value or "").split()).strip()
+                if not text:
+                    continue
+                out.append(text)
+                if len(out) >= limit:
+                    break
+            return out
+
+        agenda = _clean_lines(payload.get("agenda"), 8)
+        decisions = _clean_lines(payload.get("decisions"), 8)
+        commitments = _clean_lines(payload.get("commitments"), 8)
+        risks = _clean_lines(payload.get("risks"), 6)
+        open_items = _clean_lines(payload.get("open_items"), 8)
+
+        lines: List[str] = [f"Meeting Brief: {subject}"]
+        if start_at:
+            when_line = f"When: {start_at}"
+            if end_at:
+                when_line = f"{when_line} - {end_at}"
+            lines.append(when_line)
+        elif end_at:
+            lines.append(f"Ends: {end_at}")
+        if location:
+            lines.append(f"Location: {location}")
+        if summary:
+            lines.append("")
+            lines.append(summary)
+
+        def _append_section(title: str, items: List[str]) -> None:
+            if not items:
+                return
+            lines.append("")
+            lines.append(f"{title}:")
+            for item in items:
+                lines.append(f"- {item}")
+
+        _append_section("Agenda", agenda)
+        _append_section("Decisions", decisions)
+        _append_section("Commitments", commitments)
+        _append_section("Risks", risks)
+        _append_section("Open items", open_items)
+
+        return "\n".join(lines).strip()
     
     def create_pending_action(
         self,

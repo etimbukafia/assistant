@@ -103,7 +103,8 @@ class ChatContextManager:
         """Persist ConversationState to session."""
         session.state = state.to_dict()
         session.last_activity_at = datetime.now(timezone.utc)
-        self.db.commit()
+        # Transaction commit is owned by the outer chat service for single-commit turns.
+        self.db.flush()
     
     def get_recent_messages(
         self, 
@@ -169,16 +170,30 @@ class ChatContextManager:
             Task.priority.in_(["high", "urgent"])
         ).order_by(Task.deadline.asc().nullslast()).limit(5).all()
         
-        context["urgent_tasks"] = [
-            {
-                "id": t.id,
-                "title": t.title,
-                "priority": t.priority,
-                "due_date": t.deadline.isoformat() if t.deadline else None,
-                "waiting_for": t.waiting_for_email
-            }
-            for t in tasks
-        ]
+        urgent_tasks: List[Dict[str, Any]] = []
+        for t in tasks:
+            waiting_for = getattr(t, "waiting_for_email", None)
+            if not waiting_for:
+                reminder_context = t.reminder_context if isinstance(t.reminder_context, dict) else {}
+                reminder_type = str(reminder_context.get("type") or "").strip().lower()
+                if t.status == "waiting_for" or reminder_type == "waiting_for_response":
+                    waiting_for = (
+                        reminder_context.get("waiting_for")
+                        or reminder_context.get("target")
+                        or reminder_context.get("reference_email")
+                        or "response"
+                    )
+
+            urgent_tasks.append(
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "priority": t.priority,
+                    "due_date": t.deadline.isoformat() if t.deadline else None,
+                    "waiting_for": waiting_for,
+                }
+            )
+        context["urgent_tasks"] = urgent_tasks
         
         # Recent emails needing reply
         emails = self.db.query(Message).filter(

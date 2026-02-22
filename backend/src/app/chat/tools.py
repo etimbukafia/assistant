@@ -260,6 +260,7 @@ class ChatToolRegistry:
                         "subject": {"type": "string"},
                         "intent": {"type": "string"},
                         "recipient": {"type": "string"},
+                        "sender_name": {"type": "string"},
                         "thread_id": {"type": "string"},
                         "message_id": {"type": "string"},
                         "thread": {"type": "string"},
@@ -449,7 +450,7 @@ class ChatToolRegistry:
                 return ToolResult(success=False, error=f"No handler for tool: {name}")
         except Exception as e:
             logger.error(f"Error executing tool {name}: {e}", exc_info=True)
-            return ToolResult(success=False, error=str(e))
+            return ToolResult(success=False, error=self._user_safe_validation_error(name))
     
     # =========================================================================
     # Read-only tool implementations
@@ -534,7 +535,11 @@ class ChatToolRegistry:
                 "title": t.title,
                 "status": t.status,
                 "priority": t.priority,
-                "due_date": t.due_date.isoformat() if t.due_date else None
+                "due_date": (
+                    getattr(t, "deadline", None).isoformat()
+                    if getattr(t, "deadline", None)
+                    else (getattr(t, "due_date", None).isoformat() if getattr(t, "due_date", None) else None)
+                ),
             }
             for t in tasks
         ]
@@ -771,6 +776,7 @@ class ChatToolRegistry:
             subject=params.get("subject", ""),
             intent=params.get("intent", ""),
             recipient=params.get("recipient"),
+            sender_name=params.get("sender_name"),
             thread_id=params.get("thread_id"),
             message_id=params.get("message_id"),
             thread=params.get("thread"),

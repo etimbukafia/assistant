@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.data.models import Contact, ContextEntry, EntityReference, Message, Task
+from app.data.models import CalendarEvent, Contact, ContextEntry, EntityReference, Message, Task
 from app.services.warm_cache import WarmCacheService
 from app.services.warm_context_snapshot import (
     build_contact_snapshot,
@@ -102,6 +102,22 @@ class MentionContextService:
                 _last_seen_rank(item.get("last_seen_at", "")),
             )
         )
+        if len(matches) < (offset + limit) and kind_filter in {"", "event"}:
+            fallback_events = self._fallback_event_mentions(q=q)
+            existing = {f"{str(item.get('kind') or '')}:{str(item.get('ref') or '').lower()}" for item in matches}
+            for item in fallback_events:
+                key = f"event:{str(item.get('ref') or '').lower()}"
+                if key in existing:
+                    continue
+                matches.append(item)
+                existing.add(key)
+            matches.sort(
+                key=lambda item: (
+                    _match_rank(item, q),
+                    _kind_rank(item.get("kind", "")),
+                    _last_seen_rank(item.get("last_seen_at", "")),
+                )
+            )
         matches = matches[offset : offset + limit]
 
         label_counts: Dict[str, int] = {}
@@ -139,6 +155,40 @@ class MentionContextService:
                 }
             )
         return results
+
+    def _fallback_event_mentions(self, q: str) -> List[Dict[str, Any]]:
+        events_query = self.db.query(CalendarEvent).filter(CalendarEvent.user_id == self.user_id)
+        if q:
+            events_query = events_query.filter(
+                or_(
+                    CalendarEvent.title.ilike(f"%{q}%"),
+                    CalendarEvent.description.ilike(f"%{q}%"),
+                    CalendarEvent.notes.ilike(f"%{q}%"),
+                )
+            )
+        rows = (
+            events_query
+            .order_by(CalendarEvent.updated_at.desc(), CalendarEvent.start_time.asc())
+            .limit(MENTIONS_INDEX_MAX_EVENTS)
+            .all()
+        )
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            stamp = row.updated_at or row.created_at or row.start_time
+            out.append(
+                {
+                    "kind": "event",
+                    "ref": str(row.id),
+                    "label": (row.title or "").strip() or f"Event {row.id}",
+                    "sample": (row.description or row.notes or "").strip(),
+                    "mentions": 0,
+                    "last_seen_at": stamp.isoformat() if stamp else "",
+                    "created_at": row.created_at.isoformat() if row.created_at else "",
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+                    "search_text": _compact_search_text((row.description or row.notes or "").strip(), max_len=80),
+                }
+            )
+        return out
 
     def suggest_memory_entries(
         self,
@@ -283,6 +333,30 @@ class MentionContextService:
                 "last_seen_at": ctx.get("last_seen_at", updated_dt.isoformat() if updated_dt else ""),
                 "created_at": ctx.get("created_at", entity.created_at.isoformat() if entity.created_at else ""),
                 "updated_at": ctx.get("updated_at", entity.updated_at.isoformat() if entity.updated_at else ""),
+            }
+
+        calendar_events = (
+            self.db.query(CalendarEvent)
+            .filter(CalendarEvent.user_id == self.user_id)
+            .order_by(CalendarEvent.updated_at.desc(), CalendarEvent.start_time.asc())
+            .limit(MENTIONS_INDEX_MAX_EVENTS)
+            .all()
+        )
+        for event in calendar_events:
+            event_ref = str(event.id)
+            key = f"event:{event_ref.lower()}"
+            if key in grouped:
+                continue
+            updated_dt = event.updated_at or event.created_at or event.start_time
+            grouped[key] = {
+                "kind": "event",
+                "ref": event_ref,
+                "label": (event.title or "").strip() or f"Event {event.id}",
+                "sample": (event.description or event.notes or "").strip(),
+                "mentions": 0,
+                "last_seen_at": updated_dt.isoformat() if updated_dt else "",
+                "created_at": event.created_at.isoformat() if event.created_at else "",
+                "updated_at": event.updated_at.isoformat() if event.updated_at else "",
             }
 
         tasks = (
@@ -561,6 +635,49 @@ class MentionContextService:
                                 kind="thread",
                                 ref=thread_message.thread_id,
                                 label=(thread_message.subject or "").strip() or mention.label or thread_message.thread_id,
+                            )
+                        )
+                        continue
+
+                if mention.kind == "event":
+                    event = None
+                    if mention.ref.isdigit():
+                        event = (
+                            self.db.query(CalendarEvent)
+                            .filter(
+                                CalendarEvent.user_id == self.user_id,
+                                CalendarEvent.id == int(mention.ref),
+                            )
+                            .first()
+                        )
+                    if not event:
+                        lookup = mention.label or mention.ref
+                        event = (
+                            self.db.query(CalendarEvent)
+                            .filter(
+                                CalendarEvent.user_id == self.user_id,
+                                func.lower(CalendarEvent.title) == lookup.lower(),
+                            )
+                            .order_by(CalendarEvent.updated_at.desc(), CalendarEvent.start_time.asc())
+                            .first()
+                        )
+                    if not event and (mention.label or mention.ref):
+                        lookup = mention.label or mention.ref
+                        event = (
+                            self.db.query(CalendarEvent)
+                            .filter(
+                                CalendarEvent.user_id == self.user_id,
+                                CalendarEvent.title.ilike(f"%{lookup}%"),
+                            )
+                            .order_by(CalendarEvent.updated_at.desc(), CalendarEvent.start_time.asc())
+                            .first()
+                        )
+                    if event:
+                        resolved.append(
+                            Mention(
+                                kind="event",
+                                ref=str(event.id),
+                                label=(event.title or "").strip() or mention.label or mention.ref,
                             )
                         )
                         continue

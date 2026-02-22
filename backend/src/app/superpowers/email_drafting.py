@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +31,7 @@ class EmailDraftingService:
         subject: str,
         intent: str = "",
         recipient: Optional[str] = None,
+        sender_name: Optional[str] = None,
         thread_id: Optional[str] = None,
         message_id: Optional[str] = None,
         thread: Optional[str] = None,
@@ -47,6 +49,8 @@ class EmailDraftingService:
             message_ref = self._resolve_message_ref(from_context.get("message_id"))
         if not recipient_email:
             recipient_email = self._resolve_recipient(from_context.get("recipient"))
+        if not sender_name:
+            sender_name = (from_context.get("sender_name") or "").strip() or None
 
         source_message = self._resolve_source_message(thread_ref=thread_ref, message_ref=message_ref)
         if source_message and not thread_ref:
@@ -80,6 +84,7 @@ class EmailDraftingService:
             subject=subject,
             intent=intent_text,
             recipient=recipient_email,
+            sender_name=sender_name,
             context_lines=context_lines,
             source_message=source_message,
         )
@@ -87,6 +92,7 @@ class EmailDraftingService:
             "subject": subject,
             "intent": intent_text,
             "recipient": recipient_email,
+            "sender_name": sender_name,
             "thread_id": thread_ref,
             "message_id": message_ref,
             "body": body,
@@ -127,6 +133,7 @@ class EmailDraftingService:
         subject: str,
         intent: str,
         recipient: Optional[str],
+        sender_name: Optional[str],
         context_lines: List[Dict[str, Any]],
         source_message: Optional[Message],
     ) -> str:
@@ -139,6 +146,7 @@ class EmailDraftingService:
             subject=subject,
             intent=intent,
             recipient=recipient,
+            sender_name=sender_name,
             context_lines=context_lines,
             source_message=source_message,
         )
@@ -151,23 +159,25 @@ class EmailDraftingService:
                     temperature=0.4,
                     system_instruction=(
                         "You draft concise executive-assistant emails. "
-                        "Return plain email body only. No markdown. No explanations."
+                        "Return plain email body only. No markdown. No explanations. "
+                        "Never use placeholders like [Your Name]."
                     ),
                 ),
             )
-            text = (response.text or "").strip()
+            text = self._sanitize_email_text((response.text or "").strip(), sender_name=sender_name)
             if text:
                 return text
         except Exception:
             logger.exception("email_draft_generation_failed user=%s", self.user_id)
 
-        return self._fallback_body(subject, intent, recipient, context_lines)
+        return self._fallback_body(subject, intent, recipient, sender_name, context_lines)
 
     def _build_llm_prompt(
         self,
         subject: str,
         intent: str,
         recipient: Optional[str],
+        sender_name: Optional[str],
         context_lines: List[Dict[str, Any]],
         source_message: Optional[Message],
     ) -> str:
@@ -193,6 +203,7 @@ class EmailDraftingService:
         return (
             "Draft an email reply.\n\n"
             f"Recipient: {recipient_hint}\n"
+            f"Sender name: {sender_name or '[none]'}\n"
             f"Subject: {subject}\n"
             f"Intent: {intent}\n\n"
             "Relevant source message:\n"
@@ -203,6 +214,8 @@ class EmailDraftingService:
             "- Keep it brief, clear, and human.\n"
             "- Respect assistant, executive, and contact preferences.\n"
             "- Treat resolved/stale/archived items as historical context only.\n"
+            "- Never output placeholders such as [Your Name].\n"
+            "- If sender name is provided, use it in the sign-off.\n"
             "- Return only the email body text."
         )
 
@@ -366,16 +379,31 @@ class EmailDraftingService:
         subject: str,
         intent: str,
         recipient: Optional[str],
+        sender_name: Optional[str],
         context_lines: List[Dict[str, Any]],
     ) -> str:
         greeting = f"Hi {recipient.split('@')[0].title()}," if recipient and "@" in recipient else "Hi,"
         top_context = [line["content"] for line in context_lines[:3] if line.get("content")]
         context_sentence = " ".join(top_context) if top_context else "Sharing a quick update."
+        sign_off_name = (sender_name or "").strip()
+        sign_off = f"Best,\n{sign_off_name}" if sign_off_name else "Best,"
         return (
             f"{greeting}\n\n"
             f"{intent.strip().capitalize()} re: {subject.strip()}.\n"
             f"{context_sentence}\n\n"
             "Please confirm if this works on your side.\n\n"
-            "Best,\n"
-            "Teeks"
+            f"{sign_off}"
         )
+
+    def _sanitize_email_text(self, text: str, sender_name: Optional[str]) -> str:
+        value = (text or "").strip()
+        if not value:
+            return value
+
+        value = re.sub(r"\*\*(.*?)\*\*", r"\1", value, flags=re.DOTALL)
+        value = re.sub(r"__(.*?)__", r"\1", value, flags=re.DOTALL)
+        replacement_name = (sender_name or "").strip()
+        value = re.sub(r"\[(?:your\s*name)\]", replacement_name, value, flags=re.IGNORECASE)
+        value = re.sub(r"[ \t]{2,}", " ", value)
+        value = re.sub(r"\n{3,}", "\n\n", value)
+        return value.strip()

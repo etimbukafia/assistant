@@ -40,9 +40,9 @@
 
 ## 5) Chat: Tool Use + Gating
 - [ ✅] Greeting (`hi`) does not trigger context tool calls
-- [ ] Simple self-contained request avoids unnecessary retrieval
-- [ ] Entity-referenced request (`@thread`) triggers relevant context tools
-- [ ] Draft request triggers `draft_email`
+- [ ✅] Simple self-contained request avoids unnecessary retrieval
+- [ ✅] Entity-referenced request (`@thread`) triggers relevant context tools
+- [✅ ] Draft request triggers `draft_email`
 - [ ] Meeting brief request triggers `generate_meeting_brief`
 - [ ] Tool failures return human-safe response (no provider/internal wording)
 
@@ -95,3 +95,95 @@
 - [ ] Ask “What changed since yesterday for @contact?”
 - [ ] Ask “What did we decide on @thread?”
 - [ ] Create diary memory, then verify it is used by a follow-up chat request
+
+---
+
+## 12) Tasks
+
+### 12a) Task Creation
+- [ ] AI-detected task (from email) created via `POST /v1/tasks/` with valid `message_id` succeeds
+- [✅] Manual task created via `POST /v1/tasks/manual` (no `message_id`) succeeds and uses placeholder message
+- [ ✅] Manual task with `deadline` saves `deadline_source=explicit` and `deadline_user_confirmed=true`
+- [ ] Manual task without `deadline` saves `deadline_user_confirmed=false`
+- [✅ ] Creating a task removes it from `extracted_tasks` on the source message
+- [✅ ] Creating a task with invalid `message_id` returns 404
+
+### 12b) Task Lifecycle Transitions
+- [ ] `approve` → moves `pending_approval` to `approved`, sets `approved_at`
+- [ ] Approving a task with `scheduled_reminder_at` enqueues `evaluate_reminder` job
+- [ ] `dismiss` → moves any status to `dismissed`, sets `dismissed_at`
+- [ ] `start` → moves `waiting_for` to `in_progress`
+- [ ] `complete` → sets `status=completed`, `completed_at`
+- [ ] `snooze` → sets `status=snoozed`, `snoozed_until`
+- [ ] Any action on a non-existent task returns 404
+
+### 12c) Task Update (Edit)
+- [ ] `PUT /v1/tasks/{id}` with `title` / `description` / `priority` updates those fields
+- [ ] Setting `priority` explicitly clears `urgency_suggested_by_ai`
+- [ ] Setting `deadline` stores `deadline_source=explicit` and `deadline_user_confirmed=true`
+- [ ] Setting `deadline_confirmed=true` sets `deadline_user_confirmed=true` without overriding the deadline value
+- [ ] Setting `mark_urgent=true` sets `priority=urgent` and clears `urgency_suggested_by_ai`
+- [ ] Setting `clear_deadline=true` nulls `deadline`, `deadline_source`, and `deadline_confidence`
+- [ ] Thread-linked task update triggers cache invalidation + prewarm of action chips
+
+### 12d) Listing + Filtering
+- [ ] Default sort returns tasks ranked urgent → high → normal → low, then `created_at DESC`
+- [ ] `?status=approved` filters to a single status
+- [ ] `?status=approved,in_progress` returns tasks matching either status
+- [ ] `?priorities=urgent,high` filters by multiple priorities
+- [ ] `?sort=created_at` returns tasks sorted by `created_at DESC`
+- [ ] Pagination: `limit` + `offset` return the correct slice; `total` reflects the unfiltered count
+
+### 12e) Task Stats
+- [ ] `GET /v1/tasks/stats` returns counts for all statuses: `pending_approval`, `approved`, `in_progress`, `waiting_for`, `completed`, `dismissed`
+- [ ] `overdue` count correctly reflects tasks with `scheduled_reminder_at` in the past and status `approved` or `pending_approval`
+
+### 12f) UI — TaskItem Interactions
+- [ ] `pending_approval` task renders with dashed border and Approve / Reject buttons
+- [ ] Clicking Approve calls approve endpoint; task updates status optimistically in list
+- [ ] Clicking Reject calls dismiss endpoint; task fades or is removed from list
+- [ ] `waiting_for` task shows "Start" button; clicking transitions it to `in_progress`
+- [ ] `approved` / `in_progress` task shows Complete button; clicking marks it done with strikethrough + opacity
+- [ ] `completed` and `dismissed` tasks render at 50 % opacity with strikethrough title
+- [ ] Deadline badge is visible for non-completed/dismissed tasks that have `deadline_at`
+- [ ] Keyboard navigation: Enter / Space activates task open-details when `onOpenDetails` is set
+
+---
+
+## 13) Daily Focus
+
+### 13a) Daily Focus API
+- [ ] `GET /v1/focus/daily` with no `?date` returns today's focus, creating an empty row if none exists
+- [ ] `GET /v1/focus/daily?date=YYYY-MM-DD` returns focus for the specified date
+- [ ] `GET /v1/focus/daily?date=invalid` returns 400 with "Invalid date format. Use YYYY-MM-DD."
+- [ ] `PUT /v1/focus/daily` with 1–3 goals saves and returns updated focus
+- [ ] `PUT /v1/focus/daily` with 4+ goals returns 400 "Maximum 3 goals allowed"
+- [ ] `PUT /v1/focus/daily` with `frog_task_id` of a valid, owned, non-completed task sets the frog
+- [ ] `PUT /v1/focus/daily` with `frog_task_id` of a completed or dismissed task returns 400
+- [ ] `PUT /v1/focus/daily` with `frog_task_id` of another user's task returns 404
+- [ ] `PUT /v1/focus/daily` with `frog_task_id=null` (or `0`) clears the frog task
+- [ ] `PUT /v1/focus/daily` with `weekly_target` propagates the value to all other rows in the same ISO week
+
+### 13b) Weekly Summary API
+- [ ] `GET /v1/focus/weekly-summary` returns focus rows for the current ISO week (Mon–Sun)
+- [ ] `total_goals_set` equals the sum of `goals_total` across all returned days
+- [ ] `total_goals_completed` equals the sum of `goals_completed` across all returned days
+- [ ] `tasks_completed_this_week` counts tasks with `status=completed` and `completed_at` within the current week
+- [ ] `weekly_target` reflects the shared weekly target text (drawn from the first row)
+
+### 13c) Goals UI
+- [ ] Adding a goal (up to 3) renders in the list without a page reload
+- [ ] Toggling a goal's completed state updates `goals_completed` counter and visual indicator
+- [ ] Completing all 3 goals shows progress at 3/3
+- [ ] Removing a goal decrements `goals_total` and saves correctly
+
+### 13d) Frog Task
+- [ ] Selecting a frog task from the active task list links it to today's focus
+- [ ] Frog task is rendered distinctly in Focus view (title visible, actionable)
+- [ ] Completing the frog from Focus view marks it done and clears the frog slot gracefully
+- [ ] Setting a completed task as the frog returns 400 (enforced server-side, not just client-side)
+
+### 13e) Weekly Target
+- [ ] Setting weekly target on any day of the week persists it to all 7 days in that ISO week
+- [ ] Updating the weekly target on a later day retroactively updates earlier rows in the DB
+- [ ] Weekly target text appears in both daily focus and weekly summary views

@@ -59,7 +59,8 @@ def record_token_usage(
     model: str,
     input_tokens: int,
     output_tokens: int,
-    operation: str
+    operation: str,
+    flush_credits: bool = True,
 ) -> None:
     """
     Record token usage to the database.
@@ -94,7 +95,7 @@ def record_token_usage(
 
     # Update credit usage for Gemini models (not Gemma)
     if cost > 0 and is_gemini_model(model):
-        add_credit_usage(db, user_id, cost)
+        add_credit_usage(db, user_id, cost, flush=flush_credits)
 
     # Don't commit here - let caller handle transaction
 

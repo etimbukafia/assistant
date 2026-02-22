@@ -69,6 +69,15 @@ const PANE_FILTERS: Array<{ key: PaneFilter; label: string }> = [
     { key: "insight", label: "/ Watchouts" },
 ];
 
+function mentionToneClass(kind: ChatMention["kind"]): string {
+    if (kind === "memory") return "border-amber-300/70 bg-amber-50 text-amber-900";
+    if (kind === "contact") return "border-sky-300/70 bg-sky-50 text-sky-900";
+    if (kind === "event") return "border-emerald-300/70 bg-emerald-50 text-emerald-900";
+    if (kind === "thread") return "border-violet-300/70 bg-violet-50 text-violet-900";
+    if (kind === "task") return "border-rose-300/70 bg-rose-50 text-rose-900";
+    return "border-primary/30 bg-primary/[0.06] text-primary";
+}
+
 function isEntityFilter(filter: PaneFilter): filter is "contact" | "thread" | "event" | "task" {
     return filter === "contact" || filter === "thread" || filter === "event" || filter === "task";
 }
@@ -395,14 +404,44 @@ export default function ChatWorkspacePage() {
         const inlineMentions = parseMentions(content);
         const merged: ChatMention[] = [];
         const seen = new Set<string>();
+        const seenTokens = new Set<string>();
         for (const mention of [...inlineMentions, ...selectedPaneMentions]) {
+            const key = mentionKey(mention);
+            const tokenKey = `${mention.kind}:${(mention.label || "").trim().toLowerCase()}`;
+            if (seen.has(key)) continue;
+            if (seenTokens.has(tokenKey)) continue;
+            seen.add(key);
+            seenTokens.add(tokenKey);
+            merged.push(mention);
+        }
+        return merged;
+    }, [parseMentions, selectedPaneMentions]);
+
+    const selectedInlineMentions = React.useMemo(() => {
+        if (!inputValue.trim()) return [];
+        return parseMentions(inputValue);
+    }, [inputValue, parseMentions]);
+
+    const selectedInputMentions = React.useMemo(() => {
+        const merged: ChatMention[] = [];
+        const seen = new Set<string>();
+        for (const mention of [...selectedInlineMentions, ...selectedPaneMentions]) {
             const key = mentionKey(mention);
             if (seen.has(key)) continue;
             seen.add(key);
             merged.push(mention);
         }
         return merged;
-    }, [parseMentions, selectedPaneMentions]);
+    }, [selectedInlineMentions, selectedPaneMentions]);
+
+    const removeInputMention = React.useCallback((mention: ChatMention) => {
+        if (selectedPaneMentions.some((m) => mentionKey(m) === mentionKey(mention))) {
+            removePaneMention(mention);
+            return;
+        }
+        const token = `${mention.kind === "memory" ? "/" : "@"}${mention.label}`;
+        setInputValue((prev) => prev.replace(token, "").replace(/\s{2,}/g, " ").trimStart());
+    }, [removePaneMention, selectedPaneMentions]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -474,10 +513,13 @@ export default function ChatWorkspacePage() {
     };
 
     const handleNewThread = async () => {
+        const previousSessionId = currentSessionId;
+        setCurrentSessionId(null);
         try {
             const session = await createSession({ mode: "action" });
             setCurrentSessionId(session.id);
         } catch {
+            setCurrentSessionId(previousSessionId);
             toast.error("Something went wrong. Try again.");
         }
     };
@@ -674,18 +716,21 @@ export default function ChatWorkspacePage() {
                         </div>
                     )}
 
-                    {selectedPaneMentions.length > 0 && (
+                    {selectedInputMentions.length > 0 && (
                         <div className="mb-3 flex flex-wrap gap-1.5">
-                            {selectedPaneMentions.map((mention) => (
+                            {selectedInputMentions.map((mention) => (
                                 <span
                                     key={mentionKey(mention)}
-                                    className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/[0.06] px-2.5 py-1 text-[11px] text-primary font-inter"
+                                    className={cn(
+                                        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium font-inter",
+                                        mentionToneClass(mention.kind)
+                                    )}
                                 >
                                     {mention.kind === "memory" ? "/" : "@"}{mention.label}
                                     <button
                                         type="button"
-                                        className="text-primary/70 hover:text-primary"
-                                        onClick={() => removePaneMention(mention)}
+                                        className="opacity-70 hover:opacity-100"
+                                        onClick={() => removeInputMention(mention)}
                                         aria-label={`Remove ${mention.label}`}
                                     >
                                         <X size={12} />
@@ -732,7 +777,7 @@ export default function ChatWorkspacePage() {
                                 <div
                                     id={listboxId}
                                     role="listbox"
-                                    className="absolute left-0 right-0 bottom-full z-40 mb-1 rounded-[8px] border border-border bg-white shadow-md overflow-hidden"
+                                    className="absolute left-0 right-0 bottom-full z-40 mb-1 rounded-[8px] border border-border bg-white shadow-md max-h-72 overflow-y-auto overscroll-contain"
                                 >
                                     {loadingSuggestions ? (
                                         <div className="px-3 py-2 text-xs text-muted-foreground font-inter" aria-live="polite">

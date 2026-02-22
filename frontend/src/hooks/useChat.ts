@@ -96,6 +96,10 @@ export function useChat() {
             created_at: string;
         }>;
     };
+    type SendMessageResult = {
+        response: string;
+        pendingActions: ChatSessionQueryData["pending_actions"];
+    };
 
     const updateCurrentSession = useCallback((sessionId: string | null) => {
         setCurrentSessionId(sessionId);
@@ -118,7 +122,7 @@ export function useChat() {
 
     const sendMessageMutation = useMutation({
         mutationFn: async (request: SendMessageRequest) => {
-            return new Promise((resolve, reject) => {
+            return new Promise<SendMessageResult>((resolve, reject) => {
                 chatService.sendMessageWithPolling(request, {
                     onComplete: (response, pendingActions) => {
                         resolve({ response, pendingActions });
@@ -173,8 +177,52 @@ export function useChat() {
             return { previous, queryKey };
         },
         onSuccess: (data, variables) => {
-            queryClient.invalidateQueries({ queryKey: ['chat', 'session', variables.session_id] });
-            queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] });
+            const nowIso = new Date().toISOString();
+            const optimisticAssistantId = -(Date.now() + 1);
+
+            queryClient.setQueryData<ChatSessionQueryData>(
+                ['chat', 'session', variables.session_id],
+                (current) => {
+                    if (!current) return current;
+                    const currentMessages = [...(current.messages || [])];
+                    if (currentMessages.length > 0) {
+                        const tail = currentMessages[currentMessages.length - 1];
+                        if (
+                            tail.role === 'user' &&
+                            Number(tail.id) < 0 &&
+                            tail.content === variables.content
+                        ) {
+                            currentMessages[currentMessages.length - 1] = {
+                                ...tail,
+                                metadata: {
+                                    ...(tail.metadata || {}),
+                                    status: 'sent',
+                                },
+                            };
+                        }
+                    }
+
+                    const responseText = data.response || '';
+                    if (responseText) {
+                        currentMessages.push({
+                            id: optimisticAssistantId,
+                            role: 'assistant',
+                            content: responseText,
+                            created_at: nowIso,
+                            metadata: { status: 'optimistic' },
+                        });
+                    }
+
+                    return {
+                        ...current,
+                        messages: currentMessages,
+                        pending_actions: data.pendingActions || [],
+                    };
+                }
+            );
+
+            // Keep list views eventually consistent without forcing immediate active refetches.
+            queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'], refetchType: 'inactive' });
         },
         onError: (_error, _variables, context) => {
             if (context?.previous && context.queryKey) {

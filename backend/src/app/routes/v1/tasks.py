@@ -43,6 +43,8 @@ def get_tasks(
     sort: str = "priority",
     limit: int = 50,
     offset: int = 0,
+    today_start: str = None,
+    today_end: str = None,
     db: Session = Depends(get_db_for_user)
 ):
     """Get tasks with optional status filter"""
@@ -54,6 +56,9 @@ def get_tasks(
             query = query.filter(Task.status == statuses[0])
         else:
             query = query.filter(Task.status.in_(statuses))
+    else:
+        # Never return dismissed tasks unless explicitly requested
+        query = query.filter(Task.status != "dismissed")
 
     if priorities:
         priority_list = [p.strip() for p in priorities.split(",") if p.strip()]
@@ -61,6 +66,18 @@ def get_tasks(
             query = query.filter(Task.priority == priority_list[0])
         else:
             query = query.filter(Task.priority.in_(priority_list))
+
+    # Today filter: tasks created today OR with a deadline today
+    if today_start and today_end:
+        try:
+            t_start = datetime.fromisoformat(today_start)
+            t_end = datetime.fromisoformat(today_end)
+            query = query.filter(
+                (Task.created_at >= t_start) & (Task.created_at < t_end) |
+                (Task.deadline >= t_start) & (Task.deadline < t_end)
+            )
+        except ValueError:
+            pass  # ignore malformed dates
 
     total = query.count()
     if sort == "created_at":
@@ -233,7 +250,6 @@ def get_task_stats(db: Session = Depends(get_db_for_user)):
     pending_approval = db.query(Task).filter(Task.status == "pending_approval").count()
     approved = db.query(Task).filter(Task.status == "approved").count()
     in_progress = db.query(Task).filter(Task.status == "in_progress").count()
-    waiting_for = db.query(Task).filter(Task.status == "waiting_for").count()
     completed = db.query(Task).filter(Task.status == "completed").count()
     dismissed = db.query(Task).filter(Task.status == "dismissed").count()
     overdue = db.query(Task).filter(
@@ -245,11 +261,10 @@ def get_task_stats(db: Session = Depends(get_db_for_user)):
         "pending_approval": pending_approval,
         "approved": approved,
         "in_progress": in_progress,
-        "waiting_for": waiting_for,
         "completed": completed,
         "dismissed": dismissed,
         "overdue": overdue,
-        "total": pending_approval + approved + in_progress + completed + waiting_for
+        "total": pending_approval + approved + in_progress + completed
     }
 
 

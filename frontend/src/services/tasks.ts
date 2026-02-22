@@ -21,15 +21,15 @@ export interface CreateTaskRequest {
     title: string;
     description?: string;
     priority?: 'urgent' | 'high' | 'normal' | 'low';
-    deadline_at?: string;
+    deadline?: string;
 }
 
 export interface ManualTaskRequest {
     title: string;
     description?: string;
     priority?: 'urgent' | 'high' | 'normal' | 'low';
-    deadline_at?: string;
-    status?: 'approved' | 'waiting_for';
+    deadline?: string;
+    status?: 'approved';
 }
 
 export interface UpdateTaskRequest {
@@ -49,6 +49,8 @@ export async function fetchTasks(params?: {
     limit?: number;
     offset?: number;
     sort?: "priority" | "created_at";
+    today_start?: string;
+    today_end?: string;
 }): Promise<TasksResponse> {
     const searchParams = new URLSearchParams();
     if (params?.status) searchParams.append('status', params.status);
@@ -56,6 +58,8 @@ export async function fetchTasks(params?: {
     if (params?.limit) searchParams.append('limit', params.limit.toString());
     if (params?.offset) searchParams.append('offset', params.offset.toString());
     if (params?.sort) searchParams.append('sort', params.sort);
+    if (params?.today_start) searchParams.append('today_start', params.today_start);
+    if (params?.today_end) searchParams.append('today_end', params.today_end);
 
     const query = searchParams.toString();
     const response = await api.get<TasksResponse>(`/tasks${query ? `?${query}` : ''}`);
@@ -67,6 +71,8 @@ export async function getTasksInfinite(params: {
     pageSize?: number;
     status?: string[];
     priority?: string[];
+    today_start?: string;
+    today_end?: string;
 }): Promise<TasksResponse & { nextPage?: number }> {
     const page = params.pageParam ?? 0;
     const limit = params.pageSize ?? 5;
@@ -76,6 +82,8 @@ export async function getTasksInfinite(params: {
         limit,
         offset: page * limit,
         sort: "priority",
+        today_start: params.today_start,
+        today_end: params.today_end,
     });
 
     const nextPage = response.tasks.length >= limit ? page + 1 : undefined;

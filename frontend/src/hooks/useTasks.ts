@@ -184,7 +184,25 @@ export function useTaskMutations() {
     const updateMutation = useMutation({
         mutationFn: ({ taskId, data }: { taskId: number; data: UpdateTaskRequest }) =>
             updateTask(taskId, data),
-        onSuccess: (_, { taskId }) => {
+        onMutate: async ({ taskId, data }) => {
+            await queryClient.cancelQueries({ queryKey: tasksKeys.all });
+            const previous = queryClient.getQueriesData({ queryKey: tasksKeys.all });
+            updateTaskInCache(taskId, (task) => ({
+                ...task,
+                ...(data.title !== undefined && { title: data.title }),
+                ...(data.description !== undefined && { description: data.description }),
+                ...(data.priority !== undefined && { priority: data.priority }),
+                ...(data.deadline !== undefined && { deadline_at: data.deadline ?? undefined }),
+                ...(data.clear_deadline && { deadline_at: undefined }),
+            }));
+            return { previous };
+        },
+        onError: (_error, _vars, context) => {
+            context?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+        },
+        onSuccess: (updatedTask, { taskId }) => {
+            // Sync cache with server truth
+            updateTaskInCache(taskId, () => updatedTask);
             invalidateTaskLists();
             invalidateTaskDetail(taskId);
         },
@@ -206,6 +224,54 @@ export function useTaskMutations() {
 
     const createManualMutation = useMutation({
         mutationFn: createManualTask,
+        onMutate: async (vars) => {
+            await queryClient.cancelQueries({ queryKey: tasksKeys.all });
+            const previous = queryClient.getQueriesData({ queryKey: tasksKeys.all });
+
+            // Build an optimistic task with a temporary negative id
+            const optimisticTask: Task = {
+                id: -Date.now(),
+                message_id: 0,
+                title: vars.title,
+                description: vars.description,
+                type: "other",
+                task_signal: "explicit",
+                priority: (vars.priority ?? "normal") as Task["priority"],
+                status: (vars.status ?? "approved") as Task["status"],
+                approved_at: new Date().toISOString(),
+                deadline_at: vars.deadline ?? undefined,
+                deadline_source: vars.deadline ? "explicit" : undefined,
+                deadline_user_confirmed: !!vars.deadline,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+            };
+
+            // Prepend to every cached page list
+            queryClient.setQueriesData({ queryKey: tasksKeys.all }, (old: unknown) => {
+                if (!old) return old;
+                if (typeof old === "object" && old && "pages" in old) {
+                    const data = old as { pages: Array<{ tasks: Task[]; total?: number }>; pageParams: unknown[] };
+                    return {
+                        ...data,
+                        pages: data.pages.map((page, i) =>
+                            i === 0
+                                ? { ...page, tasks: [optimisticTask, ...page.tasks], total: (page.total ?? 0) + 1 }
+                                : page
+                        ),
+                    };
+                }
+                if (typeof old === "object" && old && "tasks" in old) {
+                    const data = old as TasksResponse;
+                    return { ...data, tasks: [optimisticTask, ...data.tasks], total: data.total + 1 };
+                }
+                return old;
+            });
+
+            return { previous };
+        },
+        onError: (_error, _vars, context) => {
+            context?.previous?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+        },
         onSuccess: invalidateTaskLists,
     });
 
@@ -224,7 +290,8 @@ export function useTaskMutations() {
             completeMutation.isPending ||
             startMutation.isPending ||
             updateMutation.isPending ||
-            snoozeMutation.isPending,
+            snoozeMutation.isPending ||
+            createManualMutation.isPending,
     };
 }
 

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import hashlib
 import json
 import math
+import os
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -14,17 +17,34 @@ from app.data.models import ChatModelCallMetric
 
 
 PREFIX_BUCKETS = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384)
+_SIGNATURE_CACHE_MAX = max(1000, int(os.getenv("CHAT_METRICS_SIGNATURE_CACHE_SIZE", "10000")))
+_signature_cache_lock = threading.RLock()
+_signature_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 
 
-def build_prompt_text(messages: List[Dict[str, Any]]) -> str:
-    """Serialize chat messages to a deterministic string for metrics only."""
+def build_prompt_text(
+    messages: List[Dict[str, Any]],
+    *,
+    max_messages: int = 6,
+    max_total_chars: int = 4096,
+    max_content_chars: int = 420,
+    include_tool_payload: bool = False,
+) -> str:
+    """Serialize prompt content for metrics with strict size limits."""
+    capped_messages = list(messages or [])[-max(1, int(max_messages)) :]
     lines: List[str] = []
-    for msg in messages or []:
+    total_chars = 0
+    for msg in capped_messages:
         role = (msg.get("role") or "user").strip().lower()
         content = msg.get("content", "")
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=True, separators=(",", ":"))
-        lines.append(f"{role}:{content}")
+        content = _truncate_text(content, max_content_chars)
+        line = f"{role}:{content}"
+        if total_chars + len(line) > max_total_chars:
+            break
+        lines.append(line)
+        total_chars += len(line)
 
         if role == "assistant":
             for call in msg.get("function_calls", []) or []:
@@ -35,17 +55,33 @@ def build_prompt_text(messages: List[Dict[str, Any]]) -> str:
                         args = json.loads(args)
                     except Exception:
                         args = {"raw": str(args)}
-                lines.append(
-                    f"assistant_function_call:{name}:{json.dumps(args, sort_keys=True, ensure_ascii=True, separators=(',', ':'))}"
+                arg_payload = (
+                    json.dumps(args, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+                    if include_tool_payload
+                    else json.dumps(sorted(list(args.keys())), ensure_ascii=True, separators=(",", ":"))
                 )
+                call_line = f"assistant_function_call:{name}:{arg_payload}"
+                if total_chars + len(call_line) > max_total_chars:
+                    break
+                lines.append(call_line)
+                total_chars += len(call_line)
         elif role == "tool":
             tool_name = (msg.get("name") or "").strip()
             tool_response = msg.get("response") or {}
             if not isinstance(tool_response, dict):
                 tool_response = {"value": str(tool_response)}
-            lines.append(
-                f"tool_response:{tool_name}:{json.dumps(tool_response, sort_keys=True, ensure_ascii=True, separators=(',', ':'))}"
+            response_payload = (
+                json.dumps(tool_response, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+                if include_tool_payload
+                else json.dumps(sorted(list(tool_response.keys())), ensure_ascii=True, separators=(",", ":"))
             )
+            tool_line = f"tool_response:{tool_name}:{response_payload}"
+            if total_chars + len(tool_line) > max_total_chars:
+                break
+            lines.append(tool_line)
+            total_chars += len(tool_line)
+        if total_chars >= max_total_chars:
+            break
 
     return "\n".join(lines)
 
@@ -115,20 +151,11 @@ def record_chat_model_metric(
     success: bool,
     error_type: Optional[str] = None,
     response_chars: int = 0,
+    flush: bool = False,
 ) -> None:
     """Record one chat LLM model-call metric row (best-effort)."""
     prompt_signature = build_prefix_signature(prompt_text)
-
-    previous = (
-        db.query(ChatModelCallMetric)
-        .filter(
-            ChatModelCallMetric.user_id == user_id,
-            ChatModelCallMetric.session_id == session_id,
-        )
-        .order_by(ChatModelCallMetric.id.desc())
-        .first()
-    )
-    previous_signature = previous.prompt_prefix_signature if previous else None
+    previous_signature = _get_cached_signature(user_id=user_id, session_id=session_id)
     repeated_chars = repeated_prefix_chars(prompt_signature, previous_signature)
     prompt_chars = int(prompt_signature.get("length") or 0)
     repeated_rate = (repeated_chars / prompt_chars) if prompt_chars > 0 else 0.0
@@ -154,8 +181,40 @@ def record_chat_model_metric(
         error_type=(error_type or "")[:80] or None,
     )
     db.add(row)
-    # Flush so multi-round calls in same transaction can compare against this row.
-    db.flush()
+    _set_cached_signature(user_id=user_id, session_id=session_id, signature=prompt_signature)
+    if flush:
+        db.flush()
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max(0, max_chars - 1)]}~"
+
+
+def _cache_key(user_id: str, session_id: str) -> str:
+    return f"{user_id}:{session_id}"
+
+
+def _get_cached_signature(user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+    key = _cache_key(user_id, session_id)
+    with _signature_cache_lock:
+        signature = _signature_cache.get(key)
+        if signature is None:
+            return None
+        _signature_cache.move_to_end(key)
+        return signature
+
+
+def _set_cached_signature(user_id: str, session_id: str, signature: Dict[str, Any]) -> None:
+    key = _cache_key(user_id, session_id)
+    with _signature_cache_lock:
+        _signature_cache[key] = signature
+        _signature_cache.move_to_end(key)
+        while len(_signature_cache) > _SIGNATURE_CACHE_MAX:
+            _signature_cache.popitem(last=False)
 
 
 def percentile(values: List[int], p: float) -> float:

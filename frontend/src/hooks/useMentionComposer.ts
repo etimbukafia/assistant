@@ -74,9 +74,16 @@ export function useMentionComposer({
     const parseMentions = React.useCallback((content: string): ChatMention[] => {
         const mentions: ChatMention[] = [];
         const dedupe = new Set<string>();
+        const tokenMap = new Map<string, ChatMention>();
 
+        // Resolve collisions where multiple refs share the same visible token.
+        // Latest selection wins for a given token text.
         for (const m of selectedMentions) {
             const token = mentionLabelToken(m);
+            tokenMap.set(token, m);
+        }
+
+        for (const [token, m] of tokenMap.entries()) {
             if (!content.includes(token)) continue;
             const key = `${m.kind}:${m.ref}`;
             if (dedupe.has(key)) continue;
@@ -88,7 +95,10 @@ export function useMentionComposer({
         for (const match of rawMatches) {
             const value = match.slice(1).trim();
             if (!value) continue;
-            const known = selectedMentions.find((m) => m.label === value || m.ref === value);
+            const known = selectedMentions
+                .slice()
+                .reverse()
+                .find((m) => m.label === value || m.ref === value);
             if (!known) continue;
             const key = `${known.kind}:${known.ref}`;
             if (dedupe.has(key)) continue;

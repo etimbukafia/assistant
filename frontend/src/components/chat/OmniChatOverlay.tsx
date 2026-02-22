@@ -16,6 +16,16 @@ import { MessageBubble } from "./MessageBubble"
 import { ActionBubble } from "./ActionBubble"
 import { toast } from "sonner"
 import { useMentionComposer } from "@/hooks/useMentionComposer"
+import { cn } from "@/lib/utils"
+
+function mentionToneClass(kind: "contact" | "thread" | "event" | "task" | "memory"): string {
+    if (kind === "memory") return "border-amber-300/70 bg-amber-50 text-amber-900"
+    if (kind === "contact") return "border-sky-300/70 bg-sky-50 text-sky-900"
+    if (kind === "event") return "border-emerald-300/70 bg-emerald-50 text-emerald-900"
+    if (kind === "thread") return "border-violet-300/70 bg-violet-50 text-violet-900"
+    if (kind === "task") return "border-rose-300/70 bg-rose-50 text-rose-900"
+    return "border-auburn/30 bg-auburn/[0.06] text-auburn"
+}
 
 export function OmniChatOverlay() {
     const { isOpen, setIsOpen, mode } = useChatContext()
@@ -66,6 +76,16 @@ export function OmniChatOverlay() {
             scrollRef.current.scrollIntoView({ behavior: 'smooth' })
         }
     }, [messages, pendingActions, isSending])
+
+    const selectedInlineMentions = React.useMemo(() => {
+        if (!inputValue.trim()) return []
+        return parseMentions(inputValue)
+    }, [inputValue, parseMentions])
+
+    const removeInlineMention = React.useCallback((kind: string, label: string) => {
+        const token = `${kind === "memory" ? "/" : "@"}${label}`
+        setInputValue((prev) => prev.replace(token, "").replace(/\s{2,}/g, " ").trimStart())
+    }, [])
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
@@ -199,6 +219,29 @@ export function OmniChatOverlay() {
 
                 {/* Input Area */}
                 <div className="p-4 bg-white border-t border-border/40">
+                    {selectedInlineMentions.length > 0 && (
+                        <div className="mb-2.5 flex flex-wrap gap-1.5">
+                            {selectedInlineMentions.map((mention) => (
+                                <span
+                                    key={`${mention.kind}:${mention.ref}`}
+                                    className={cn(
+                                        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium",
+                                        mentionToneClass(mention.kind)
+                                    )}
+                                >
+                                    {mention.kind === "memory" ? "/" : "@"}{mention.label}
+                                    <button
+                                        type="button"
+                                        className="opacity-70 hover:opacity-100"
+                                        onClick={() => removeInlineMention(mention.kind, mention.label)}
+                                        aria-label={`Remove ${mention.label}`}
+                                    >
+                                        <X size={12} />
+                                    </button>
+                                </span>
+                            ))}
+                        </div>
+                    )}
                     <form className="flex gap-2" onSubmit={handleSubmit}>
                         <div className="relative flex-1">
                             <Input
@@ -224,7 +267,7 @@ export function OmniChatOverlay() {
                                 <div
                                     id={listboxId}
                                     role="listbox"
-                                    className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border border-border/60 bg-white shadow-md"
+                                    className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border border-border/60 bg-white shadow-md max-h-72 overflow-y-auto overscroll-contain"
                                 >
                                     {loadingSuggestions ? (
                                         <div className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">Loading mentions...</div>

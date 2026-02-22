@@ -62,7 +62,8 @@ def check_credits_available(settings: UserSettings) -> Tuple[bool, Dict[str, Any
 def add_credit_usage(
     db: Session,
     user_id: str,
-    cost_usd: float
+    cost_usd: float,
+    flush: bool = True,
 ) -> None:
     """
     Add credit usage to user's current period.
@@ -88,8 +89,8 @@ def add_credit_usage(
     current_used = settings.credits_used or 0.0
     settings.credits_used = current_used + cost_usd
 
-    # Flush to ensure the update is included in the caller's next commit
-    db.flush()
+    if flush:
+        db.flush()
 
     logger.info(
         f"Credit usage updated for user {user_id}: "

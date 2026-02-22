@@ -20,6 +20,7 @@ import uuid
 import re
 import logging
 import time
+import os
 
 from sqlalchemy.orm import Session
 
@@ -54,6 +55,15 @@ SYNC_TIMEOUT_SECONDS = 30.0
 # Timeout for async messages stuck in "processing" state (TTL on read)
 PROCESSING_TIMEOUT_MINUTES = 2
 
+# Keep sync-first as default so common tool flows (e.g. draft with @mention)
+# do not depend on worker availability.
+FORCE_ASYNC_TOOL_INTENT = os.getenv("CHAT_FORCE_ASYNC_TOOL_INTENT", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 
 class ProcessingStatus(str, Enum):
     """Chat message processing status."""
@@ -71,6 +81,7 @@ class ChatResponse:
     response: Optional[str] = None
     pending_actions: Optional[List[Dict]] = None
     error: Optional[str] = None
+    timing: Optional[Dict[str, int]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {"status": self.status.value}
@@ -243,7 +254,8 @@ class ChatService:
         session_id: str,
         role: str,
         content: str,
-        metadata: Dict[str, Any] = None
+        metadata: Dict[str, Any] = None,
+        auto_commit: bool = True,
     ) -> ChatMessage:
         """Add a message to a session."""
         message = ChatMessage(
@@ -260,10 +272,13 @@ class ChatService:
         session = self.get_session(session_id)
         if session:
             session.last_activity_at = datetime.now(timezone.utc)
-        
-        self.db.commit()
-        self.db.refresh(message)
-        
+
+        if auto_commit:
+            self.db.commit()
+        else:
+            # Flush assigns primary keys without paying full commit cost.
+            self.db.flush()
+
         return message
 
     @staticmethod
@@ -943,7 +958,8 @@ class ChatService:
             session_id,
             "user",
             content,
-            metadata={"mentions": mentions, "resolved_mentions": resolved_mentions}
+            metadata={"mentions": mentions, "resolved_mentions": resolved_mentions},
+            auto_commit=False,
         )
         get_hot_context_cache_service().append_message(
             tenant_id="default",
@@ -959,27 +975,35 @@ class ChatService:
             # Clean up the content for title: remove newlines, extra spaces
             clean_content = " ".join(content.split())
             session.title = clean_content[:50] + ("..." if len(clean_content) > 50 else "")
-            self.db.commit()
 
         # REFLECTION MODE: Always synchronous
         if session.session_type == "reflection":
             process_started = time.perf_counter()
             result = await self._process_sync(session, content, user_msg.id, mention_context=resolved_mentions)
+            timing = result.timing or {}
             logger.info(
-                "chat_send_timing user=%s session=%s mode=reflection mentions_ms=%s persist_ms=%s process_ms=%s total_ms=%s",
+                "chat_send_timing user=%s session=%s mode=reflection mentions_ms=%s persist_ms=%s process_ms=%s assemble_ms=%s prompt_ms=%s llm_ms=%s orch_ms=%s sync_persist_ms=%s total_ms=%s",
                 self.user_id,
                 session_id,
                 mentions_ms,
                 persist_ms,
                 int((time.perf_counter() - process_started) * 1000),
+                int(timing.get("context_assembly_ms", 0) or 0),
+                int(timing.get("llm_prompt_ms", 0) or 0),
+                int(timing.get("llm_ms", 0) or 0),
+                int(timing.get("orchestration_ms", 0) or 0),
+                int(timing.get("sync_persist_ms", 0) or 0),
                 int((time.perf_counter() - started_at) * 1000),
             )
             return result
 
-        # ACTION MODE: Optimistic sync with async fallback
-        # Check if message likely needs tools
-        if detect_tool_intent(content):
-            logger.info(f"Tool intent detected, using async path for session {session_id}")
+        # ACTION MODE: Sync-first with timeout fallback.
+        # Optional legacy behavior can force intent-heavy turns async.
+        if FORCE_ASYNC_TOOL_INTENT and detect_tool_intent(content):
+            logger.info(
+                "Tool intent detected and CHAT_FORCE_ASYNC_TOOL_INTENT enabled; using async path for session %s",
+                session_id,
+            )
             result = self._enqueue_async(
                 session,
                 content,
@@ -1004,13 +1028,19 @@ class ChatService:
                 self._process_sync(session, content, user_msg.id, mention_context=resolved_mentions),
                 timeout=SYNC_TIMEOUT_SECONDS
             )
+            timing = result.timing or {}
             logger.info(
-                "chat_send_timing user=%s session=%s mode=action path=sync mentions_ms=%s persist_ms=%s process_ms=%s total_ms=%s",
+                "chat_send_timing user=%s session=%s mode=action path=sync mentions_ms=%s persist_ms=%s process_ms=%s assemble_ms=%s prompt_ms=%s llm_ms=%s orch_ms=%s sync_persist_ms=%s total_ms=%s",
                 self.user_id,
                 session_id,
                 mentions_ms,
                 persist_ms,
                 int((time.perf_counter() - process_started) * 1000),
+                int(timing.get("context_assembly_ms", 0) or 0),
+                int(timing.get("llm_prompt_ms", 0) or 0),
+                int(timing.get("llm_ms", 0) or 0),
+                int(timing.get("orchestration_ms", 0) or 0),
+                int(timing.get("sync_persist_ms", 0) or 0),
                 int((time.perf_counter() - started_at) * 1000),
             )
             return result
@@ -1049,11 +1079,14 @@ class ChatService:
         - Action mode messages that don't need tools
         """
         try:
+            sync_started = time.perf_counter()
             # Get user's assistant name preference
+            settings_started = time.perf_counter()
             user_settings = self.db.query(UserSettings).filter(
                 UserSettings.user_id == self.user_id
             ).first()
             assistant_name = user_settings.assistant_name if user_settings else "Teeks"
+            settings_ms = int((time.perf_counter() - settings_started) * 1000)
 
             # Get user's first name from session state
             session_state = session.state or {}
@@ -1064,18 +1097,23 @@ class ChatService:
                 assistant_name=assistant_name,
                 user_name=user_name,
             )
+            orchestration_started = time.perf_counter()
             result = await orchestrator.process_message(
                 session,
                 content,
                 mention_context=mention_context or {},
             )
+            orchestration_ms = int((time.perf_counter() - orchestration_started) * 1000)
+            orchestrator_timing = result.get("timing", {}) or {}
 
             # Save assistant response
+            write_started = time.perf_counter()
             assistant_msg = self.add_message(
                 session.id,
                 "assistant",
                 result.get("response", ""),
-                metadata={"state": result.get("state", {})}
+                metadata={"state": result.get("state", {})},
+                auto_commit=False,
             )
             get_hot_context_cache_service().append_message(
                 tenant_id="default",
@@ -1084,8 +1122,10 @@ class ChatService:
                 role="assistant",
                 content=assistant_msg.content,
             )
+            write_ms = int((time.perf_counter() - write_started) * 1000)
 
             # Create pending actions
+            pending_started = time.perf_counter()
             pending_actions = []
             for pa_data in result.get("pending_actions", []):
                 pa = ChatPendingAction(
@@ -1105,17 +1145,52 @@ class ChatService:
                     "status": pa.status,
                     "message_id": pa.message_id
                 })
+            pending_ms = int((time.perf_counter() - pending_started) * 1000)
 
+            commit_started = time.perf_counter()
             self.db.commit()
+            commit_ms = int((time.perf_counter() - commit_started) * 1000)
+            sync_persist_ms = write_ms + pending_ms + commit_ms
+            total_sync_ms = int((time.perf_counter() - sync_started) * 1000)
+
+            logger.info(
+                "chat_sync_stage_timing user=%s session=%s settings_ms=%s orchestrator_ms=%s assemble_ms=%s prompt_ms=%s llm_ms=%s llm_calls=%s write_ms=%s pending_ms=%s commit_ms=%s total_sync_ms=%s",
+                self.user_id,
+                session.id,
+                settings_ms,
+                orchestration_ms,
+                int(orchestrator_timing.get("context_assembly_ms", 0) or 0),
+                int(orchestrator_timing.get("llm_prompt_ms", 0) or 0),
+                int(orchestrator_timing.get("llm_ms", 0) or 0),
+                int(orchestrator_timing.get("llm_calls", 0) or 0),
+                write_ms,
+                pending_ms,
+                commit_ms,
+                total_sync_ms,
+            )
 
             return ChatResponse(
                 status=ProcessingStatus.COMPLETE,
                 message_id=assistant_msg.id,
                 response=assistant_msg.content,
-                pending_actions=pending_actions if pending_actions else None
+                pending_actions=pending_actions if pending_actions else None,
+                timing={
+                    "settings_ms": settings_ms,
+                    "orchestration_ms": orchestration_ms,
+                    "context_assembly_ms": int(orchestrator_timing.get("context_assembly_ms", 0) or 0),
+                    "llm_prompt_ms": int(orchestrator_timing.get("llm_prompt_ms", 0) or 0),
+                    "llm_ms": int(orchestrator_timing.get("llm_ms", 0) or 0),
+                    "llm_calls": int(orchestrator_timing.get("llm_calls", 0) or 0),
+                    "write_ms": write_ms,
+                    "pending_ms": pending_ms,
+                    "commit_ms": commit_ms,
+                    "sync_persist_ms": sync_persist_ms,
+                    "sync_total_ms": total_sync_ms,
+                },
             )
 
         except Exception as e:
+            self.db.rollback()
             logger.error(
                 "chat_sync_processing_failed user=%s session=%s",
                 self.user_id,
