@@ -361,7 +361,7 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
     Evaluates if a task reminder should be sent now using AI.
     Respects quiet hours, frequency limits, and context.
     """
-    from app.data.models import Task, Message, UserSettings, TaskReminder
+    from app.data.models import Task, Message, UserSettings
     from app.infra.database import SessionLocal
     from app.processors.ai import AIProcessor
     from app.jobs.queue import enqueue_task
@@ -369,15 +369,23 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
     # Extract user_id from payload for RLS context
     user_id = payload.get("user_id")
 
-    # Require user_id for RLS context
-    if not user_id:
-        raise ValueError(f"Task {task_id}: user_id is required for RLS context")
-
     db = SessionLocal()
-    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
     try:
         task_record_id = payload.get("task_id")
+
+        # If user_id is missing from payload, look it up from the task directly
+        if not user_id:
+            # Use a superuser-level query to bootstrap (no RLS context yet)
+            tmp_task = db.query(Task).filter(Task.id == task_record_id).first()
+            if tmp_task and tmp_task.user_id:
+                user_id = tmp_task.user_id
+                logger.info(f"Resolved user_id={user_id} from task {task_record_id} (missing from payload)")
+            else:
+                raise ValueError(f"Task {task_id}: user_id missing from payload and task {task_record_id}")
+
+        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
         task = db.query(Task).filter(Task.id == task_record_id).first()
 
         if not task:
@@ -440,7 +448,9 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
 
         # Use AI to evaluate context
         from app.agents.modules.follow_up import FollowUpModule
+        from app.services.reminder import ReminderService
         follow_up_module = FollowUpModule()
+        reminder_service = ReminderService(db=db, user_id=user_id)
         
         evaluation = follow_up_module.evaluate_reminder_context({
             "task_title": task.title,
@@ -454,20 +464,10 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
         })
 
         if evaluation.get("should_remind"):
-            # Send reminder
             logger.info(f"Sending reminder for task {task_record_id}: {evaluation.get('reason')}")
 
-            # Create reminder record
-            reminder = TaskReminder(
-                task_id=task_record_id,
-                reminder_type="scheduled",
-                delivered=True
-            )
-            db.add(reminder)
-
-            # Update task
-            task.last_reminded_at = datetime.now(timezone.utc)
-            task.reminder_count += 1
+            # Record audit row + update task fields atomically via service
+            reminder_service.record_reminder(task, reminder_type="scheduled", channel="push")
 
             db.commit()
 
@@ -508,7 +508,7 @@ async def handle_evaluate_reminder(task_id: int, task_type: str, payload: Dict[s
                     logger.error(f"Failed to reschedule task {task_record_id}: {e}")
 
     except Exception as e:
-        logger.error(f"Failed to evaluate reminder for task {task_record_id}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to evaluate reminder for task {payload.get('task_id')}: {str(e)}", exc_info=True)
         raise
     finally:
         db.close()

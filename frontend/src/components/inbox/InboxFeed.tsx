@@ -2,9 +2,7 @@
 
 import { useInbox } from "@/hooks/useInbox";
 import { EmailCard } from "./EmailCard";
-import { DonnaText } from "@/components/ui/DonnaText";
-import { DonnaButton } from "@/components/ui/DonnaButton";
-import { Loader2, Inbox, Archive, Zap, ZapOff } from "lucide-react";
+import { Inbox, Archive, Zap, ZapOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { isToday, isYesterday, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -68,17 +66,19 @@ export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange,
 
     if (status === "pending") {
         return (
-            <div className="flex justify-center items-center h-40">
-                <Loader2 className="h-8 w-8 animate-spin text-auburn" />
+            <div className="flex justify-center items-center h-40 gap-1">
+                <span className="teeks-dot" />
+                <span className="teeks-dot" />
+                <span className="teeks-dot" />
             </div>
         );
     }
 
     if (status === "error") {
         return (
-            <div className="text-center p-8 text-destructive">
+            <p className="text-center p-8 text-destructive font-inter text-sm">
                 Error loading inbox. Please try again.
-            </div>
+            </p>
         );
     }
 
@@ -94,27 +94,30 @@ export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange,
 
     return (
         <div className="space-y-6 pb-20">
-            {/* Header Actions — hidden in archive view */}
+            {/* Focus Mode toggle — hidden in archive view */}
             {statusFilter !== "archived" && (
-                <div className="flex items-center justify-between mb-6">
-                    <div className="flex items-center gap-2">
-                        <DonnaButton
-                            variant="outline"
-                            size="sm"
+                <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                        <button
                             onClick={() => setIsFocusMode(!isFocusMode)}
                             className={cn(
-                                "gap-2 transition-all duration-300 border-auburn/20 hover:border-auburn/50",
-                                isFocusMode && "bg-auburn/10 text-auburn border-auburn"
+                                "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium font-inter transition-all",
+                                isFocusMode
+                                    ? "border-primary/50 bg-primary/[0.08] text-primary"
+                                    : "border-border text-muted-foreground hover:text-foreground"
                             )}
                         >
-                            {isFocusMode ? <Zap size={16} className="fill-current" /> : <ZapOff size={16} />}
-                            {compact ? "" : (isFocusMode ? "Focus Mode On" : "Focus Mode Off")}
-                        </DonnaButton>
+                            {isFocusMode
+                                ? <Zap size={12} className="fill-current" />
+                                : <ZapOff size={12} />
+                            }
+                            {compact ? "" : (isFocusMode ? "Focus On" : "Focus Mode")}
+                        </button>
 
                         {isFocusMode && !compact && (
-                            <DonnaText variant="caption" className="text-auburn animate-in fade-in slide-in-from-left-2">
-                                Showing only actionable items
-                            </DonnaText>
+                            <span className="text-[11px] text-muted-foreground/60 font-inter animate-in fade-in slide-in-from-left-2">
+                                Actionable items only
+                            </span>
                         )}
                     </div>
                 </div>
@@ -123,26 +126,29 @@ export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange,
             {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-[40vh] text-muted-foreground gap-4 animate-in fade-in zoom-in-95 duration-500">
                     {statusFilter === "archived" ? (
-                        <Archive size={48} className="text-muted-foreground/30" />
+                        <Archive size={40} className="text-muted-foreground/25" />
                     ) : (
-                        <Inbox size={48} className="text-muted-foreground/30" />
+                        <Inbox size={40} className="text-muted-foreground/25" />
                     )}
-                    <DonnaText variant="h3" className="text-muted-foreground">
-                        {statusFilter === "archived" ? "No Archived Messages" : isFocusMode ? "All Caught Up!" : "Inbox Zero!"}
-                    </DonnaText>
+                    <p className="font-playfair text-xl text-muted-foreground/70">
+                        {statusFilter === "archived" ? "No archived messages" : isFocusMode ? "All caught up" : "Inbox zero"}
+                    </p>
                     {!compact && (
-                        <DonnaText variant="body" align="center" className="max-w-xs">
+                        <p className="text-sm font-inter text-muted-foreground/50 text-center max-w-xs">
                             {statusFilter === "archived"
                                 ? "Messages you archive will appear here."
                                 : isFocusMode
                                     ? "No urgent items requiring your attention."
                                     : "Nothing needs your attention right now."}
-                        </DonnaText>
+                        </p>
                     )}
                     {isFocusMode && !statusFilter && (
-                        <DonnaButton variant="link" onClick={() => setIsFocusMode(false)} className="text-auburn">
+                        <button
+                            onClick={() => setIsFocusMode(false)}
+                            className="text-[12px] font-inter text-primary hover:text-primary/80 transition-colors"
+                        >
                             View all messages
-                        </DonnaButton>
+                        </button>
                     )}
                 </div>
             ) : (
@@ -163,10 +169,11 @@ export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange,
                                 )}
                             >
                                 {showHeader && (
-                                    <div className="sticky top-0 z-10 bg-linen/95 backdrop-blur-sm py-2 px-1 border-b border-border/40">
-                                        <DonnaText variant="label" className="text-auburn font-bold tracking-widest uppercase text-xs">
+                                    <div className="sticky top-0 z-10 bg-linen/95 backdrop-blur-sm py-2 flex items-center gap-3">
+                                        <span className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter shrink-0">
                                             {group}
-                                        </DonnaText>
+                                        </span>
+                                        <div className="flex-1 h-px bg-border/40" />
                                     </div>
                                 )}
                                 <EmailCard
@@ -183,8 +190,14 @@ export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange,
             )}
 
             {/* Sentinel */}
-            <div ref={loadMoreRef} className="h-10 w-full flex items-center justify-center">
-                {isFetchingNextPage && <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />}
+            <div ref={loadMoreRef} className="h-10 w-full flex items-center justify-center gap-1">
+                {isFetchingNextPage && (
+                    <>
+                        <span className="teeks-dot" />
+                        <span className="teeks-dot" />
+                        <span className="teeks-dot" />
+                    </>
+                )}
             </div>
         </div>
     );

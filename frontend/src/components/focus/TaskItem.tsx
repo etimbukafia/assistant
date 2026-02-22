@@ -57,7 +57,7 @@ export function TaskItem({
                     }
                     : undefined
             }
-            className={`w-full text-left flex items-center gap-3 rounded-[8px] px-3 py-2.5 transition-all duration-150 border ${isClickable
+            className={`group w-full text-left flex items-center gap-3 rounded-[8px] px-3 py-2.5 transition-all duration-150 border ${isClickable
                 // focus ring uses --primary (Peony), not auburn — design_system.md §1
                 ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 hover:-translate-y-px"
                 : "cursor-default"
@@ -143,6 +143,16 @@ export function TaskItem({
                         aria-label="Complete"
                     >
                         <Check size={10} />
+                    </button>
+                )}
+                {isActive && onDismiss && (
+                    <button
+                        type="button"
+                        onClick={(event) => { stop(event); onDismiss?.(task.id); }}
+                        className="p-1 rounded-[6px] text-muted-foreground/40 opacity-0 group-hover:opacity-100 hover:text-burgundy hover:bg-burgundy/10 hover:!opacity-100 transition-all"
+                        aria-label="Dismiss task"
+                    >
+                        <X size={12} />
                     </button>
                 )}
             </div>

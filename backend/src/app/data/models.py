@@ -326,20 +326,27 @@ class Task(Base):
 
     # Relationships
     source_message = relationship("Message", back_populates="tasks")
+    reminders = relationship("TaskReminder", back_populates="task", cascade="all, delete-orphan")
 
 
 class TaskReminder(Base):
-    """History of reminders sent for tasks"""
+    """Audit log of every reminder sent (or attempted) for a task."""
     __tablename__ = "task_reminders"
 
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)  # denormalised for RLS
 
-    reminded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    reminder_type = Column(String)  # scheduled, urgent_nudge, digest
+    reminded_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    reminder_type = Column(String, nullable=False, default="scheduled")  # scheduled | urgent_nudge | digest | manual
+    channel = Column(String, nullable=False, default="push")              # push | email | in_app
     delivered = Column(Boolean, default=False)
+    delivery_error = Column(Text, nullable=True)  # set if push/email delivery failed
 
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    task = relationship("Task", back_populates="reminders")
 
 
 class DailyFocus(Base):

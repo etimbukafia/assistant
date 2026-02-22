@@ -17,7 +17,7 @@ import {
     startOfMonth,
     startOfWeek,
 } from "date-fns";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Loader2, Plus, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw, Plus, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { setCalendarView } from "./actions";
 import {
@@ -40,7 +40,6 @@ import {
     fetchSchedulingSuggestions,
     sendSchedulingSuggestion,
 } from "@/services/scheduling";
-import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -56,6 +55,7 @@ const VIEW_LABELS: Record<CalendarView, string> = {
 };
 
 const WEEK_STARTS_ON = 1; // Monday
+const CARD_SHADOW = "0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)";
 
 export default function CalendarClient({ initialView }: { initialView: string }) {
     const [view, setView] = useState<CalendarView>(
@@ -95,6 +95,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
                 end_time: range.end.toISOString(),
                 limit: 500,
             }),
+        staleTime: 60_000, // matches backend calendar cache TTL (60s)
     });
 
     const settingsQuery = useQuery({
@@ -123,10 +124,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
 
     const createEventMutation = useMutation({
         mutationFn: createManualEvent,
-        onMutate: () => {
-            setEventDialogOpen(false);
-            setEditingEvent(null);
-        },
+        onMutate: () => { setEventDialogOpen(false); setEditingEvent(null); },
         onSuccess: () => {
             toast.success("Event created");
             queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
@@ -137,10 +135,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
     const updateEventMutation = useMutation({
         mutationFn: ({ id, payload }: { id: number; payload: Parameters<typeof updateEvent>[1] }) =>
             updateEvent(id, payload),
-        onMutate: () => {
-            setEventDialogOpen(false);
-            setEditingEvent(null);
-        },
+        onMutate: () => { setEventDialogOpen(false); setEditingEvent(null); },
         onSuccess: () => {
             toast.success("Event updated");
             queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
@@ -150,10 +145,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
 
     const deleteEventMutation = useMutation({
         mutationFn: deleteEvent,
-        onMutate: () => {
-            setEventDialogOpen(false);
-            setEditingEvent(null);
-        },
+        onMutate: () => { setEventDialogOpen(false); setEditingEvent(null); },
         onSuccess: () => {
             toast.success("Event deleted");
             queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
@@ -226,72 +218,99 @@ export default function CalendarClient({ initialView }: { initialView: string })
         if (view === "list") setSelectedDate(addDays(selectedDate, 7));
     };
 
-    const openCreateDialog = () => {
-        setEditingEvent(null);
-        setEventDialogOpen(true);
-    };
-
-    const openEditDialog = (event: CalendarEvent) => {
-        setEditingEvent(event);
-        setEventDialogOpen(true);
-    };
+    const openCreateDialog = () => { setEditingEvent(null); setEventDialogOpen(true); };
+    const openEditDialog = (event: CalendarEvent) => { setEditingEvent(event); setEventDialogOpen(true); };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-6">
-            <section className="space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+            <section className="space-y-5">
+                {/* Header */}
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2">
-                            <CalendarIcon className="text-auburn" size={20} />
-                            <h1 className="text-2xl font-semibold text-foreground">Calendar</h1>
+                    <div className="flex items-center gap-4">
+                        {/* Date nav */}
+                        <div className="flex items-center gap-1">
+                            <button
+                                onClick={handlePrev}
+                                className="p-1.5 rounded-[6px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                            >
+                                <ChevronLeft size={16} />
+                            </button>
+                            <span className="text-sm font-medium font-inter text-foreground min-w-[130px] text-center">
+                                {format(selectedDate, view === "day" ? "EEE, MMM d" : "MMMM yyyy")}
+                            </span>
+                            <button
+                                onClick={handleNext}
+                                className="p-1.5 rounded-[6px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                            >
+                                <ChevronRight size={16} />
+                            </button>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <Button variant="ghost" size="icon" onClick={handlePrev}>
-                                <ChevronLeft size={18} />
-                            </Button>
-                            <div className="text-sm font-medium text-muted-foreground min-w-[140px] text-center">
-                                {format(selectedDate, view === "day" ? "EEEE, MMM d" : "MMMM yyyy")}
-                            </div>
-                            <Button variant="ghost" size="icon" onClick={handleNext}>
-                                <ChevronRight size={18} />
-                            </Button>
-                            <Button variant="ghost" onClick={() => setSelectedDate(new Date())}>Today</Button>
-                        </div>
+                        <button
+                            onClick={() => setSelectedDate(new Date())}
+                            className="px-3 py-1 rounded-full border border-border text-[12px] font-medium font-inter text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            Today
+                        </button>
                     </div>
+
                     <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1 rounded-full border border-auburn/20 bg-white/60 p-1">
+                        {/* View toggle */}
+                        <div className="flex gap-1 rounded-full border border-border p-1 w-fit">
                             {(Object.keys(VIEW_LABELS) as CalendarView[]).map((v) => (
-                                <Button
+                                <button
                                     key={v}
-                                    variant={view === v ? "default" : "ghost"}
-                                    size="sm"
                                     onClick={() => handleViewChange(v)}
                                     disabled={isPendingViewSave}
-                                    className={cn(view === v && "bg-auburn text-white")}
+                                    className={cn(
+                                        "px-3 py-1 rounded-full text-[12px] font-medium font-inter transition-all",
+                                        view === v
+                                            ? "bg-foreground text-background"
+                                            : "text-muted-foreground hover:text-foreground"
+                                    )}
                                 >
                                     {VIEW_LABELS[v]}
-                                </Button>
+                                </button>
                             ))}
                         </div>
-                        <Button onClick={openCreateDialog} className="gap-2">
-                            <Plus size={16} />
+
+                        {/* New Event */}
+                        <button
+                            onClick={openCreateDialog}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] bg-primary text-white text-[13px] font-medium font-inter hover:bg-primary/90 transition-colors"
+                        >
+                            <Plus size={14} />
                             New Event
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="icon"
+                        </button>
+
+                        {/* Sync */}
+                        <button
                             onClick={() => syncMutation.mutate()}
                             disabled={syncMutation.isPending}
+                            className="p-1.5 rounded-[6px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
                         >
-                            {syncMutation.isPending ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
-                        </Button>
+                            {syncMutation.isPending ? (
+                                <span className="flex gap-0.5">
+                                    <span className="teeks-dot" style={{ width: 4, height: 4 }} />
+                                    <span className="teeks-dot" style={{ width: 4, height: 4 }} />
+                                    <span className="teeks-dot" style={{ width: 4, height: 4 }} />
+                                </span>
+                            ) : (
+                                <RefreshCw size={15} />
+                            )}
+                        </button>
                     </div>
                 </div>
 
-                <div className="rounded-2xl border border-auburn/10 bg-white/80 shadow-sm p-4">
+                {/* Calendar surface */}
+                <div
+                    className="rounded-[14px] border border-border bg-white p-4"
+                    style={{ boxShadow: CARD_SHADOW }}
+                >
                     {eventsQuery.isLoading ? (
-                        <div className="flex items-center justify-center py-24">
-                            <Loader2 className="h-8 w-8 animate-spin text-auburn" />
+                        <div className="flex items-center justify-center gap-1 py-24">
+                            <span className="teeks-dot" />
+                            <span className="teeks-dot" />
+                            <span className="teeks-dot" />
                         </div>
                     ) : (
                         <>
@@ -330,13 +349,13 @@ export default function CalendarClient({ initialView }: { initialView: string })
                 </div>
             </section>
 
-            <aside className="space-y-6">
+            {/* Sidebar */}
+            <aside className="space-y-4">
                 <CalendarSettingsPanel
                     settings={settingsQuery.data}
                     calendars={calendarsQuery.data?.calendars ?? []}
                     onUpdate={(payload) => updateSettingsMutation.mutateAsync(payload)}
                 />
-
                 <SuggestionsPanel
                     suggestions={suggestionsQuery.data?.suggestions ?? []}
                     onAccept={(suggestionId, slotIndex) =>
@@ -361,6 +380,8 @@ export default function CalendarClient({ initialView }: { initialView: string })
     );
 }
 
+// ─── MONTH VIEW ──────────────────────────────────────────────────────────────
+
 function MonthView({
     selectedDate,
     events,
@@ -375,9 +396,7 @@ function MonthView({
     const start = startOfWeek(startOfMonth(selectedDate), { weekStartsOn: WEEK_STARTS_ON });
     const end = endOfWeek(endOfMonth(selectedDate), { weekStartsOn: WEEK_STARTS_ON });
     const days: Date[] = [];
-    for (let day = start; day <= end; day = addDays(day, 1)) {
-        days.push(day);
-    }
+    for (let day = start; day <= end; day = addDays(day, 1)) days.push(day);
 
     const eventsByDay = useMemo(() => {
         const map = new Map<string, CalendarEvent[]>();
@@ -390,49 +409,59 @@ function MonthView({
         return map;
     }, [events]);
 
+    const today = new Date();
+
     return (
-        <div className="space-y-4">
-            <div className="grid grid-cols-7 text-xs uppercase tracking-wide text-muted-foreground">
+        <div className="space-y-3">
+            {/* Day labels */}
+            <div className="grid grid-cols-7">
                 {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
-                    <div key={label} className="px-2 py-1 text-center">{label}</div>
+                    <div key={label} className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter text-center py-1">
+                        {label}
+                    </div>
                 ))}
             </div>
-            <div className="grid grid-cols-7 gap-2">
+            {/* Day cells */}
+            <div className="grid grid-cols-7 gap-1.5">
                 {days.map((day) => {
                     const key = format(day, "yyyy-MM-dd");
                     const dayEvents = eventsByDay.get(key) || [];
+                    const isToday = isSameDay(day, today);
+                    const isCurrentMonth = isSameMonth(day, selectedDate);
+
                     return (
                         <button
                             key={key}
                             onClick={() => onSelectDate(day)}
                             className={cn(
-                                "rounded-xl border border-auburn/10 bg-white/70 p-2 text-left hover:border-auburn/30 transition",
-                                !isSameMonth(day, selectedDate) && "opacity-50",
-                                isSameDay(day, new Date()) && "border-auburn/40 bg-auburn/5"
+                                "rounded-[10px] border p-2 text-left transition-all duration-150 min-h-[72px]",
+                                isCurrentMonth ? "bg-white border-border hover:border-border/80" : "bg-transparent border-transparent opacity-40",
+                                isToday && "border-primary/30 bg-primary/[0.03]",
                             )}
                         >
-                            <div className="flex items-center justify-between">
-                                <span className="text-sm font-semibold">{format(day, "d")}</span>
-                                {dayEvents.length > 0 && (
-                                    <span className="text-xs text-muted-foreground">{dayEvents.length}</span>
+                            <div className="flex items-center justify-between mb-1.5">
+                                <span className={cn(
+                                    "text-[13px] font-semibold font-inter w-6 h-6 flex items-center justify-center rounded-full",
+                                    isToday ? "bg-primary text-white" : "text-foreground"
+                                )}>
+                                    {format(day, "d")}
+                                </span>
+                                {dayEvents.length > 3 && (
+                                    <span className="text-[10px] text-muted-foreground/50 font-inter">
+                                        +{dayEvents.length - 3}
+                                    </span>
                                 )}
                             </div>
-                            <div className="mt-2 space-y-1">
+                            <div className="space-y-0.5">
                                 {dayEvents.slice(0, 3).map((event) => (
                                     <div
                                         key={event.id}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            onSelectEvent(event);
-                                        }}
-                                        className="truncate rounded-md bg-auburn/10 px-2 py-1 text-xs text-auburn"
+                                        onClick={(e) => { e.stopPropagation(); onSelectEvent(event); }}
+                                        className="truncate rounded-[4px] bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary font-inter font-medium cursor-pointer hover:bg-primary/15 transition-colors"
                                     >
                                         {event.title}
                                     </div>
                                 ))}
-                                {dayEvents.length > 3 && (
-                                    <div className="text-xs text-muted-foreground">+{dayEvents.length - 3} more</div>
-                                )}
                             </div>
                         </button>
                     );
@@ -441,6 +470,8 @@ function MonthView({
         </div>
     );
 }
+
+// ─── WEEK VIEW ───────────────────────────────────────────────────────────────
 
 function WeekView({
     weekStart,
@@ -452,14 +483,23 @@ function WeekView({
     onSelectEvent: (event: CalendarEvent) => void;
 }) {
     const days = Array.from({ length: 7 }, (_, idx) => addDays(weekStart, idx));
+    const today = new Date();
+
     return (
-        <div className="space-y-4">
-            <div className="grid grid-cols-8 gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+        <div className="space-y-3">
+            <div className="grid grid-cols-8 gap-1 text-center">
                 <div />
                 {days.map((day) => (
-                    <div key={day.toISOString()} className="text-center">
-                        <div className="font-medium text-foreground">{format(day, "EEE")}</div>
-                        <div>{format(day, "d")}</div>
+                    <div key={day.toISOString()}>
+                        <div className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                            {format(day, "EEE")}
+                        </div>
+                        <div className={cn(
+                            "text-sm font-semibold font-inter mx-auto w-7 h-7 flex items-center justify-center rounded-full",
+                            isSameDay(day, today) ? "bg-primary text-white" : "text-foreground"
+                        )}>
+                            {format(day, "d")}
+                        </div>
                     </div>
                 ))}
             </div>
@@ -467,6 +507,8 @@ function WeekView({
         </div>
     );
 }
+
+// ─── DAY VIEW ────────────────────────────────────────────────────────────────
 
 function DayView({
     day,
@@ -479,6 +521,8 @@ function DayView({
 }) {
     return <TimeGrid days={[day]} events={events} onSelectEvent={onSelectEvent} />;
 }
+
+// ─── TIME GRID ───────────────────────────────────────────────────────────────
 
 function TimeGrid({
     days,
@@ -493,31 +537,41 @@ function TimeGrid({
     const hourHeight = 48;
 
     return (
-        <div className="grid grid-cols-[60px_1fr] gap-2">
-            <div className="flex flex-col text-xs text-muted-foreground">
+        <div className="grid grid-cols-[52px_1fr] gap-2">
+            <div className="flex flex-col text-[11px] font-inter text-muted-foreground/50">
                 {hours.map((hour) => (
-                    <div key={hour} className="h-12 flex items-start justify-end pr-2">
+                    <div key={hour} className="h-12 flex items-start justify-end pr-2 pt-0.5">
                         {format(new Date().setHours(hour, 0), "ha")}
                     </div>
                 ))}
             </div>
             <div className="grid" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
                 {days.map((day) => (
-                    <div key={day.toISOString()} className="relative border-l border-auburn/10 px-1">
-                        <div className="absolute top-0 left-0 right-0 flex gap-1">
+                    <div key={day.toISOString()} className="relative border-l border-border/40 px-1">
+                        {/* All-day events */}
+                        <div className="flex flex-wrap gap-1 mb-1">
                             {events
                                 .filter((event) => event.all_day && isSameDay(parseISO(event.start_time), day))
                                 .map((event) => (
-                                    <div
+                                    <button
                                         key={event.id}
-                                        className="rounded-md bg-auburn/10 px-2 py-1 text-xs text-auburn"
                                         onClick={() => onSelectEvent(event)}
+                                        className="rounded-[4px] bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary font-inter font-medium"
                                     >
                                         {event.title}
-                                    </div>
+                                    </button>
                                 ))}
                         </div>
-                        <div className="relative pt-6" style={{ height: hours.length * hourHeight }}>
+                        {/* Timed events */}
+                        <div className="relative" style={{ height: hours.length * hourHeight }}>
+                            {/* Hour lines */}
+                            {hours.map((hour) => (
+                                <div
+                                    key={hour}
+                                    className="absolute left-0 right-0 border-t border-border/20"
+                                    style={{ top: hour * hourHeight }}
+                                />
+                            ))}
                             {events
                                 .filter((event) => !event.all_day && isSameDay(parseISO(event.start_time), day))
                                 .map((event) => {
@@ -531,13 +585,15 @@ function TimeGrid({
                                         <button
                                             key={event.id}
                                             onClick={() => onSelectEvent(event)}
-                                            className="absolute left-1 right-1 rounded-lg bg-auburn/10 px-2 py-1 text-left text-xs text-auburn shadow-sm hover:bg-auburn/20"
+                                            className="absolute left-1 right-1 rounded-[6px] bg-primary/10 border border-primary/20 px-2 py-1 text-left hover:bg-primary/15 transition-colors"
                                             style={{ top, height }}
                                         >
-                                            <div className="font-semibold">{event.title}</div>
-                                            <div className="text-[10px] text-auburn/80">
-                                                {format(start, "p")} - {format(end, "p")}
-                                            </div>
+                                            <div className="text-[11px] font-semibold font-inter text-primary truncate">{event.title}</div>
+                                            {height > 30 && (
+                                                <div className="text-[10px] font-inter text-primary/60">
+                                                    {format(start, "p")}
+                                                </div>
+                                            )}
                                         </button>
                                     );
                                 })}
@@ -548,6 +604,8 @@ function TimeGrid({
         </div>
     );
 }
+
+// ─── LIST VIEW ───────────────────────────────────────────────────────────────
 
 function ListView({
     rangeStart,
@@ -561,35 +619,53 @@ function ListView({
     onSelectEvent: (event: CalendarEvent) => void;
 }) {
     const days: Date[] = [];
-    for (let day = rangeStart; day <= rangeEnd; day = addDays(day, 1)) {
-        days.push(day);
+    for (let day = rangeStart; day <= rangeEnd; day = addDays(day, 1)) days.push(day);
+
+    const hasAny = days.some((day) => events.some((e) => isSameDay(parseISO(e.start_time), day)));
+
+    if (!hasAny) {
+        return (
+            <div className="flex flex-col items-center justify-center py-16 gap-2">
+                <p className="font-playfair text-xl text-muted-foreground/50">Nothing scheduled</p>
+                <p className="text-sm font-inter text-muted-foreground/40">No events in this range.</p>
+            </div>
+        );
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-5">
             {days.map((day) => {
                 const dayEvents = events.filter((event) => isSameDay(parseISO(event.start_time), day));
                 if (!dayEvents.length) return null;
                 return (
                     <div key={day.toISOString()} className="space-y-2">
-                        <div className="text-sm font-semibold text-muted-foreground">
-                            {format(day, "EEEE, MMM d")}
+                        {/* Date divider — matching InboxFeed group headers */}
+                        <div className="flex items-center gap-3">
+                            <span className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter shrink-0">
+                                {isSameDay(day, new Date()) ? "Today" : format(day, "EEE, MMM d")}
+                            </span>
+                            <div className="flex-1 h-px bg-border/40" />
                         </div>
-                        <div className="space-y-2">
+                        <div className="space-y-1.5">
                             {dayEvents.map((event) => (
                                 <button
                                     key={event.id}
                                     onClick={() => onSelectEvent(event)}
-                                    className="w-full rounded-xl border border-auburn/10 bg-white/70 p-3 text-left hover:border-auburn/30"
+                                    style={{ boxShadow: CARD_SHADOW }}
+                                    className="w-full rounded-[12px] border border-border bg-white px-4 py-3 text-left hover:border-border/80 transition-colors"
                                 >
-                                    <div className="flex items-center justify-between">
-                                        <div className="font-semibold text-foreground">{event.title}</div>
-                                        <div className="text-xs text-muted-foreground">
-                                            {event.all_day ? "All day" : `${format(parseISO(event.start_time), "p")} - ${format(parseISO(event.end_time), "p")}`}
-                                        </div>
+                                    <div className="flex items-center justify-between gap-4">
+                                        <span className="font-playfair text-[15px] font-semibold text-foreground">
+                                            {event.title}
+                                        </span>
+                                        <span className="text-[11px] font-inter text-muted-foreground/60 shrink-0">
+                                            {event.all_day
+                                                ? "All day"
+                                                : `${format(parseISO(event.start_time), "p")} – ${format(parseISO(event.end_time), "p")}`}
+                                        </span>
                                     </div>
                                     {event.location && (
-                                        <div className="text-xs text-muted-foreground mt-1">{event.location}</div>
+                                        <p className="text-[12px] font-inter text-muted-foreground/60 mt-0.5">{event.location}</p>
                                     )}
                                 </button>
                             ))}
@@ -600,6 +676,8 @@ function ListView({
         </div>
     );
 }
+
+// ─── CALENDAR SETTINGS PANEL ─────────────────────────────────────────────────
 
 function CalendarSettingsPanel({
     settings,
@@ -616,7 +694,6 @@ function CalendarSettingsPanel({
         try {
             setSaving(true);
             await onUpdate(payload);
-            toast.success("Calendar settings updated");
         } catch (error: any) {
             toast.error(error?.message || "Failed to update settings");
         } finally {
@@ -625,12 +702,20 @@ function CalendarSettingsPanel({
     };
 
     return (
-        <div className="rounded-2xl border border-auburn/10 bg-white/80 shadow-sm p-4 space-y-4">
-            <div className="font-semibold text-foreground">Calendar Settings</div>
-            <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground">Default Calendar</label>
+        <div
+            className="rounded-[14px] border border-border bg-white p-4 space-y-4"
+            style={{ boxShadow: CARD_SHADOW }}
+        >
+            <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                Settings
+            </p>
+
+            <div className="space-y-1.5">
+                <label className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                    Default calendar
+                </label>
                 <select
-                    className="w-full rounded-lg border border-auburn/10 bg-white px-3 py-2 text-sm"
+                    className="w-full rounded-[8px] border border-border bg-white px-3 py-2 text-sm font-inter text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
                     value={settings?.default_calendar_id || "primary"}
                     onChange={(e) => handleChange({ default_calendar_id: e.target.value })}
                     disabled={saving}
@@ -642,31 +727,44 @@ function CalendarSettingsPanel({
                     ))}
                 </select>
             </div>
+
             <div className="flex items-center justify-between gap-3">
                 <div>
-                    <div className="text-sm font-medium text-foreground">Auto-generate briefs</div>
-                    <div className="text-xs text-muted-foreground">Generate 1 hour before meetings by default</div>
+                    <p className="text-sm font-medium font-inter text-foreground">Auto-generate briefs</p>
+                    <p className="text-[12px] font-inter text-muted-foreground/60 mt-0.5">1 hour before meetings</p>
                 </div>
-                <input
-                    type="checkbox"
-                    className="h-4 w-4"
-                    checked={settings?.auto_briefing_enabled ?? true}
-                    onChange={(e) => handleChange({ auto_briefing_enabled: e.target.checked })}
-                />
+                <button
+                    onClick={() => handleChange({ auto_briefing_enabled: !(settings?.auto_briefing_enabled ?? true) })}
+                    className={cn(
+                        "relative w-9 h-5 rounded-full transition-colors duration-200",
+                        (settings?.auto_briefing_enabled ?? true) ? "bg-primary" : "bg-border"
+                    )}
+                >
+                    <span className={cn(
+                        "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200",
+                        (settings?.auto_briefing_enabled ?? true) ? "translate-x-4" : "translate-x-0.5"
+                    )} />
+                </button>
             </div>
-            <div className="space-y-2">
-                <label className="text-xs font-medium text-muted-foreground">Briefing lead time (hours)</label>
+
+            <div className="space-y-1.5">
+                <label className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                    Briefing lead time (hours)
+                </label>
                 <Input
                     type="number"
                     min={1}
                     value={settings?.briefing_hours_before ?? 1}
                     onChange={(e) => handleChange({ briefing_hours_before: Number(e.target.value || 1) })}
                     disabled={saving}
+                    className="rounded-[8px] border-border text-sm font-inter"
                 />
             </div>
         </div>
     );
 }
+
+// ─── SUGGESTIONS PANEL ───────────────────────────────────────────────────────
 
 function SuggestionsPanel({
     suggestions,
@@ -679,41 +777,59 @@ function SuggestionsPanel({
     onSend: (suggestionId: number, reply?: string) => void;
     onDismiss: (suggestionId: number) => void;
 }) {
+    if (suggestions.length === 0) return null;
+
     return (
-        <div className="rounded-2xl border border-auburn/10 bg-white/80 shadow-sm p-4 space-y-4">
-            <div className="font-semibold text-foreground">Scheduling Suggestions</div>
-            {suggestions.length === 0 && (
-                <div className="text-sm text-muted-foreground">No pending suggestions.</div>
-            )}
+        <div
+            className="rounded-[14px] border border-border bg-white p-4 space-y-4"
+            style={{ boxShadow: CARD_SHADOW }}
+        >
+            <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                Scheduling suggestions
+            </p>
+
             {suggestions.map((suggestion) => (
-                <div key={suggestion.id} className="rounded-xl border border-auburn/10 bg-white/70 p-3 space-y-3">
-                    <div className="text-sm font-semibold text-foreground">
-                        {suggestion.meeting_type} with {suggestion.participants.join(", ") || "guest"}
-                    </div>
-                    <div className="space-y-2">
+                <div key={suggestion.id} className="space-y-3">
+                    <p className="text-sm font-semibold font-inter text-foreground">
+                        {suggestion.meeting_type}
+                        {suggestion.participants.length > 0 && (
+                            <span className="font-normal text-muted-foreground"> with {suggestion.participants.join(", ")}</span>
+                        )}
+                    </p>
+
+                    <div className="space-y-1.5">
                         {suggestion.suggested_slots.slice(0, 3).map((slot, idx) => (
                             <button
                                 key={`${suggestion.id}-${idx}`}
                                 onClick={() => onAccept(suggestion.id, idx)}
-                                className="w-full rounded-lg bg-auburn/10 px-3 py-2 text-left text-xs text-auburn hover:bg-auburn/20"
+                                className="w-full rounded-[8px] bg-copper/[0.06] border border-copper/20 px-3 py-2 text-left text-[12px] font-inter text-copper hover:bg-copper/10 transition-colors"
                             >
-                                {format(parseISO(slot.start_time), "EEE, MMM d p")} - {format(parseISO(slot.end_time), "p")}
+                                {format(parseISO(slot.start_time), "EEE, MMM d · p")} – {format(parseISO(slot.end_time), "p")}
                             </button>
                         ))}
                     </div>
+
                     <div className="flex items-center gap-2">
-                        <Button size="sm" onClick={() => onSend(suggestion.id, suggestion.draft_reply || undefined)}>
-                            Send Availability
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => onDismiss(suggestion.id)}>
+                        <button
+                            onClick={() => onSend(suggestion.id, suggestion.draft_reply || undefined)}
+                            className="flex-1 py-1.5 rounded-[8px] bg-primary text-white text-[12px] font-medium font-inter hover:bg-primary/90 transition-colors"
+                        >
+                            Send availability
+                        </button>
+                        <button
+                            onClick={() => onDismiss(suggestion.id)}
+                            className="px-3 py-1.5 rounded-[8px] border border-border text-muted-foreground text-[12px] font-inter hover:bg-muted/40 transition-colors"
+                        >
                             Dismiss
-                        </Button>
+                        </button>
                     </div>
                 </div>
             ))}
         </div>
     );
 }
+
+// ─── EVENT DIALOG ────────────────────────────────────────────────────────────
 
 function EventDialog({
     open,
@@ -739,7 +855,9 @@ function EventDialog({
     const [description, setDescription] = useState(event?.description || "");
     const [notes, setNotes] = useState(event?.notes || "");
     const [participants, setParticipants] = useState(
-        Array.isArray(event?.participants) ? event?.participants.map((p) => (typeof p === "string" ? p : p.email || "")).filter(Boolean).join(", ") : ""
+        Array.isArray(event?.participants)
+            ? event?.participants.map((p) => (typeof p === "string" ? p : p.email || "")).filter(Boolean).join(", ")
+            : ""
     );
     const [allDay, setAllDay] = useState(event?.all_day ?? false);
     const [startValue, setStartValue] = useState(getDateInputValue(event?.start_time, event?.all_day));
@@ -751,36 +869,25 @@ function EventDialog({
         setDescription(event?.description || "");
         setNotes(event?.notes || "");
         setParticipants(
-            Array.isArray(event?.participants) ? event?.participants.map((p) => (typeof p === "string" ? p : p.email || "")).filter(Boolean).join(", ") : ""
+            Array.isArray(event?.participants)
+                ? event?.participants.map((p) => (typeof p === "string" ? p : p.email || "")).filter(Boolean).join(", ")
+                : ""
         );
         setAllDay(event?.all_day ?? false);
         setStartValue(getDateInputValue(event?.start_time, event?.all_day));
         setEndValue(getDateInputValue(event?.end_time, event?.all_day, event?.start_time));
     };
 
-    useEffect(() => {
-        reset();
-    }, [event?.id, open]);
+    useEffect(() => { reset(); }, [event?.id, open]);
 
     const handleSave = () => {
-        const participantList = participants
-            .split(",")
-            .map((p) => p.trim())
-            .filter(Boolean);
-
+        const participantList = participants.split(",").map((p) => p.trim()).filter(Boolean);
         const timezone = settings?.default_timezone || "UTC";
-
         const { start_time, end_time } = buildTimes(startValue, endValue, allDay);
         const payload = {
-            title,
-            description: description || undefined,
-            notes: notes || undefined,
-            participants: participantList,
-            all_day: allDay,
-            timezone,
-            location: location || undefined,
+            title, description: description || undefined, notes: notes || undefined,
+            participants: participantList, all_day: allDay, timezone, location: location || undefined,
         };
-
         if (event) {
             onUpdate(event.id, { ...payload, start_time, end_time });
         } else {
@@ -789,60 +896,71 @@ function EventDialog({
     };
 
     return (
-        <Dialog open={open} onOpenChange={(next) => {
-            if (!next) reset();
-            onOpenChange(next);
-        }}>
+        <Dialog open={open} onOpenChange={(next) => { if (!next) reset(); onOpenChange(next); }}>
             <DialogContent className="max-w-xl">
                 <DialogHeader>
-                    <DialogTitle>{event ? "Edit Event" : "New Event"}</DialogTitle>
+                    <DialogTitle className="font-playfair text-xl">
+                        {event ? "Edit event" : "New event"}
+                    </DialogTitle>
                 </DialogHeader>
-                <div className="space-y-4">
-                    <Input placeholder="Event title" value={title} onChange={(e) => setTitle(e.target.value)} />
+
+                <div className="space-y-3">
+                    <Input
+                        placeholder="Event title"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        className="font-inter text-sm rounded-[8px]"
+                    />
                     <div className="grid grid-cols-2 gap-3">
                         <Input
                             type={allDay ? "date" : "datetime-local"}
                             value={startValue}
                             onChange={(e) => setStartValue(e.target.value)}
+                            className="font-inter text-sm rounded-[8px]"
                         />
                         <Input
                             type={allDay ? "date" : "datetime-local"}
                             value={endValue}
                             onChange={(e) => setEndValue(e.target.value)}
+                            className="font-inter text-sm rounded-[8px]"
                         />
                     </div>
-                    <label className="flex items-center gap-2 text-sm">
-                        <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
+                    <label className="flex items-center gap-2 text-sm font-inter text-muted-foreground cursor-pointer">
+                        <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="rounded" />
                         All day
                     </label>
-                    <Input placeholder="Location or link" value={location || ""} onChange={(e) => setLocation(e.target.value)} />
-                    <Input placeholder="Attendees (comma separated)" value={participants} onChange={(e) => setParticipants(e.target.value)} />
-                    <Textarea placeholder="Description (optional)" value={description || ""} onChange={(e) => setDescription(e.target.value)} />
-                    <Textarea placeholder="Internal notes (not synced)" value={notes || ""} onChange={(e) => setNotes(e.target.value)} />
+                    <Input placeholder="Location or link" value={location || ""} onChange={(e) => setLocation(e.target.value)} className="font-inter text-sm rounded-[8px]" />
+                    <Input placeholder="Attendees (comma separated)" value={participants} onChange={(e) => setParticipants(e.target.value)} className="font-inter text-sm rounded-[8px]" />
+                    <Textarea placeholder="Description (optional)" value={description || ""} onChange={(e) => setDescription(e.target.value)} className="font-inter text-sm rounded-[8px]" />
+                    <Textarea placeholder="Internal notes (not synced)" value={notes || ""} onChange={(e) => setNotes(e.target.value)} className="font-inter text-sm rounded-[8px]" />
+
+                    {/* Meeting brief */}
                     {event?.briefing && (
-                        <div className="rounded-lg border bg-muted/40 p-4 space-y-3">
+                        <div className="rounded-[12px] border border-border bg-linen/40 p-4 space-y-3">
                             <div className="flex items-center justify-between">
-                                <h4 className="text-sm font-semibold">Meeting Brief</h4>
+                                <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                                    Meeting brief
+                                </p>
                                 {event.briefing_generated_at && (
-                                    <span className="text-xs text-muted-foreground">
-                                        {format(parseISO(event.briefing_generated_at), "PPP p")}
+                                    <span className="text-[11px] text-muted-foreground/50 font-inter">
+                                        {format(parseISO(event.briefing_generated_at), "MMM d, p")}
                                     </span>
                                 )}
                             </div>
 
                             {event.briefing.agenda && event.briefing.agenda !== "No agenda provided" && (
                                 <div>
-                                    <p className="text-xs font-medium text-muted-foreground mb-1">Agenda</p>
-                                    <p className="text-sm">{event.briefing.agenda}</p>
+                                    <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter mb-1">Agenda</p>
+                                    <p className="text-sm font-inter text-foreground/80">{event.briefing.agenda}</p>
                                 </div>
                             )}
 
                             {event.briefing.attendees && event.briefing.attendees.length > 0 && (
                                 <div>
-                                    <p className="text-xs font-medium text-muted-foreground mb-1">Attendees</p>
+                                    <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter mb-1.5">Attendees</p>
                                     <div className="flex flex-wrap gap-1.5">
                                         {event.briefing.attendees.map((a, i) => (
-                                            <span key={i} className="inline-flex items-center rounded-full bg-background px-2 py-0.5 text-xs border">
+                                            <span key={i} className="px-2 py-0.5 rounded-full border border-border bg-white text-[12px] font-inter text-foreground/70">
                                                 {a.name || a.email}
                                             </span>
                                         ))}
@@ -852,13 +970,15 @@ function EventDialog({
 
                             {event.briefing.related_emails && event.briefing.related_emails.length > 0 && (
                                 <div>
-                                    <p className="text-xs font-medium text-muted-foreground mb-1">Related emails ({event.briefing.message_count})</p>
+                                    <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter mb-1.5">
+                                        Related emails {event.briefing.message_count > 3 && `(${event.briefing.message_count})`}
+                                    </p>
                                     <div className="space-y-1.5">
                                         {event.briefing.related_emails.slice(0, 3).map((e, i) => (
-                                            <div key={i} className="text-xs bg-background rounded p-2 border">
-                                                <span className="font-medium">{e.subject}</span>
-                                                {e.sender && <span className="text-muted-foreground"> — {e.sender}</span>}
-                                                {e.summary && <p className="text-muted-foreground mt-0.5">{e.summary}</p>}
+                                            <div key={i} className="rounded-[8px] border border-border bg-white p-2.5">
+                                                <p className="text-[12px] font-semibold font-inter text-foreground">{e.subject}</p>
+                                                {e.sender && <p className="text-[11px] font-inter text-muted-foreground/60">{e.sender}</p>}
+                                                {e.summary && <p className="text-[11px] font-inter text-muted-foreground/70 mt-0.5">{e.summary}</p>}
                                             </div>
                                         ))}
                                     </div>
@@ -867,14 +987,21 @@ function EventDialog({
 
                             {event.briefing.open_tasks && event.briefing.open_tasks.length > 0 && (
                                 <div>
-                                    <p className="text-xs font-medium text-muted-foreground mb-1">Open tasks ({event.briefing.task_count})</p>
+                                    <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter mb-1.5">
+                                        Open tasks {event.briefing.task_count > 3 && `(${event.briefing.task_count})`}
+                                    </p>
                                     <ul className="space-y-1">
                                         {event.briefing.open_tasks.map((t, i) => (
-                                            <li key={i} className="text-xs flex items-center gap-1.5">
-                                                <span className="h-1.5 w-1.5 rounded-full bg-foreground/40 shrink-0" />
+                                            <li key={i} className="flex items-center gap-2 text-[12px] font-inter text-foreground/80">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-primary/40 shrink-0" />
                                                 <span>{t.title}</span>
                                                 {t.priority && t.priority !== "normal" && (
-                                                    <span className={`text-[10px] px-1 rounded ${t.priority === "urgent" || t.priority === "high" ? "bg-red-100 text-red-700" : "bg-muted text-muted-foreground"}`}>
+                                                    <span className={cn(
+                                                        "text-[10px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wide",
+                                                        (t.priority === "urgent" || t.priority === "high")
+                                                            ? "bg-primary/10 text-primary"
+                                                            : "bg-muted text-muted-foreground"
+                                                    )}>
                                                         {t.priority}
                                                     </span>
                                                 )}
@@ -885,38 +1012,68 @@ function EventDialog({
                             )}
 
                             {event.briefing.prep_warnings && event.briefing.prep_warnings.length > 0 && (
-                                <div className="rounded border border-yellow-200 bg-yellow-50 p-2 dark:border-yellow-800 dark:bg-yellow-950">
-                                    <p className="text-xs font-medium text-yellow-800 dark:text-yellow-200 mb-1">Prep warnings</p>
+                                <div className="rounded-[8px] border border-copper/20 bg-copper/[0.06] p-3">
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                        <AlertTriangle size={11} className="text-copper" />
+                                        <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-copper font-inter">Prep warnings</p>
+                                    </div>
                                     <ul className="space-y-0.5">
                                         {event.briefing.prep_warnings.map((w, i) => (
-                                            <li key={i} className="text-xs text-yellow-700 dark:text-yellow-300">{w}</li>
+                                            <li key={i} className="text-[12px] font-inter text-copper/80">{w}</li>
                                         ))}
                                     </ul>
                                 </div>
                             )}
 
                             {event.briefing.prep_complete && (
-                                <p className="text-xs text-green-600 dark:text-green-400 font-medium">Prep complete</p>
+                                <div className="flex items-center gap-1.5">
+                                    <CheckCircle2 size={13} className="text-sage" />
+                                    <p className="text-[12px] font-inter text-sage font-medium">Prep complete</p>
+                                </div>
                             )}
                         </div>
                     )}
                 </div>
-                <div className="mt-6 flex items-center justify-between">
+
+                <div className="mt-4 flex items-center justify-between">
                     {event ? (
                         <div className="flex items-center gap-2">
-                            <Button variant="ghost" onClick={() => onGenerateBrief(event.id)}>Generate Brief</Button>
-                            <Button variant="destructive" onClick={() => onDelete(event.id)}>Delete</Button>
+                            <button
+                                onClick={() => onGenerateBrief(event.id)}
+                                className="px-3 py-1.5 rounded-[8px] border border-border text-[13px] font-inter text-muted-foreground hover:bg-muted/40 transition-colors"
+                            >
+                                Generate brief
+                            </button>
+                            <button
+                                onClick={() => onDelete(event.id)}
+                                className="px-3 py-1.5 rounded-[8px] border border-destructive/30 text-[13px] font-inter text-destructive hover:bg-destructive/5 transition-colors"
+                            >
+                                Delete
+                            </button>
                         </div>
                     ) : <div />}
                     <div className="flex items-center gap-2">
-                        <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-                        <Button onClick={handleSave} disabled={!title.trim()}>Save</Button>
+                        <button
+                            onClick={() => onOpenChange(false)}
+                            className="px-3 py-1.5 rounded-[8px] border border-border text-[13px] font-inter text-muted-foreground hover:bg-muted/40 transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleSave}
+                            disabled={!title.trim()}
+                            className="px-3 py-1.5 rounded-[8px] bg-primary text-white text-[13px] font-medium font-inter hover:bg-primary/90 disabled:opacity-40 transition-colors"
+                        >
+                            Save
+                        </button>
                     </div>
                 </div>
             </DialogContent>
         </Dialog>
     );
 }
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 function buildTimes(startValue: string, endValue: string, allDay: boolean): { start_time: string; end_time: string } {
     if (allDay) {

@@ -32,6 +32,8 @@ MENTIONS_INDEX_MAX_CONTACTS = 300
 MENTIONS_INDEX_MAX_THREADS = 220
 MENTIONS_INDEX_MAX_EVENTS = 160
 MENTIONS_INDEX_MAX_TASKS = 80
+MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX = "__manual_tasks__"
+MANUAL_TASK_PLACEHOLDER_MESSAGE_PREFIX = "__manual_tasks_placeholder__"
 
 
 @dataclass
@@ -263,6 +265,8 @@ class MentionContextService:
             ref = (row.entity_id or "").strip()
             if not ref:
                 continue
+            if row.entity_type == "thread" and ref.startswith(MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX):
+                continue
             ref_key = ref.lower() if row.entity_type == "contact" else ref
             key = f"{row.entity_type}:{ref_key.lower()}"
             if key not in context_index:
@@ -320,6 +324,8 @@ class MentionContextService:
         for entity in entities:
             ref = (entity.ref or "").strip()
             if not ref:
+                continue
+            if entity.entity_type == "thread" and ref.startswith(MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX):
                 continue
             key = f"{entity.entity_type}:{ref.lower()}"
             ctx = context_index.get(key, {})
@@ -392,12 +398,16 @@ class MentionContextService:
         )
         seen_thread_refs: set[str] = set()
         for msg in recent_messages:
+            if (msg.message_id or "").startswith(MANUAL_TASK_PLACEHOLDER_MESSAGE_PREFIX):
+                continue
             stamp = msg.received_at or msg.updated_at or msg.created_at
             ts = stamp.isoformat() if stamp else ""
             subject = (msg.subject or "").strip()
 
             thread_ref = (msg.thread_id or "").strip()
             if thread_ref:
+                if thread_ref.startswith(MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX):
+                    continue
                 key_lower = thread_ref.lower()
                 if key_lower in seen_thread_refs:
                     continue

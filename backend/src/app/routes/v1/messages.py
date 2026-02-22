@@ -104,7 +104,7 @@ async def sync_messages(
             if filter_result.action == FilterAction.SKIP:
                 continue
 
-            # Save message to database (for both PROCESS and METADATA_ONLY)
+            # Save message to database
             attachments = msg_data.get('attachments') or []
             message = Message(
                 message_id=msg_data['message_id'],
@@ -321,17 +321,15 @@ def get_messages(
     limit: int = 3,
     offset: int = 0,
     needs_reply: bool = None,
-    status: str = None,
+    status: str = "inbox",
     db: Session = Depends(get_db_for_user)
 ):
     """Get all messages with optional filtering and their associated tasks.
 
     RLS automatically filters to current user's messages.
+    Defaults to status=inbox to exclude archived/done messages including manual task placeholders.
     """
-    query = db.query(Message)
-
-    if status is not None:
-        query = query.filter(Message.status == status)
+    query = db.query(Message).filter(Message.status == status)
 
     if needs_reply is not None:
         query = query.filter(Message.needs_reply == needs_reply)
@@ -479,12 +477,12 @@ def get_thread_detail(
             ThreadState.thread_id == thread_id
         ).first()
 
-        if not thread_state:
-            raise HTTPException(status_code=404, detail="Thread not found")
-
         messages = db.query(Message).filter(
             Message.thread_id == thread_id
         ).order_by(Message.received_at.asc()).all()
+
+        if not messages:
+            raise HTTPException(status_code=404, detail="Thread not found")
 
         thread_messages = [
             ThreadMessageResponse(
@@ -511,15 +509,15 @@ def get_thread_detail(
 
         response = ThreadDetailResponse(
             thread_state=ThreadStateResponse(
-                summary=thread_state.summary,
-                open_tasks=thread_state.open_tasks or [],
-                decisions=thread_state.decisions or [],
-                participants=thread_state.participants or [],
-                action_points=thread_state.action_points or [],
-                needs_reply=thread_state.needs_reply or False,
-                message_count=thread_state.message_count or 0,
-                last_action=thread_state.last_action,
-                last_action_by=thread_state.last_action_by,
+                summary=thread_state.summary if thread_state else None,
+                open_tasks=thread_state.open_tasks if thread_state else [],
+                decisions=thread_state.decisions if thread_state else [],
+                participants=thread_state.participants if thread_state else [],
+                action_points=thread_state.action_points if thread_state else [],
+                needs_reply=thread_state.needs_reply if thread_state else False,
+                message_count=thread_state.message_count if thread_state else len(messages),
+                last_action=thread_state.last_action if thread_state else None,
+                last_action_by=thread_state.last_action_by if thread_state else None,
             ),
             messages=thread_messages,
             tasks=[TaskListItem.model_validate(t) for t in tasks],
@@ -532,7 +530,17 @@ def get_thread_detail(
             msg["body"] = ""
         return result
 
-    return thread_cache.get_or_build(user.user_id, thread_id, build)
+    result = thread_cache.get_or_build(user.user_id, thread_id, build)
+
+    # Re-attach bodies from DB after cache lookup — bodies are never cached
+    messages = db.query(Message).filter(
+        Message.thread_id == thread_id
+    ).order_by(Message.received_at.asc()).all()
+    body_map = {msg.id: msg.decrypted_body for msg in messages}
+    for msg in result["messages"]:
+        msg["body"] = body_map.get(msg["id"], "")
+
+    return result
 
 
 @router.get("/{message_id}", response_model=MessageResponse)

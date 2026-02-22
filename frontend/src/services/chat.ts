@@ -129,6 +129,22 @@ function isTimeoutError(error: unknown): boolean {
     return code === "ECONNABORTED" || message.includes("timeout");
 }
 
+function isRecoverableSendError(error: unknown): boolean {
+    const candidate = error as {
+        code?: string;
+        message?: string;
+        response?: { status?: number };
+        request?: unknown;
+    } | undefined;
+    const code = (candidate?.code || "").toUpperCase();
+    const status = Number(candidate?.response?.status || 0);
+    if (isTimeoutError(error)) return true;
+    if (code === "NETWORK_ERROR") return true;
+    if (!candidate?.response && Boolean(candidate?.request)) return true;
+    if (status === 502 || status === 503 || status === 504) return true;
+    return false;
+}
+
 // =============================================================================
 // Service
 // =============================================================================
@@ -166,7 +182,10 @@ export const chatService = {
     async sendMessage(request: SendMessageRequest): Promise<SendMessageResponse> {
         const response = await api.post<SendMessageResponse>(
             `/chat/sessions/${request.session_id}/messages`,
-            { content: request.content, mentions: request.mentions || [] }
+            { content: request.content, mentions: request.mentions || [] },
+            // Large-tool turns can exceed the default 30s network timeout.
+            // Keep request alive longer to avoid false "failed to send" UX.
+            { timeout: 90000 }
         );
         return response.data;
     },
@@ -276,6 +295,7 @@ export const chatService = {
     pollSessionForReply(
         sessionId: string,
         sentAtMs: number,
+        expectedUserContent: string,
         onUpdate: (result: JobStatusResponse) => void,
         options: {
             initialInterval?: number;
@@ -298,14 +318,24 @@ export const chatService = {
             if (stopped) return;
             try {
                 const snapshot = await chatService.getSession(sessionId);
-                const assistantMessages = (snapshot.messages || []).filter(
+                const msgs = snapshot.messages || [];
+                const targetUser = [...msgs].reverse().find((m) =>
+                    m.role === "user" &&
+                    Boolean((m.content || "").trim()) &&
+                    (m.content || "").trim() === (expectedUserContent || "").trim()
+                );
+                const anchorMs = targetUser
+                    ? Date.parse(targetUser.created_at)
+                    : sentAtMs;
+
+                const assistantMessages = msgs.filter(
                     (m) =>
                         m.role === "assistant" &&
-                        Boolean((m.content || "").trim())
+                        Boolean((m.content || "").trim()) &&
+                        Date.parse(m.created_at) >= anchorMs - 1000
                 );
                 const latest = assistantMessages[assistantMessages.length - 1];
-                const createdAtMs = latest ? Date.parse(latest.created_at) : 0;
-                if (latest && createdAtMs >= sentAtMs - 1500) {
+                if (latest) {
                     const pending = (snapshot.pending_actions || []).filter((a) => a.message_id === latest.id);
                     onUpdate({
                         status: "complete",
@@ -388,9 +418,9 @@ export const chatService = {
             callbacks.onError(result.error || 'Unexpected response');
             return () => { };
         } catch (error) {
-            if (isTimeoutError(error)) {
+            if (isRecoverableSendError(error)) {
                 callbacks.onProcessing?.(`session-fallback:${request.session_id}`, -1);
-                cleanup = chatService.pollSessionForReply(request.session_id, sentAtMs, (jobResult) => {
+                cleanup = chatService.pollSessionForReply(request.session_id, sentAtMs, request.content, (jobResult) => {
                     if (jobResult.status === "complete") {
                         callbacks.onComplete(jobResult.response || "", jobResult.pending_actions || []);
                     } else if (jobResult.status === "failed") {

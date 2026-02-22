@@ -1,15 +1,10 @@
 "use client";
 
 import { Message } from "@/services/messages";
-import { DonnaCard, DonnaCardContent, DonnaCardHeader, DonnaCardTitle } from "@/components/ui/DonnaCard";
-import { DonnaText } from "@/components/ui/DonnaText";
-import { DonnaButton } from "@/components/ui/DonnaButton";
 import { formatDistanceToNow, parseISO } from "date-fns";
-import { Archive, CheckCircle, Trash2, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
+import { Archive, CheckCircle, Trash2, Sparkles } from "lucide-react";
 import { useMessageMutations } from "@/hooks/useInbox";
 import { cn } from "@/lib/utils";
-import { TaskItem } from "./TaskItem";
-import { useState } from "react";
 
 interface EmailCardProps {
     message: Message;
@@ -19,11 +14,10 @@ interface EmailCardProps {
     onClick?: (threadId: string) => void;
 }
 
-const MAX_VISIBLE_TASKS = 2;
+const CARD_SHADOW = '0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)';
 
 export function EmailCard({ message, highlight, selected, compact, onClick }: EmailCardProps) {
     const { markDone, archive, remove } = useMessageMutations();
-    const [showAllTasks, setShowAllTasks] = useState(false);
 
     const handleDone = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -40,129 +34,115 @@ export function EmailCard({ message, highlight, selected, compact, onClick }: Em
         remove.mutate(message.id);
     };
 
-    // Determine card style based on priority
     const isUrgent = message.needs_reply;
     const isInsight = message.scheduling_intent?.detected;
     const hasTasks = message.tasks && message.tasks.length > 0;
+    const taskCount = message.tasks?.length ?? 0;
 
     return (
-        <DonnaCard
-            variant="interactive"
-            className={cn(
-                "group relative overflow-hidden transition-all duration-200 cursor-pointer",
-                isUrgent && "border-l-4 border-l-auburn bg-linen/50",
-                isInsight && "border-l-4 border-l-copper bg-white",
-                highlight && "ring-2 ring-auburn/40",
-                selected && "ring-2 ring-auburn bg-auburn/5 border-l-auburn",
-                compact && "py-0",
-            )}
+        <div
+            role="button"
+            tabIndex={0}
             onClick={() => onClick?.(message.thread_id || '')}
+            onKeyDown={(e) => e.key === "Enter" && onClick?.(message.thread_id || '')}
+            style={{ boxShadow: CARD_SHADOW }}
+            className={cn(
+                "group relative bg-white border border-border rounded-[14px] cursor-pointer transition-all duration-200",
+                compact ? "px-3 py-2.5" : "px-4 py-3",
+                isUrgent && "border-l-[3px] border-l-primary",
+                isInsight && !isUrgent && "border-l-[3px] border-l-copper",
+                highlight && "ring-2 ring-primary/30",
+                selected && "ring-2 ring-primary/40 bg-primary/[0.02]",
+                "hover:border-border/80",
+            )}
         >
-            <DonnaCardHeader className={cn("pb-2 flex flex-row items-start justify-between space-y-0", compact && "pb-1 px-3 pt-3")}>
-                <div className="flex flex-col gap-1 min-w-0">
-                    {/* Sender & Time */}
-                    <div className="flex items-center gap-2">
-                        <DonnaText variant="label" className={cn("text-auburn font-bold truncate", compact && "text-xs")}>
-                            {message.sender.split('<')[0].trim()}
-                        </DonnaText>
-                        <div className="h-1 w-1 rounded-full bg-muted-foreground/30 shrink-0" />
-                        <DonnaText variant="caption" className="text-muted-foreground/60 flex items-center gap-1 shrink-0">
-                            {formatDistanceToNow(parseISO(message.received_at), { addSuffix: true })}
-                        </DonnaText>
-                    </div>
-
-                    {/* Subject */}
-                    <DonnaCardTitle className={cn(
-                        "font-playfair leading-tight mt-1 group-hover:text-auburn transition-colors",
-                        compact ? "text-sm line-clamp-1" : "text-lg"
+            {/* Top row: sender + time + badges */}
+            <div className="flex items-start justify-between gap-2 mb-1.5">
+                <div className="flex items-center gap-2 min-w-0">
+                    <span className={cn(
+                        "font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter truncate",
+                        compact ? "text-[10px]" : "text-[11px]"
                     )}>
-                        {message.subject}
-                    </DonnaCardTitle>
+                        {message.sender.split('<')[0].trim()}
+                    </span>
+                    <span className="h-1 w-1 rounded-full bg-muted-foreground/30 shrink-0" />
+                    <span className="text-[11px] text-muted-foreground/50 font-inter shrink-0">
+                        {formatDistanceToNow(parseISO(message.received_at), { addSuffix: true })}
+                    </span>
                 </div>
 
-                {/* Priority Indicator / Icon */}
-                <div className="flex items-center gap-2 shrink-0">
+                {/* Badges */}
+                <div className="flex items-center gap-1.5 shrink-0">
                     {isUrgent && (
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-auburn/10 text-auburn text-[10px] font-bold uppercase tracking-wider">
-                            Action
+                        <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[10px] font-bold uppercase tracking-wider font-inter">
+                            Reply
                         </span>
                     )}
                     {isInsight && (
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-copper/10 text-copper text-[10px] font-bold uppercase tracking-wider">
-                            <Sparkles size={10} />
-                            Insight
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-copper/10 text-copper border border-copper/20 text-[10px] font-bold uppercase tracking-wider font-inter">
+                            <Sparkles size={9} />
+                            {!compact && "Insight"}
                         </span>
                     )}
                 </div>
-            </DonnaCardHeader>
+            </div>
 
-            <DonnaCardContent className={cn(compact && "px-3 pb-3 pt-0")}>
-                {/* Summary or Snippet */}
-                <DonnaText variant="body" className={cn(
-                    "text-sm text-muted-foreground/90 leading-relaxed",
-                    compact ? "line-clamp-1" : "line-clamp-2"
-                )}>
+            {/* Subject */}
+            <p className={cn(
+                "font-playfair font-semibold text-foreground leading-snug",
+                compact ? "text-[14px] line-clamp-1" : "text-[17px]"
+            )}>
+                {message.subject}
+            </p>
+
+            {/* Summary / snippet */}
+            {!compact && (
+                <p className="text-sm text-muted-foreground/80 font-inter line-clamp-2 mt-1 leading-relaxed">
                     {message.summary || message.snippet}
-                </DonnaText>
+                </p>
+            )}
+            {compact && (
+                <p className="text-[12px] text-muted-foreground/70 font-inter line-clamp-1 mt-0.5">
+                    {message.summary || message.snippet}
+                </p>
+            )}
 
-                {/* Tasks Section — hidden in compact mode */}
-                {hasTasks && !compact && (() => {
-                    const tasks = message.tasks!;
-                    const overflow = tasks.length - MAX_VISIBLE_TASKS;
-                    const visible = showAllTasks ? tasks : tasks.slice(0, MAX_VISIBLE_TASKS);
-                    return (
-                        <div className="mt-4 space-y-2">
-                            <div className="h-px w-full bg-border/60 mb-3" />
-                            <DonnaText variant="label" className="text-xs text-muted-foreground uppercase tracking-widest pl-1">
-                                Suggested Actions
-                            </DonnaText>
-                            <div className="flex flex-col gap-2">
-                                {visible.map(task => (
-                                    <div key={task.id} onClick={(e) => e.stopPropagation()}>
-                                        <TaskItem task={task} />
-                                    </div>
-                                ))}
-                            </div>
-                            {overflow > 0 && (
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setShowAllTasks(!showAllTasks); }}
-                                    className="flex items-center gap-1 text-xs text-auburn hover:text-auburn/80 font-medium pl-1 pt-1 transition-colors"
-                                >
-                                    {showAllTasks ? (
-                                        <><ChevronUp size={14} /> Show less</>
-                                    ) : (
-                                        <><ChevronDown size={14} /> Show {overflow} more</>
-                                    )}
-                                </button>
-                            )}
-                        </div>
-                    );
-                })()}
-
-                {/* Task count badge in compact mode */}
-                {hasTasks && compact && (
-                    <div className="mt-1">
-                        <span className="text-[10px] font-medium text-auburn bg-auburn/10 px-1.5 py-0.5 rounded">
-                            {message.tasks!.length} {message.tasks!.length === 1 ? "task" : "tasks"}
+            {/* Task count chip + action buttons row */}
+            <div className="flex items-center justify-between mt-2.5">
+                <div>
+                    {hasTasks && (
+                        <span className="text-[10px] font-medium font-inter text-foreground/50 bg-foreground/[0.05] px-1.5 py-0.5 rounded-[4px]">
+                            {taskCount} {taskCount === 1 ? "task" : "tasks"}
                         </span>
-                    </div>
-                )}
+                    )}
+                </div>
 
-                {/* Actions (Visible on Hover or Focus) — hidden in compact mode */}
                 {!compact && (
-                    <div className="flex items-center justify-end gap-2 mt-4 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                        <DonnaButton variant="ghost" size="icon" onClick={handleDone} className="h-8 w-8 hover:bg-sage/10 hover:text-sage" title="Mark Done">
-                            <CheckCircle size={16} />
-                        </DonnaButton>
-                        <DonnaButton variant="ghost" size="icon" onClick={handleArchive} className="h-8 w-8 hover:bg-copper/10 hover:text-copper" title="Archive">
-                            <Archive size={16} />
-                        </DonnaButton>
-                        <DonnaButton variant="ghost" size="icon" onClick={handleDelete} className="h-8 w-8 hover:bg-destructive/10 hover:text-destructive" title="Delete">
-                            <Trash2 size={16} />
-                        </DonnaButton>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        <button
+                            onClick={handleDone}
+                            title="Mark Done"
+                            className="p-1.5 rounded-[6px] text-muted-foreground hover:text-sage hover:bg-sage/10 transition-colors"
+                        >
+                            <CheckCircle size={14} />
+                        </button>
+                        <button
+                            onClick={handleArchive}
+                            title="Archive"
+                            className="p-1.5 rounded-[6px] text-muted-foreground hover:text-muted-foreground/80 hover:bg-muted/50 transition-colors"
+                        >
+                            <Archive size={14} />
+                        </button>
+                        <button
+                            onClick={handleDelete}
+                            title="Delete"
+                            className="p-1.5 rounded-[6px] text-muted-foreground hover:text-burgundy hover:bg-burgundy/10 transition-colors"
+                        >
+                            <Trash2 size={14} />
+                        </button>
                     </div>
                 )}
-            </DonnaCardContent>
-        </DonnaCard>
+            </div>
+        </div>
     );
 }

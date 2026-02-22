@@ -314,16 +314,18 @@ class ChatOrchestrator:
         }
         assembler.log_context_trace(context_trace, user_message)
 
-        messages = [
-            {
-                "role": "system",
-                "content": self._system_prompt_for_turn(mode.system_prompt, tools_allowed_this_turn),
-            }
-        ]
+        messages = []
         if self._is_smalltalk_minimal(user_message, mention_context or {}):
             # Ultra-lean prompt for short, no-context smalltalk to cut latency.
             messages = [
-                {"role": "system", "content": "You are Teeks. Keep responses friendly and under 20 words."},
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are {self.assistant_name}, a personal assistant for {self.user_name or 'the user'}. "
+                        "Reply naturally and warmly in one short sentence. "
+                        "Do not mention tools, policies, or internal details."
+                    ),
+                },
                 {"role": "user", "content": user_message},
             ]
             response_profile = ResponseProfile(
@@ -337,6 +339,13 @@ class ChatOrchestrator:
             )
             tools_allowed_this_turn = False
         else:
+            messages = [
+                {"role": "system", "content": layers.instruction},
+                {
+                    "role": "system",
+                    "content": self._system_prompt_for_turn(mode.system_prompt, tools_allowed_this_turn),
+                },
+            ]
             layered_payload = {
                 "task": layers.task,
                 "structured": layers.structured,
@@ -351,6 +360,17 @@ class ChatOrchestrator:
             if mention_context:
                 safe_context = json.dumps(mention_context, ensure_ascii=True, separators=(",", ":"))
                 messages.append({"role": "system", "content": f"Resolved mention context JSON: {safe_context}"})
+                if tools_allowed_this_turn:
+                    batch_instruction = self._build_batch_action_instruction(
+                        user_message=user_message,
+                        mention_context=mention_context or {},
+                    )
+                    if batch_instruction:
+                        messages.append({"role": "system", "content": batch_instruction})
+            if tools_allowed_this_turn:
+                planner_hint = self._build_planner_hint(user_message, mention_context or {})
+                if planner_hint:
+                    messages.append({"role": "system", "content": planner_hint})
             if not tools_allowed_this_turn:
                 messages.append(
                     {
@@ -391,6 +411,7 @@ class ChatOrchestrator:
                 newly_deferred: List[Dict[str, Any]] = []
                 active_tools = mode.tools if tools_allowed_this_turn else []
                 attempted_richness_retry = False
+                attempted_batch_recovery = False
 
                 while rounds < MAX_TOOL_ROUNDS:
                     response = await self._call_llm(
@@ -410,6 +431,21 @@ class ChatOrchestrator:
 
                     tool_calls = response.get("tool_calls", [])
                     if not tools_allowed_this_turn or not tool_calls:
+                        if (
+                            tools_allowed_this_turn
+                            and not tool_calls
+                            and mention_context
+                            and not attempted_batch_recovery
+                        ):
+                            recovery_prompt = self._build_batch_recovery_instruction(
+                                user_message=user_message,
+                                mention_context=mention_context or {},
+                                assistant_text=response_text,
+                            )
+                            if recovery_prompt:
+                                attempted_batch_recovery = True
+                                llm_messages.append({"role": "system", "content": recovery_prompt})
+                                continue
                         if (
                             not tools_allowed_this_turn
                             and response_text
@@ -557,6 +593,7 @@ class ChatOrchestrator:
             tool_outputs=tool_execution_records,
             deferred_actions=deferred_remaining if has_action_activity else [],
         )
+        assistant_message = self._sanitize_plain_artifact_text(assistant_message, replace_sender=False)
 
         state.deferred_actions = list(deferred_remaining)[:MAX_DEFERRED_ACTIONS]
         logger.info(
@@ -1440,13 +1477,178 @@ class ChatOrchestrator:
             return f"{base} {' '.join(clauses)}"
         return " ".join(clauses)
 
+    def _sanitize_plain_artifact_text(self, text: str, replace_sender: bool = False) -> str:
+        """Normalize lightweight markdown/styling into plain chat-safe text."""
+        out = text or ""
+        # Markdown heading markers
+        out = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", out)
+        # Bold/underline emphasis
+        out = re.sub(r"\*\*(.*?)\*\*", r"\1", out, flags=re.DOTALL)
+        out = re.sub(r"__(.*?)__", r"\1", out, flags=re.DOTALL)
+        # Inline code markers
+        out = re.sub(r"`([^`]+)`", r"\1", out)
+        # Normalize markdown star bullets into plain hyphen bullets
+        out = re.sub(r"(?m)^\s*\*\s+", "- ", out)
+
+        if replace_sender:
+            replacement_name = (self.user_name or "").strip()
+            if replacement_name:
+                out = re.sub(r"\[(?:your\s*name)\]", replacement_name, out, flags=re.IGNORECASE)
+            else:
+                out = re.sub(r"\[(?:your\s*name)\]", "", out, flags=re.IGNORECASE)
+
+        out = re.sub(r"[ \t]{2,}", " ", out)
+        out = re.sub(r"\n{3,}", "\n\n", out)
+        return out.strip()
+
+    def _normalize_referenced_entities(self, mention_context: Dict[str, Any]) -> List[Dict[str, str]]:
+        entities = mention_context.get("entities") or []
+        normalized: List[Dict[str, str]] = []
+        seen: set[str] = set()
+        for item in entities:
+            kind = (item.get("kind") or item.get("type") or "").strip().lower()
+            if kind not in {"thread", "event", "contact", "task"}:
+                continue
+            ref = " ".join(str(item.get("ref") or "").split()).strip()
+            label = " ".join(str(item.get("label") or ref).split()).strip()
+            key = f"{kind}:{(ref or label).lower()}"
+            if not (ref or label) or key in seen:
+                continue
+            seen.add(key)
+            normalized.append({"kind": kind, "ref": ref, "label": label})
+        return normalized
+
+    def _build_batch_action_instruction(self, user_message: str, mention_context: Dict[str, Any]) -> str:
+        """Instruct the model to treat explicit multi-entity requests as batch actions."""
+        lowered = (user_message or "").lower()
+        action_hint = ""
+        target_kinds: set[str] = set()
+        if any(token in lowered for token in {"draft", "reply", "respond", "compose", "write", "email"}):
+            action_hint = "draft_email"
+            target_kinds = {"thread", "contact"}
+        elif any(token in lowered for token in {"meeting brief", "prep", "prepare", "brief"}):
+            action_hint = "generate_meeting_brief"
+            target_kinds = {"event"}
+
+        if not action_hint:
+            return ""
+
+        entities_all = [
+            item for item in self._normalize_referenced_entities(mention_context)
+            if item.get("kind") in target_kinds
+        ]
+        entities = entities_all
+        if action_hint == "draft_email":
+            # For drafts, prefer thread-scoped batching.
+            # Use contact batching only when there are no thread references.
+            thread_entities = [item for item in entities_all if item.get("kind") == "thread"]
+            contact_entities = [item for item in entities_all if item.get("kind") == "contact"]
+            if len(thread_entities) >= 2:
+                entities = thread_entities
+            elif len(thread_entities) == 0 and len(contact_entities) >= 2:
+                entities = contact_entities
+            else:
+                return ""
+
+        if len(entities) < 2:
+            return ""
+
+        visible = entities[:MAX_ACTION_TOOLS_PER_TURN]
+        return (
+            "Batch action instruction:\n"
+            f"- The user explicitly referenced {len(entities)} entities for a single repeated action.\n"
+            f"- Treat this as a batch request for {action_hint}.\n"
+            f"- Execute one {action_hint} tool call per referenced entity now (up to {MAX_ACTION_TOOLS_PER_TURN}).\n"
+            "- If there are more entities beyond the limit, defer the rest and ask to continue naturally.\n"
+            "- Do not ask the user to choose one entity when references are explicit and resolvable.\n"
+            f"- Entity references: {json.dumps(visible, ensure_ascii=True)}"
+        )
+
+    def _looks_like_single_target_clarification(self, assistant_text: str) -> bool:
+        text = " ".join((assistant_text or "").lower().split())
+        if not text:
+            return False
+        patterns = [
+            "which thread",
+            "which one",
+            "pick one",
+            "choose one",
+            "specify which",
+            "cannot draft replies for multiple",
+            "can't draft replies for multiple",
+            "one at a time",
+        ]
+        return any(p in text for p in patterns)
+
+    def _build_batch_recovery_instruction(
+        self,
+        user_message: str,
+        mention_context: Dict[str, Any],
+        assistant_text: str,
+    ) -> str:
+        """Retry hint when model tries to force single-target clarification."""
+        if not self._looks_like_single_target_clarification(assistant_text):
+            return ""
+        batch_prompt = self._build_batch_action_instruction(user_message, mention_context)
+        if not batch_prompt:
+            return ""
+        return (
+            "Correction for previous response:\n"
+            "- Do not ask the user to pick one item.\n"
+            "- Execute the batch now with tool calls based on explicit references.\n"
+            "- Return concise outputs for completed items.\n\n"
+            f"{batch_prompt}"
+        )
+
+    def _build_planner_hint(self, user_message: str, mention_context: Dict[str, Any]) -> str:
+        """Lightweight planner hint to nudge intent extraction + ordered execution."""
+        lowered = (user_message or "").lower()
+        has_action_word = any(
+            token in lowered
+            for token in [
+                "draft",
+                "reply",
+                "respond",
+                "compose",
+                "write",
+                "prep",
+                "brief",
+                "schedule",
+                "reschedule",
+                "book",
+                "plan",
+                "summarize",
+                "recap",
+                "extract",
+                "create task",
+                "update task",
+                "remember",
+                "set preference",
+                "search",
+                "find",
+            ]
+        )
+        if not has_action_word:
+            return ""
+        entities = self._normalize_referenced_entities(mention_context)
+        explicit_multi_target = len(entities) >= 2
+        likely_multi_intent = any(token in lowered for token in {" and ", " also ", ","})
+        if not explicit_multi_target and not likely_multi_intent:
+            return ""
+        return (
+            "Planner hint:\n"
+            "- Keep an internal ordered plan for this turn.\n"
+            "- If multiple intents or explicit targets are present, execute up to 5 actions now.\n"
+            "- Ask at most one concise question only if truly blocking; otherwise proceed with assumptions.\n"
+            "- Prefer partial completion over blocking; defer extras politely.\n"
+            "- Keep the final reply concise and user-facing; do not expose this hint."
+        )
+
     def _normalize_single_action_reply(self, reply: str, tool_outputs: List[Dict[str, Any]]) -> str:
         text = (reply or "").strip()
         if not text:
             return text
 
-        # If the only action was email drafting, normalize markdown emphasis
-        # that can leak from model formatting into plain chat bubbles.
         action_tools = [
             item for item in tool_outputs
             if bool(item.get("action_tool")) or (item.get("name") in ACTION_TOOL_NAMES)
@@ -1455,16 +1657,19 @@ class ChatOrchestrator:
             return text
 
         only = action_tools[0]
-        if only.get("name") != "draft_email":
+        action_name = (only.get("name") or "").strip()
+        if action_name not in {"draft_email", "generate_meeting_brief"}:
             return text
 
-        text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL)
-        text = re.sub(r"__(.*?)__", r"\1", text, flags=re.DOTALL)
-        replacement_name = (self.user_name or "").strip()
-        text = re.sub(r"\[(?:your\s*name)\]", replacement_name, text, flags=re.IGNORECASE)
-        text = re.sub(r"[ \t]{2,}", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        return text.strip()
+        if action_name == "generate_meeting_brief":
+            payload = only.get("data") or {}
+            if isinstance(payload, dict):
+                return self._render_meeting_brief(payload)
+
+        return self._sanitize_plain_artifact_text(
+            text=text,
+            replace_sender=(action_name == "draft_email"),
+        )
     
     def _format_tool_results(self, results: List[ToolResult]) -> str:
         """Format tool results into a human-readable response."""
@@ -1546,12 +1751,49 @@ class ChatOrchestrator:
             return "\n".join(lines).strip()
         return "I drafted that email, but the content came back empty."
 
+    def _format_meeting_time(self, start_at: Optional[str], end_at: Optional[str]) -> str:
+        if not start_at and not end_at:
+            return ""
+
+        def _parse(value: Optional[str]) -> Optional[datetime]:
+            raw = (value or "").strip()
+            if not raw:
+                return None
+            try:
+                return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except Exception:
+                return None
+
+        start_dt = _parse(start_at)
+        end_dt = _parse(end_at)
+
+        if start_dt and end_dt:
+            same_day = start_dt.date() == end_dt.date()
+            if same_day:
+                return (
+                    f"{start_dt.strftime('%b %d, %Y')} "
+                    f"{start_dt.strftime('%I:%M %p').lstrip('0')} - {end_dt.strftime('%I:%M %p').lstrip('0')}"
+                )
+            return (
+                f"{start_dt.strftime('%b %d, %Y %I:%M %p').lstrip('0')} - "
+                f"{end_dt.strftime('%b %d, %Y %I:%M %p').lstrip('0')}"
+            )
+        if start_dt:
+            return start_dt.strftime("%b %d, %Y %I:%M %p").lstrip("0")
+        if end_dt:
+            return end_dt.strftime("%b %d, %Y %I:%M %p").lstrip("0")
+
+        if start_at and end_at:
+            return f"{start_at} - {end_at}"
+        return start_at or end_at or ""
+
     def _render_meeting_brief(self, payload: Dict[str, Any]) -> str:
         subject = (payload.get("meeting_subject") or payload.get("event_id") or "Meeting").strip()
         summary = (payload.get("summary") or "").strip()
         start_at = payload.get("start_at")
         end_at = payload.get("end_at")
         location = (payload.get("location") or "").strip()
+        participants_raw = payload.get("participants")
 
         def _clean_lines(values: Any, limit: int) -> List[str]:
             if not isinstance(values, list):
@@ -1571,20 +1813,29 @@ class ChatOrchestrator:
         commitments = _clean_lines(payload.get("commitments"), 8)
         risks = _clean_lines(payload.get("risks"), 6)
         open_items = _clean_lines(payload.get("open_items"), 8)
+        participants = _clean_lines(participants_raw, 8)
 
-        lines: List[str] = [f"Meeting Brief: {subject}"]
-        if start_at:
-            when_line = f"When: {start_at}"
-            if end_at:
-                when_line = f"{when_line} - {end_at}"
-            lines.append(when_line)
-        elif end_at:
-            lines.append(f"Ends: {end_at}")
+        lines: List[str] = [f"Meeting brief: {subject}"]
+        when_line = self._format_meeting_time(start_at, end_at)
+        if when_line:
+            lines.append(f"When: {when_line}")
         if location:
             lines.append(f"Location: {location}")
-        if summary:
+        if participants:
+            lines.append(f"Participants: {', '.join(participants)}")
+
+        has_context_sections = any([decisions, commitments, risks, open_items])
+        zero_counts_summary = bool(
+            re.search(r"\b0\s+decisions?\b", summary.lower())
+            and re.search(r"\b0\s+commitments?\b", summary.lower())
+            and re.search(r"\b0\s+(active\s+)?risks?\b", summary.lower())
+        )
+        if summary and not zero_counts_summary:
             lines.append("")
             lines.append(summary)
+        elif not has_context_sections:
+            lines.append("")
+            lines.append("No prior linked decisions, commitments, or risks found for this meeting yet.")
 
         def _append_section(title: str, items: List[str]) -> None:
             if not items:

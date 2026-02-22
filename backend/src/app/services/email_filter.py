@@ -134,9 +134,8 @@ class EmailFilterService:
                 override_applied=True,
             )
 
-        # Apply filter - metadata only
         return FilterResult(
-            action=FilterAction.METADATA_ONLY,
+            action=FilterAction.SKIP,
             filter_applied="category_filter",
             reason=f"Filtered category: {', '.join(matched_categories)}",
             override_applied=False,
@@ -185,9 +184,8 @@ class EmailFilterService:
                 override_applied=True,
             )
 
-        # Apply filter - metadata only
         return FilterResult(
-            action=FilterAction.METADATA_ONLY,
+            action=FilterAction.SKIP,
             filter_applied="header_filter",
             reason='; '.join(reasons),
             override_applied=False,
@@ -247,9 +245,8 @@ class EmailFilterService:
                 override_applied=True,
             )
 
-        # Apply filter - metadata only
         return FilterResult(
-            action=FilterAction.METADATA_ONLY,
+            action=FilterAction.SKIP,
             filter_applied="sender_pattern_filter",
             reason=f"Filtered sender pattern: {matched_pattern}",
             override_applied=False,
@@ -359,9 +356,8 @@ class EmailFilterService:
                 override_applied=True,
             )
 
-        # Apply filter - metadata only
         return FilterResult(
-            action=FilterAction.METADATA_ONLY,
+            action=FilterAction.SKIP,
             filter_applied="subject_heuristics_filter",
             reason=f"Subject heuristics: {'; '.join(reasons)}",
             override_applied=False,
@@ -421,9 +417,8 @@ class EmailFilterService:
         if result.should_process:
             return FilterResult(action=FilterAction.PROCESS)
 
-        # AI classified as ignorable
         return FilterResult(
-            action=FilterAction.METADATA_ONLY,
+            action=FilterAction.SKIP,
             filter_applied="ai_classification",
             reason=f"AI: {result.reason}",
             override_applied=False,

@@ -3,9 +3,7 @@
 import { Suspense, useState, useCallback, useEffect } from "react";
 import { InboxFeed } from "@/components/inbox/InboxFeed";
 import { ThreadDetailPanel } from "@/components/inbox/ThreadDetailPanel";
-import { DonnaText } from "@/components/ui/DonnaText";
 import { useAuth } from "@/context/AuthContext";
-import { Loader2, Inbox, Archive } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function InboxPage() {
@@ -18,13 +16,11 @@ export default function InboxPage() {
     // Keyboard navigation
     useEffect(() => {
         function handleKeyDown(e: KeyboardEvent) {
-            // ESC to close panel
             if (e.key === "Escape" && panelOpen) {
                 setSelectedThreadId(null);
                 return;
             }
 
-            // Arrow keys to navigate threads (only when panel is open)
             if (!panelOpen || threadIds.length === 0) return;
             if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
 
@@ -60,55 +56,62 @@ export default function InboxPage() {
                 panelOpen ? "w-[380px] min-w-[380px] border-r border-border/40" : "flex-1 max-w-3xl mx-auto",
             )}>
                 <div className={cn("py-8 px-4", panelOpen && "py-4 px-3")}>
-                    {/* Header — compact when panel open */}
-                    <div className={cn("mb-8 space-y-2", panelOpen && "mb-4 space-y-1")}>
-                        <DonnaText variant={panelOpen ? "h3" : "h2"}>
-                            {view === "archived" ? "Archive" : "Inbox"}
-                        </DonnaText>
+                    {/* Header */}
+                    <div className={cn("mb-8 space-y-1", panelOpen && "mb-4")}>
                         {!panelOpen && (
-                            <DonnaText variant="body" className="text-muted-foreground">
-                                Welcome back, {user?.user_metadata?.full_name || user?.email?.split('@')[0]}.
-                            </DonnaText>
+                            <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                                {user?.user_metadata?.full_name || user?.email?.split('@')[0]}
+                            </p>
                         )}
+                        <h1 className={cn(
+                            "font-playfair text-foreground",
+                            panelOpen ? "text-xl font-semibold" : "text-3xl font-bold"
+                        )}>
+                            {view === "archived" ? "Archive" : "Inbox"}
+                        </h1>
                     </div>
 
-                    {/* View Toggle */}
-                    <div className={cn("flex gap-1 mb-6 p-1 rounded-lg bg-muted/50 w-fit", panelOpen && "mb-4")}>
+                    {/* View Toggle — pill tabs matching Focus/Chat pattern */}
+                    <div className={cn("flex gap-1 mb-6 rounded-full border border-border p-1 w-fit", panelOpen && "mb-4")}>
                         <button
                             onClick={() => { setView("inbox"); setSelectedThreadId(null); }}
                             className={cn(
-                                "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                                "px-3 py-1 rounded-full text-[12px] font-medium font-inter transition-all",
                                 view === "inbox"
-                                    ? "bg-background text-foreground shadow-sm"
+                                    ? "bg-foreground text-background"
                                     : "text-muted-foreground hover:text-foreground"
                             )}
                         >
-                            <Inbox size={13} />
-                            {!panelOpen && "Inbox"}
+                            {panelOpen ? "In" : "Inbox"}
                         </button>
                         <button
                             onClick={() => { setView("archived"); setSelectedThreadId(null); }}
                             className={cn(
-                                "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all",
+                                "px-3 py-1 rounded-full text-[12px] font-medium font-inter transition-all",
                                 view === "archived"
-                                    ? "bg-background text-foreground shadow-sm"
+                                    ? "bg-foreground text-background"
                                     : "text-muted-foreground hover:text-foreground"
                             )}
                         >
-                            <Archive size={13} />
-                            {!panelOpen && "Archived"}
+                            {panelOpen ? "Arc" : "Archived"}
                         </button>
                     </div>
 
-                    {!settings?.initial_sync_completed && !gmailConnectError && (
-                        <div className="mb-6 rounded-lg border border-auburn/20 bg-auburn/5 px-4 py-3">
-                            <DonnaText variant="body" className="text-obsidian text-sm">
-                                We're syncing your emails from today.
-                            </DonnaText>
+                    {settings !== null && !settings.initial_sync_completed && settings.gmail_connected && !gmailConnectError && (
+                        <div className="mb-6 rounded-[8px] border border-primary/20 bg-primary/[0.04] px-4 py-3">
+                            <p className="text-sm font-inter text-foreground/80">
+                                We&apos;re syncing your emails from today.
+                            </p>
                         </div>
                     )}
 
-                    <Suspense fallback={<div className="flex justify-center items-center h-40"><Loader2 className="h-8 w-8 animate-spin text-auburn" /></div>}>
+                    <Suspense fallback={
+                        <div className="flex justify-center items-center h-40 gap-1">
+                            <span className="teeks-dot" />
+                            <span className="teeks-dot" />
+                            <span className="teeks-dot" />
+                        </div>
+                    }>
                         <InboxFeed
                             selectedThreadId={selectedThreadId}
                             onSelectThread={handleSelectThread}

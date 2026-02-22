@@ -192,17 +192,21 @@ def create_manual_task(
     We use a placeholder message ID for database consistency.
     """
 
+    placeholder_message_id = f"__manual_tasks_placeholder__:{user.user_id}"
+    manual_thread_id = f"__manual_tasks__:{user.user_id}"
+
     # Get or create a placeholder message for manual tasks
     # (manual tasks need a message_id due to foreign key constraint)
     placeholder_message = db.query(Message).filter(
-        Message.message_id == "__manual_tasks_placeholder__"
+        Message.user_id == user.user_id,
+        Message.message_id == placeholder_message_id,
     ).first()
 
     if not placeholder_message:
         placeholder_message = Message(
             user_id=user.user_id,
-            message_id="__manual_tasks_placeholder__",
-            thread_id="__manual_tasks__",
+            message_id=placeholder_message_id,
+            thread_id=manual_thread_id,
             subject="Manual Tasks",
             sender="user",
             recipient="user",
@@ -219,7 +223,7 @@ def create_manual_task(
     task = Task(
         user_id=user.user_id,
         message_id=placeholder_message.id,
-        thread_id="__manual_tasks__",
+        thread_id=manual_thread_id,
         title=request.title,
         description=request.description,
         task_type="other",
@@ -393,13 +397,14 @@ def update_task(
     # Update standard fields
     if request.title is not None:
         task.title = request.title
-    if request.description is not None:
+    # Use model_fields_set so that explicit null clears the field (None is not None would drop it)
+    if "description" in request.model_fields_set:
         task.description = request.description
     if request.priority is not None:
         task.priority = request.priority
         # If user explicitly sets priority, it's no longer AI-suggested
         task.urgency_suggested_by_ai = False
-    if request.scheduled_reminder_at is not None:
+    if "scheduled_reminder_at" in request.model_fields_set:
         task.scheduled_reminder_at = request.scheduled_reminder_at
 
     # Handle deadline updates (Smart Todo List)
@@ -425,6 +430,19 @@ def update_task(
         task.urgency_suggested_by_ai = False  # Now confirmed by user
 
     db.commit()
+
+    # If reminder was explicitly set or updated, enqueue an evaluation job
+    if (
+        "scheduled_reminder_at" in request.model_fields_set
+        and task.scheduled_reminder_at is not None
+        and task.status in ("approved", "in_progress")
+    ):
+        enqueue_task(
+            task_type="evaluate_reminder",
+            payload={"task_id": task.id, "user_id": task.user_id},
+            scheduled_for=task.scheduled_reminder_at,
+            db=db,
+        )
 
     if task.thread_id:
         _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)

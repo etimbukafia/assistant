@@ -189,18 +189,24 @@ export const ActiveTasksList = () => {
 
     const selectedTask = useMemo(() => tasks.find((t) => t.id === detailTaskId) ?? null, [tasks, detailTaskId]);
 
+    // Seed draft fields only when the user opens a task (detailTaskId changes).
+    // Using selectedTask as a dependency would re-seed on every background refetch,
+    // overwriting any edits the user has made (e.g. clearing the deadline).
     useEffect(() => {
-        if (!selectedTask) {
+        if (!detailTaskId) {
             setDraftTitle(""); setDraftDescription(""); setDraftImportant(false);
             setDraftDeadline(""); setDraftReminder("");
             return;
         }
-        setDraftTitle(selectedTask.title ?? "");
-        setDraftDescription(selectedTask.description ?? "");
-        setDraftImportant(selectedTask.priority === "urgent" || selectedTask.priority === "high");
-        setDraftDeadline(selectedTask.deadline_at ? toLocalInputValue(selectedTask.deadline_at) : "");
-        setDraftReminder(selectedTask.scheduled_reminder_at ? toLocalInputValue(selectedTask.scheduled_reminder_at) : "");
-    }, [selectedTask]);
+        // Snapshot the task at the moment the dialog opens
+        const task = tasks.find((t) => t.id === detailTaskId);
+        if (!task) return;
+        setDraftTitle(task.title ?? "");
+        setDraftDescription(task.description ?? "");
+        setDraftImportant(task.priority === "urgent" || task.priority === "high");
+        setDraftDeadline(task.deadline_at ? toLocalInputValue(task.deadline_at) : "");
+        setDraftReminder(task.scheduled_reminder_at ? toLocalInputValue(task.scheduled_reminder_at) : "");
+    }, [detailTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleSelect = (taskId: number) => {
         setSelectedIds((prev) => {

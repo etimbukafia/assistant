@@ -267,7 +267,6 @@ class ChatToolRegistry:
                         "message": {"type": "string"},
                         "context": {"type": "object"},
                     },
-                    "required": ["subject"],
                 },
             ),
             "generate_meeting_brief": ToolDefinition(
@@ -772,8 +771,14 @@ class ChatToolRegistry:
 
     def _execute_draft_email(self, params: Dict[str, Any]) -> ToolResult:
         service = EmailDraftingService(db=self.db, user_id=self.user_id)
+        subject = (
+            (params.get("subject") or "").strip()
+            or (params.get("thread") or "").strip()
+            or (params.get("intent") or "").strip()
+            or "Follow-up"
+        )
         draft = service.draft(
-            subject=params.get("subject", ""),
+            subject=subject,
             intent=params.get("intent", ""),
             recipient=params.get("recipient"),
             sender_name=params.get("sender_name"),
