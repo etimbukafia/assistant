@@ -10,10 +10,11 @@ from typing import Dict, Any
 
 from fastapi import APIRouter, Request, HTTPException, status, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
-from app.infra.config import get_settings, Settings
-from app.infra.database import SessionLocal, get_db
-from app.data.models import UserSettings, WebhookLog
+from app.infra.config import get_settings
+from app.infra.database import get_db
+from app.data.models import UserSettings, WebhookDelivery, WebhookLog
 from app.services import get_polar_service, PolarService
 from app.security.auth import get_user_settings, get_db_for_user
 
@@ -79,13 +80,29 @@ def get_user_by_polar_customer_id(db, customer_id: str) -> UserSettings:
     ).first()
 
 
+def _subscription_payload(event_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize Polar payload shape across SDK/event versions."""
+    data = event_data.get("data", {}) or {}
+    nested = data.get("subscription")
+    if isinstance(nested, dict):
+        # Prefer explicit nested subscription payload, fallback to top-level fields.
+        normalized = dict(data)
+        normalized.update(nested)
+        return normalized
+    return data
+
+
+def _extract_customer_id(event_data: Dict[str, Any]) -> str | None:
+    return _subscription_payload(event_data).get("customer_id")
+
+
 def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
     """
     Handle subscription.created event.
     
     Activates Pro tier and sets subscription dates.
     """
-    subscription = event_data.get("data", {})
+    subscription = _subscription_payload(event_data)
     customer_id = subscription.get("customer_id")
     subscription_id = subscription.get("id")
     
@@ -98,6 +115,13 @@ def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
         logger.error(f"REVENUE CRITICAL: No user found for Polar customer {customer_id} - payment received but subscription not activated")
         return
     
+    # Idempotency: duplicate/replayed created events should not reset credits repeatedly.
+    already_active_same_sub = (
+        user.subscription_tier == "pro"
+        and user.subscription_status == "active"
+        and user.polar_subscription_id == subscription_id
+    )
+
     # Update subscription fields
     user.subscription_tier = "pro"
     user.subscription_status = "active"
@@ -112,9 +136,10 @@ def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
         except (ValueError, TypeError):
             pass
 
-    # Initialize credits for Pro tier
-    from app.services.credits import initialize_credits_for_pro
-    initialize_credits_for_pro(user)
+    # Initialize credits only on true state transition.
+    if not already_active_same_sub:
+        from app.services.credits import initialize_credits_for_pro
+        initialize_credits_for_pro(user)
 
     logger.info(f"Subscription created for user {user.user_email}, tier=pro")
 
@@ -125,7 +150,7 @@ def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
 
     Confirms subscription is active (e.g., after renewal).
     """
-    subscription = event_data.get("data", {})
+    subscription = _subscription_payload(event_data)
     customer_id = subscription.get("customer_id")
 
     if not customer_id:
@@ -170,7 +195,7 @@ def handle_subscription_updated(event_data: Dict[str, Any], db) -> None:
 
     Syncs period dates and status.
     """
-    subscription = event_data.get("data", {})
+    subscription = _subscription_payload(event_data)
     customer_id = subscription.get("customer_id")
 
     if not customer_id:
@@ -203,7 +228,7 @@ def handle_subscription_canceled(event_data: Dict[str, Any], db) -> None:
 
     Marks subscription as canceled but keeps access until period end.
     """
-    subscription = event_data.get("data", {})
+    subscription = _subscription_payload(event_data)
     customer_id = subscription.get("customer_id")
 
     if not customer_id:
@@ -226,7 +251,7 @@ def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
 
     Revokes access immediately - subscription has ended or payment failed.
     """
-    subscription = event_data.get("data", {})
+    subscription = _subscription_payload(event_data)
     customer_id = subscription.get("customer_id")
 
     if not customer_id:
@@ -255,7 +280,7 @@ def handle_subscription_uncanceled(event_data: Dict[str, Any], db) -> None:
 
     User reactivated their subscription before the billing period ended.
     """
-    subscription = event_data.get("data", {})
+    subscription = _subscription_payload(event_data)
     customer_id = subscription.get("customer_id")
 
     if not customer_id:
@@ -299,6 +324,7 @@ async def handle_polar_webhook(
         "webhook-id": request.headers.get("webhook-id", ""),
         "webhook-timestamp": request.headers.get("webhook-timestamp", ""),
     }
+    webhook_id = headers.get("webhook-id") or None
     
     # Validate signature (get_settings() called inside)
     event = validate_webhook_signature(payload, headers)
@@ -310,8 +336,18 @@ async def handle_polar_webhook(
         return {"received": True, "handled": False, "reason": "webhook_secret_not_configured"}
 
     event_type = event.get("type", "unknown")
-    customer_id = event.get("data", {}).get("subscription", {}).get("customer_id")
+    customer_id = _extract_customer_id(event)
     logger.info(f"Received Polar webhook: {event_type}")
+
+    # Idempotency: ignore duplicate delivery IDs once processed.
+    if webhook_id:
+        existing = db.query(WebhookDelivery).filter(
+            WebhookDelivery.source == "polar",
+            WebhookDelivery.delivery_id == webhook_id,
+        ).first()
+        if existing:
+            logger.info(f"Duplicate Polar webhook delivery ignored: webhook_id={webhook_id}")
+            return {"received": True, "handled": True, "duplicate": True}
 
     # Route to handler
     handler = EVENT_HANDLERS.get(event_type)
@@ -324,9 +360,24 @@ async def handle_polar_webhook(
     # Process event
     try:
         handler(event, db)
+        if webhook_id:
+            db.add(
+                WebhookDelivery(
+                    source="polar",
+                    delivery_id=webhook_id,
+                    event_type=event_type,
+                    customer_id=customer_id,
+                    processed_at=datetime.now(timezone.utc),
+                )
+            )
         db.add(WebhookLog(source="polar", event_type=event_type, processed=True, customer_id=customer_id))
         db.commit()
         return {"received": True, "handled": True}
+    except IntegrityError:
+        # Race condition on delivery insert (same webhook-id in concurrent retries).
+        db.rollback()
+        logger.info(f"Duplicate Polar webhook delivery race ignored: webhook_id={webhook_id}")
+        return {"received": True, "handled": True, "duplicate": True}
     except Exception as e:
         db.rollback()
         # Log in a fresh transaction since we rolled back

@@ -478,50 +478,54 @@ async def suggest_slash(
 
 
 # =============================================================================
-# Action Approval Endpoints
+# Action Approval Endpoints (Legacy - Disabled)
 # =============================================================================
-
-@router.post("/sessions/{session_id}/approve/{action_id}")
-async def approve_action(
-    session_id: str,
-    action_id: str,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user)
-):
-    """Approve a pending action."""
-    service = ChatService(db, user.user_id)
-    
-    # Verify session ownership
-    session = service.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    result = service.approve_action(action_id)
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Failed to approve action"))
-    
-    return result
-
-
-@router.post("/sessions/{session_id}/reject/{action_id}")
-async def reject_action(
-    session_id: str,
-    action_id: str,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db_for_user)
-):
-    """Reject a pending action."""
-    service = ChatService(db, user.user_id)
-    
-    # Verify session ownership
-    session = service.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    result = service.reject_action(action_id)
-    
-    if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Failed to reject action"))
-    
-    return result
+#
+# These legacy direct-approval routes are intentionally disabled.
+# Approval now flows through chat text instructions (and approval gate UI),
+# via POST /chat/sessions/{session_id}/messages.
+#
+# @router.post("/sessions/{session_id}/approve/{action_id}")
+# async def approve_action(
+#     session_id: str,
+#     action_id: str,
+#     user: User = Depends(get_current_user),
+#     db: Session = Depends(get_db_for_user)
+# ):
+#     """Approve a pending action."""
+#     service = ChatService(db, user.user_id)
+#
+#     # Verify session ownership
+#     session = service.get_session(session_id)
+#     if not session:
+#         raise HTTPException(status_code=404, detail="Session not found")
+#
+#     result = service.approve_action(action_id)
+#
+#     if not result.get("success"):
+#         raise HTTPException(status_code=400, detail=result.get("error", "Failed to approve action"))
+#
+#     return result
+#
+#
+# @router.post("/sessions/{session_id}/reject/{action_id}")
+# async def reject_action(
+#     session_id: str,
+#     action_id: str,
+#     user: User = Depends(get_current_user),
+#     db: Session = Depends(get_db_for_user)
+# ):
+#     """Reject a pending action."""
+#     service = ChatService(db, user.user_id)
+#
+#     # Verify session ownership
+#     session = service.get_session(session_id)
+#     if not session:
+#         raise HTTPException(status_code=404, detail="Session not found")
+#
+#     result = service.reject_action(action_id)
+#
+#     if not result.get("success"):
+#         raise HTTPException(status_code=400, detail=result.get("error", "Failed to reject action"))
+#
+#     return result

@@ -324,12 +324,16 @@ async def sync_calendar_events(
  
     try:
         enable_briefings = settings.auto_briefing_enabled and is_feature_enabled(Feature.MEETING_BRIEFINGS, settings)
-        calendar_ids = [settings.default_calendar_id] if settings.default_calendar_id else None
+
+        # Use the user's explicitly chosen calendars, or fall back to default calendar only
+        user_calendar_ids = settings.calendar_ids or []
+        calendar_ids = user_calendar_ids if user_calendar_ids else [settings.default_calendar_id or "primary"]
+
         results = await calendar_service.sync_upcoming_events(
             days_ahead=days_ahead,
             briefing_hours_before=settings.briefing_hours_before or 1,
             enable_briefings=enable_briefings,
-            calendar_ids=calendar_ids
+            calendar_ids=calendar_ids,
         )
 
         calendar_cache.invalidate_all(user.user_id)
@@ -438,13 +442,38 @@ def update_calendar_settings(
     """Update calendar-related settings"""
     # Settings retrieved via dependency
 
-    # Update only fields that were set in the request
     update_data = request.model_dump(exclude_unset=True)
+
+    # Capture which calendars were previously tracked before applying the update
+    old_calendar_ids = set(settings.calendar_ids or [])
+
     for key, value in update_data.items():
         setattr(settings, key, value)
 
     db.commit()
     db.refresh(settings)
+
+    # When the user changes which calendars to sync, clean up removed calendars
+    if "calendar_ids" in update_data:
+        new_calendar_ids = set(settings.calendar_ids or [])
+        removed = old_calendar_ids - new_calendar_ids
+
+        # Delete events from calendars the user has deselected
+        if removed:
+            db.query(CalendarEvent).filter(
+                CalendarEvent.user_id == settings.user_id,
+                CalendarEvent.calendar_id.in_(list(removed))
+            ).delete(synchronize_session=False)
+            db.commit()
+            calendar_cache.invalidate_all(settings.user_id)
+
+        # Re-setup push watches to match the new selection
+        try:
+            from app.services.calendar_watch import setup_watches_for_user
+            setup_watches_for_user(db=db, user_id=settings.user_id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Calendar watch re-setup failed: {e}")
 
     return CalendarSettingsResponse(
         default_meeting_duration=settings.default_meeting_duration,

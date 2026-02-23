@@ -4,6 +4,7 @@ Task Queue Service - Reusable across projects
 Generic queue operations that work with any SQLAlchemy setup.
 Pass your TaskQueue model and SessionLocal to use.
 """
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Callable
@@ -312,6 +313,80 @@ class QueueService:
 
             return count
 
+        finally:
+            if should_close_db:
+                db.close()
+
+    async def process_batch_now(
+        self,
+        user_id: str,
+        task_type: str,
+        handler: Callable,
+        db: Optional[Session] = None,
+        limit: int = 100,
+    ) -> Dict[str, int]:
+        """
+        Process pending tasks for a user/task type immediately in-process.
+
+        This is used by webhook/sync paths to reduce queue latency for
+        fresh inbound emails.
+        """
+        should_close_db = False
+        if db is None:
+            db = self.SessionLocal()
+            should_close_db = True
+
+        try:
+            tasks = db.query(self.TaskQueue).filter(
+                self.TaskQueue.status == "pending",
+                self.TaskQueue.task_type == task_type,
+                self.TaskQueue.user_id == user_id,
+                self.TaskQueue.scheduled_for <= datetime.utcnow(),
+                self.TaskQueue.attempts < self.TaskQueue.max_attempts,
+            ).order_by(self.TaskQueue.scheduled_for.asc()).limit(limit).all()
+
+            if not tasks:
+                return {"processed": 0, "failed": 0}
+
+            # Lock ownership of this batch for current process.
+            for task in tasks:
+                task.status = "in_progress"
+                task.started_at = datetime.utcnow()
+                task.attempts += 1
+            db.commit()
+
+            payload_tasks = [
+                {
+                    "task_id": task.id,
+                    "payload": task.payload or {},
+                    "correlation_id": task.correlation_id,
+                    "attempts": task.attempts,
+                }
+                for task in tasks
+            ]
+
+            try:
+                result = handler(user_id, payload_tasks)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:
+                now = datetime.utcnow()
+                for task in tasks:
+                    task.last_error = str(exc)[:2000]
+                    if task.attempts < task.max_attempts:
+                        delay_minutes = 1 * (5 ** max(0, task.attempts - 1))
+                        task.status = "pending"
+                        task.scheduled_for = now + timedelta(minutes=delay_minutes)
+                    else:
+                        task.status = "failed"
+                db.commit()
+                raise
+
+            for task in tasks:
+                task.status = "completed"
+                task.completed_at = datetime.utcnow()
+            db.commit()
+            return {"processed": len(tasks), "failed": 0}
         finally:
             if should_close_db:
                 db.close()

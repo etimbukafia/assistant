@@ -51,11 +51,19 @@ class Settings:
 
     # Frontend
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+    # Backend public URL (used for push notification webhook addresses)
+    API_URL: str = os.getenv("API_URL", "http://localhost:8000")
     ADMIN_EMAILS: str = os.getenv("ADMIN_EMAILS", "")
     
     # Gmail Pub/Sub
     GOOGLE_CLOUD_PROJECT_ID: str = os.getenv("GOOGLE_CLOUD_PROJECT_ID", "")
     GMAIL_PUBSUB_TOPIC: str = os.getenv("GMAIL_PUBSUB_TOPIC", "gmail-notifications")
+    GMAIL_PUBSUB_SUBSCRIPTION: str = os.getenv("GMAIL_PUBSUB_SUBSCRIPTION", "")
+    GMAIL_PUBSUB_PUSH_SERVICE_ACCOUNT: str = os.getenv("GMAIL_PUBSUB_PUSH_SERVICE_ACCOUNT", "")
+    GMAIL_WEBHOOK_TOKEN: str = os.getenv("GMAIL_WEBHOOK_TOKEN", "")
+    GMAIL_WEBHOOK_AUDIENCE: str = os.getenv("GMAIL_WEBHOOK_AUDIENCE", "")
+    GMAIL_WEBHOOK_REQUIRE_AUTH: bool = os.getenv("GMAIL_WEBHOOK_REQUIRE_AUTH", "true").lower() == "true"
 
     # Email
     MAX_EMAILS_PER_SYNC: int = int(os.getenv("MAX_EMAILS_PER_SYNC", "3"))

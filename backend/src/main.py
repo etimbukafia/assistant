@@ -69,6 +69,7 @@ def startup_event():
     schedule_cleanup_job_if_needed()
     schedule_chat_cleanup_job_if_needed()
     schedule_gmail_watch_renewal_if_needed()
+    schedule_calendar_watch_renewal_if_needed()
     preload_email_classifier()
 
 
@@ -177,6 +178,38 @@ def schedule_gmail_watch_renewal_if_needed():
             print(f"Scheduled Gmail watch renewal for {next_run}")
     finally:
         db.close()
+
+
+def schedule_calendar_watch_renewal_if_needed():
+    """
+    Ensure the daily Calendar watch renewal job is scheduled.
+
+    This job:
+    - Stops and recreates Calendar push watch channels for all users
+    - Calendar watches expire after ~7 days; daily renewal keeps them active
+    - Unlike Gmail (idempotent), Calendar requires stop + recreate per channel
+    """
+    from datetime import datetime, timedelta
+
+    db = SessionLocal()
+    try:
+        existing = db.query(TaskQueue).filter(
+            TaskQueue.task_type == "renew_calendar_watches",
+            TaskQueue.status == "pending"
+        ).first()
+
+        if not existing:
+            next_run = datetime.utcnow() + timedelta(days=1)
+            queue_service.enqueue(
+                task_type="renew_calendar_watches",
+                payload={},
+                scheduled_for=next_run,
+                db=db
+            )
+            print(f"Scheduled Calendar watch renewal for {next_run}")
+    finally:
+        db.close()
+
 
 # Include Routers under /v1 prefix
 app.include_router(auth.router, prefix="/v1")

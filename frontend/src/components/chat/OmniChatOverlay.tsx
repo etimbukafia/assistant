@@ -13,7 +13,7 @@ import { useChatContext } from "@/context/ChatContext"
 import { useChat, useChatMessages } from "@/hooks/useChat"
 import { trackUIEvent } from "@/services/telemetry"
 import { MessageBubble } from "./MessageBubble"
-import { ActionBubble } from "./ActionBubble"
+import { ApprovalGateComposer } from "./ApprovalGateComposer"
 import { toast } from "sonner"
 import { useMentionComposer } from "@/hooks/useMentionComposer"
 import { cn } from "@/lib/utils"
@@ -33,12 +33,8 @@ export function OmniChatOverlay() {
         currentSessionId,
         sendMessage,
         createSession,
-        approveAction,
-        rejectAction,
         isSending,
         isCreating,
-        isApproving,
-        isRejecting
     } = useChat()
 
     // Updated hook utilization to get pendingActions
@@ -175,35 +171,15 @@ export function OmniChatOverlay() {
                             </div>
                         )}
 
-                        {messages?.map((msg) => {
-                            // Find corresponding action for this message
-                            const action = pendingActions?.find(a => a.message_id === Number(msg.id));
-
-                            return (
-                                <div key={msg.id} className="flex flex-col">
-                                    <MessageBubble
-                                        role={msg.role}
-                                        content={msg.content}
-                                        timestamp={msg.created_at}
-                                    />
-                                    {action && currentSessionId && (
-                                        <ActionBubble
-                                            action={action}
-                                            onApprove={async (id) => {
-                                                await approveAction({ sessionId: currentSessionId, actionId: id })
-                                                trackUIEvent("chat_action_approved", {
-                                                    action_id: id,
-                                                    source: "overlay",
-                                                })
-                                            }}
-                                            onReject={(id) => rejectAction({ sessionId: currentSessionId, actionId: id })}
-                                            isApproving={isApproving}
-                                            isRejecting={isRejecting}
-                                        />
-                                    )}
-                                </div>
-                            );
-                        })}
+                        {messages?.map((msg) => (
+                            <div key={msg.id} className="flex flex-col">
+                                <MessageBubble
+                                    role={msg.role}
+                                    content={msg.content}
+                                    timestamp={msg.created_at}
+                                />
+                            </div>
+                        ))}
 
                         {(isSending || isCreating) && (
                             <div className="flex justify-start mb-4">
@@ -219,6 +195,25 @@ export function OmniChatOverlay() {
 
                 {/* Input Area */}
                 <div className="p-4 bg-white border-t border-border/40">
+                    {currentSessionId && pendingActions?.length > 0 && (
+                        <ApprovalGateComposer
+                            pendingActions={pendingActions}
+                            disabled={isSending || isCreating}
+                            onSendDecision={async (command) => {
+                                await sendMessage({
+                                    session_id: currentSessionId,
+                                    content: command,
+                                    mode: "action",
+                                    mentions: [],
+                                })
+                                trackUIEvent("chat_approval_sent", {
+                                    source: "overlay",
+                                    pending_count: pendingActions.length,
+                                })
+                            }}
+                        />
+                    )}
+
                     {selectedInlineMentions.length > 0 && (
                         <div className="mb-2.5 flex flex-wrap gap-1.5">
                             {selectedInlineMentions.map((mention) => (

@@ -1,59 +1,77 @@
 import { z } from "zod";
 import { api } from "./api";
 
-const TimeSlotSchema = z.object({
-    start_time: z.string(),
-    end_time: z.string(),
-}).passthrough();
-
-export const SchedulingSuggestionSchema = z.object({
+export const SchedulingIntentSchema = z.object({
     id: z.number(),
-    thread_id: z.string(),
-    message_id: z.number(),
-    participants: z.array(z.string()),
-    suggested_slots: z.array(TimeSlotSchema),
-    time_window_start: z.string().nullable().optional(),
-    time_window_end: z.string().nullable().optional(),
-    timezone: z.string(),
-    meeting_type: z.string(),
-    duration_minutes: z.number(),
+    user_id: z.string(),
+    message_id: z.number().nullable().optional(),
+    thread_id: z.string().nullable().optional(),
+    sender_name: z.string().nullable().optional(),
+    sender_email: z.string().nullable().optional(),
     intent_type: z.string(),
-    source_text_snippet: z.string().nullable().optional(),
-    draft_reply: z.string().nullable().optional(),
-    draft_event_description: z.string().nullable().optional(),
+    intent_summary: z.string().nullable().optional(),
+    meeting_title: z.string().nullable().optional(),
+    meeting_date: z.string().nullable().optional(),
+    matched_event_id: z.number().nullable().optional(),
     status: z.string(),
     created_at: z.string(),
     updated_at: z.string(),
 });
 
-export const SchedulingSuggestionsResponseSchema = z.object({
-    suggestions: z.array(SchedulingSuggestionSchema),
+export const SchedulingIntentsResponseSchema = z.object({
+    intents: z.array(SchedulingIntentSchema),
     total: z.number(),
 });
 
-export type SchedulingSuggestion = z.infer<typeof SchedulingSuggestionSchema>;
-export type SchedulingSuggestionsResponse = z.infer<typeof SchedulingSuggestionsResponseSchema>;
+export const OrchestratorResultSchema = z.object({
+    suggested_slots: z.array(z.object({
+        start_time: z.string(),
+        end_time: z.string(),
+        has_conflict: z.boolean().optional(),
+        conflict_details: z.string().nullable().optional(),
+    })),
+    draft_reply: z.string(),
+    reasoning: z.string().nullable().optional(),
+});
 
-export async function fetchSchedulingSuggestions(params?: {
+export type SchedulingIntent = z.infer<typeof SchedulingIntentSchema>;
+export type SchedulingIntentsResponse = z.infer<typeof SchedulingIntentsResponseSchema>;
+export type OrchestratorResult = z.infer<typeof OrchestratorResultSchema>;
+
+export async function fetchSchedulingIntents(params?: {
     status?: string;
-    message_id?: number;
+    thread_id?: string;
     limit?: number;
     offset?: number;
-}): Promise<SchedulingSuggestionsResponse> {
+}): Promise<SchedulingIntentsResponse> {
     const searchParams = new URLSearchParams();
     if (params?.status) searchParams.append("status", params.status);
-    if (params?.message_id) searchParams.append("message_id", params.message_id.toString());
+    if (params?.thread_id) searchParams.append("thread_id", params.thread_id);
     if (params?.limit) searchParams.append("limit", params.limit.toString());
     if (params?.offset) searchParams.append("offset", params.offset.toString());
     const query = searchParams.toString();
-    const response = await api.get(`/scheduling/suggestions${query ? `?${query}` : ""}`);
-    return SchedulingSuggestionsResponseSchema.parse(response.data);
+    const response = await api.get(`/scheduling/intents${query ? `?${query}` : ""}`);
+    return SchedulingIntentsResponseSchema.parse(response.data);
 }
 
-export async function sendSchedulingSuggestion(suggestionId: number, editedReply?: string): Promise<void> {
-    await api.post(`/scheduling/suggestions/${suggestionId}/send`, editedReply ? { edited_reply: editedReply } : {});
+export async function runOrchestrator(intentId: number, userNote?: string): Promise<OrchestratorResult> {
+    const response = await api.post(`/scheduling/intents/${intentId}/run`, { user_note: userNote || null });
+    return OrchestratorResultSchema.parse(response.data);
 }
 
-export async function dismissSchedulingSuggestion(suggestionId: number): Promise<void> {
-    await api.post(`/scheduling/suggestions/${suggestionId}/dismiss`);
+export async function sendIntentReply(intentId: number, editedReply: string): Promise<void> {
+    await api.post(`/scheduling/intents/${intentId}/send`, { edited_reply: editedReply });
+}
+
+export async function dismissIntent(intentId: number): Promise<void> {
+    await api.post(`/scheduling/intents/${intentId}/dismiss`);
+}
+
+export async function acknowledgeIntent(intentId: number): Promise<void> {
+    await api.post(`/scheduling/intents/${intentId}/acknowledge`);
+}
+
+export async function addIntentToCalendar(intentId: number): Promise<{ event_id: number }> {
+    const response = await api.post(`/scheduling/intents/${intentId}/add-to-calendar`);
+    return response.data;
 }

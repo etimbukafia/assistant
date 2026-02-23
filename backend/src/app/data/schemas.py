@@ -1,5 +1,5 @@
 ﻿from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from enum import Enum
 
@@ -322,6 +322,49 @@ class SchedulingSuggestionSendRequest(BaseModel):
     edited_reply: Optional[str] = None  # Uses draft if not provided
 
 
+class SchedulingIntentResponse(BaseModel):
+    """Response for a scheduling intent (lean record, no pre-generated slots)"""
+    id: int
+    user_id: str
+    message_id: Optional[int] = None
+    thread_id: Optional[str] = None
+    sender_name: Optional[str] = None
+    sender_email: Optional[str] = None
+    intent_type: str
+    intent_summary: Optional[str] = None
+    meeting_title: Optional[str] = None
+    meeting_date: Optional[date] = None
+    matched_event_id: Optional[int] = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SchedulingIntentsListResponse(BaseModel):
+    intents: List[SchedulingIntentResponse]
+    total: int
+
+
+class OrchestratorRunRequest(BaseModel):
+    """Optional user context note passed to CalendarOrchestrator"""
+    user_note: Optional[str] = None
+
+
+class OrchestratorRunResponse(BaseModel):
+    """Ephemeral result from CalendarOrchestrator — not stored"""
+    suggested_slots: List[Dict[str, Any]]  # [{start_time, end_time, label}]
+    draft_reply: str
+    reasoning: Optional[str] = None  # brief explanation of slot choices
+
+
+class IntentSendRequest(BaseModel):
+    """Request to send a scheduling reply (and optionally create a calendar event)"""
+    edited_reply: Optional[str] = None
+    slot_index: Optional[int] = None  # if adding to calendar at the same time
+
+
 class CalendarEventCreateRequest(BaseModel):
     """Request to create a calendar event from a suggestion"""
     suggestion_id: int
@@ -343,6 +386,7 @@ class CalendarEventManualCreateRequest(BaseModel):
     timezone: Optional[str] = None
     location: Optional[str] = None
     calendar_id: Optional[str] = None
+    label: Optional[str] = None  # meeting | personal | travel | deadline | other
 
 
 class CalendarEventUpdateRequest(BaseModel):
@@ -357,6 +401,7 @@ class CalendarEventUpdateRequest(BaseModel):
     timezone: Optional[str] = None
     location: Optional[str] = None
     calendar_id: Optional[str] = None
+    label: Optional[str] = None  # meeting | personal | travel | deadline | other
 
 
 class CalendarEventResponse(BaseModel):
@@ -376,6 +421,7 @@ class CalendarEventResponse(BaseModel):
     provider: str
     external_event_id: Optional[str] = None
     calendar_id: Optional[str] = None
+    label: Optional[str] = None
     status: str
     error_message: Optional[str] = None
     briefing: Optional[Dict[str, Any]] = None
@@ -422,7 +468,7 @@ class CalendarSettingsUpdateRequest(BaseModel):
     working_hours_start: Optional[str] = None
     working_hours_end: Optional[str] = None
     default_timezone: Optional[str] = None
-    calendar_ids: Optional[List[str]] = None
+    calendar_ids: Optional[List[str]] = None  # Which calendars to sync (empty = all)
     default_calendar_id: Optional[str] = None
     auto_briefing_enabled: Optional[bool] = None
     briefing_hours_before: Optional[int] = None

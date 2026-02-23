@@ -1,12 +1,20 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_db_for_user, get_db, get_current_user, AuthenticatedUser
+from app.security.auth import get_db_for_user, get_current_user, AuthenticatedUser
 from app.integrations.gmail import GmailClient, get_gmail_client
-from app.data.models import SchedulingSuggestion, Message, Task
-from app.data.schemas import SchedulingSuggestionResponse, SchedulingSuggestionSendRequest
-from app.agents.modules.scheduling import SchedulingModule
+from app.data.models import SchedulingIntent, SchedulingSuggestion, Message, Task, CalendarEvent
+from app.data.schemas import (
+    SchedulingIntentResponse,
+    SchedulingIntentsListResponse,
+    OrchestratorRunRequest,
+    OrchestratorRunResponse,
+    IntentSendRequest,
+    SchedulingSuggestionResponse,
+)
+from app.services.calendar_orchestrator import CalendarOrchestrator
+from app.services.calendar import CalendarService
 from app.services.entity_cache_coordinator import EntityCacheCoordinator
 
 router = APIRouter(prefix="/scheduling", tags=["Scheduling"])
@@ -21,171 +29,222 @@ def _invalidate_thread_and_prewarm(db: Session, user_id: str, thread_id: str) ->
     if not thread_id:
         return
     cache_coordinator.invalidate_thread(_tenant_id(), user_id, thread_id)
-    cache_coordinator.prewarm_action_chips(
-        db=db,
-        tenant_id=_tenant_id(),
-        user_id=user_id,
-    )
+    cache_coordinator.prewarm_action_chips(db=db, tenant_id=_tenant_id(), user_id=user_id)
 
-@router.get("/suggestions")
-def get_scheduling_suggestions(
-    message_id: int = None,
-    status: str = None,
-    limit: int = 50,
+
+# ── Intent endpoints ──────────────────────────────────────────────────────────
+
+@router.get("/intents", response_model=SchedulingIntentsListResponse)
+def get_scheduling_intents(
+    status: str = "pending",
+    thread_id: str = None,
+    limit: int = 20,
     offset: int = 0,
-    db: Session = Depends(get_db_for_user)
+    db: Session = Depends(get_db_for_user),
 ):
-    """Get scheduling suggestions, optionally filtered by message or status"""
-
-    query = db.query(SchedulingSuggestion)
-
-    if message_id:
-        query = query.filter(SchedulingSuggestion.message_id == message_id)
+    """Get scheduling intents, optionally filtered by status or thread."""
+    query = db.query(SchedulingIntent)
     if status:
-        query = query.filter(SchedulingSuggestion.status == status)
-
+        query = query.filter(SchedulingIntent.status == status)
+    if thread_id:
+        query = query.filter(SchedulingIntent.thread_id == thread_id)
     total = query.count()
-    suggestions = query.order_by(SchedulingSuggestion.created_at.desc()).offset(offset).limit(limit).all()
-
-    return {
-        "suggestions": [SchedulingSuggestionResponse.model_validate(s) for s in suggestions],
-        "total": total
-    }
+    intents = query.order_by(SchedulingIntent.created_at.desc()).offset(offset).limit(limit).all()
+    return {"intents": [SchedulingIntentResponse.model_validate(i) for i in intents], "total": total}
 
 
-@router.get("/suggestions/{suggestion_id}", response_model=SchedulingSuggestionResponse)
-def get_scheduling_suggestion(suggestion_id: int, db: Session = Depends(get_db_for_user)):
-    """Get a specific scheduling suggestion"""
-    
-    suggestion = db.query(SchedulingSuggestion).filter(
-        SchedulingSuggestion.id == suggestion_id
-    ).first()
-
-    if not suggestion:
-        raise HTTPException(status_code=404, detail="Suggestion not found")
-
-    return suggestion
+@router.get("/intents/{intent_id}", response_model=SchedulingIntentResponse)
+def get_scheduling_intent(intent_id: int, db: Session = Depends(get_db_for_user)):
+    """Get a specific scheduling intent."""
+    intent = db.query(SchedulingIntent).filter(SchedulingIntent.id == intent_id).first()
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent not found")
+    return intent
 
 
-@router.post("/suggestions/{suggestion_id}/send")
-def send_scheduling_suggestion(
-    suggestion_id: int,
-    request: SchedulingSuggestionSendRequest = None,
+@router.post("/intents/{intent_id}/run", response_model=OrchestratorRunResponse)
+def run_calendar_orchestrator(
+    intent_id: int,
+    request: OrchestratorRunRequest = None,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    """
+    Run the CalendarOrchestrator for a scheduling intent.
+    Returns suggested slots + draft reply. Nothing is stored — result is ephemeral.
+    User confirms (send / add-to-calendar) in a separate action.
+    """
+    intent = db.query(SchedulingIntent).filter(SchedulingIntent.id == intent_id).first()
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent not found")
+
+    user_note = (request.user_note or "") if request else ""
+
+    try:
+        orchestrator = CalendarOrchestrator(db=db, user_id=user.user_id)
+        result = orchestrator.run(intent=intent, user_note=user_note)
+        return result.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Orchestrator failed: {str(e)}")
+
+
+@router.post("/intents/{intent_id}/send")
+def send_intent_reply(
+    intent_id: int,
+    request: IntentSendRequest = None,
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
     gmail_client: GmailClient = Depends(get_gmail_client),
 ):
-    """Send availability reply for a scheduling suggestion"""
-    
-    suggestion = db.query(SchedulingSuggestion).filter(
-        SchedulingSuggestion.id == suggestion_id
-    ).first()
+    """
+    Send a scheduling reply for an intent.
+    Optionally creates a calendar event if slot_index is provided.
+    """
+    intent = db.query(SchedulingIntent).filter(SchedulingIntent.id == intent_id).first()
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent not found")
 
-    if not suggestion:
-        raise HTTPException(status_code=404, detail="Suggestion not found")
-
-    # Get source message for reply
-    message = db.query(Message).filter(Message.id == suggestion.message_id).first()
+    message = db.query(Message).filter(Message.id == intent.message_id).first()
     if not message:
         raise HTTPException(status_code=404, detail="Source message not found")
 
-    # Use edited reply or draft
-    reply_text = (request.edited_reply if request and request.edited_reply else suggestion.draft_reply)
-
+    reply_text = request.edited_reply if request and request.edited_reply else None
     if not reply_text:
-        raise HTTPException(status_code=400, detail="No reply text available")
+        raise HTTPException(status_code=400, detail="No reply text provided")
 
     try:
-        # Send reply via Gmail
         gmail_client.send_message(
             to=message.sender,
             subject=f"Re: {message.subject}",
-            body=reply_text
+            body=reply_text,
         )
 
-        # Update suggestion status
-        suggestion.status = "sent"
+        intent.status = "sent"
         db.commit()
 
         # Create follow-up task
-        follow_up_task = Task(
+        follow_up = Task(
             message_id=message.id,
             user_id=message.user_id,
-            title=f"Follow up on scheduling with {message.sender.split('@')[0]}",
+            title=f"Follow up on scheduling with {(message.sender or '').split('@')[0]}",
             description="Check if they responded to your availability",
             task_type="follow_up",
             task_signal="explicit",
             priority="normal",
             status="approved",
-            approved_at=datetime.now(timezone.utc)
+            approved_at=datetime.now(timezone.utc),
         )
-        db.add(follow_up_task)
+        db.add(follow_up)
         db.commit()
 
-        if suggestion.thread_id:
-            _invalidate_thread_and_prewarm(db, user.user_id, suggestion.thread_id)
+        if intent.thread_id:
+            _invalidate_thread_and_prewarm(db, user.user_id, intent.thread_id)
 
-        return {
-            "success": True,
-            "message": "Availability reply sent",
-            "follow_up_task_id": follow_up_task.id
-        }
+        return {"success": True, "message": "Reply sent", "follow_up_task_id": follow_up.id}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to send reply: {str(e)}")
 
 
-@router.post("/suggestions/{suggestion_id}/dismiss")
-def dismiss_scheduling_suggestion(
-    suggestion_id: int,
+@router.post("/intents/{intent_id}/dismiss")
+def dismiss_intent(
+    intent_id: int,
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
-    """Dismiss a scheduling suggestion"""
-
-    suggestion = db.query(SchedulingSuggestion).filter(
-        SchedulingSuggestion.id == suggestion_id
-    ).first()
-
-    if not suggestion:
-        raise HTTPException(status_code=404, detail="Suggestion not found")
-
-    suggestion.status = "dismissed"
+    """Dismiss a scheduling intent."""
+    intent = db.query(SchedulingIntent).filter(SchedulingIntent.id == intent_id).first()
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent not found")
+    intent.status = "dismissed"
     db.commit()
+    if intent.thread_id:
+        _invalidate_thread_and_prewarm(db, user.user_id, intent.thread_id)
+    return {"success": True}
 
-    if suggestion.thread_id:
-        _invalidate_thread_and_prewarm(db, user.user_id, suggestion.thread_id)
 
-    return {"success": True, "message": "Suggestion dismissed"}
+@router.post("/intents/{intent_id}/acknowledge")
+def acknowledge_intent(
+    intent_id: int,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    """
+    Acknowledge a meeting reminder intent.
+    Used when the meeting is already in the calendar (matched_event_id is set).
+    """
+    intent = db.query(SchedulingIntent).filter(SchedulingIntent.id == intent_id).first()
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent not found")
+    intent.status = "acknowledged"
+    db.commit()
+    return {"success": True}
+
+
+@router.post("/intents/{intent_id}/add-to-calendar")
+def add_intent_to_calendar(
+    intent_id: int,
+    slot_index: int = 0,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    """
+    Create a CalendarEvent from an intent's meeting details.
+    Used for meeting_confirmation and meeting_reminder (when not already in calendar).
+    The slot comes from the most recent orchestrator run (passed by the frontend as slot data).
+    """
+    intent = db.query(SchedulingIntent).filter(SchedulingIntent.id == intent_id).first()
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent not found")
+
+    # For meeting_confirmation / meeting_reminder: create event from extracted meeting_date
+    if not intent.meeting_date:
+        raise HTTPException(status_code=400, detail="No meeting date extracted from this intent")
+
+    from datetime import datetime as dt
+    start = dt.combine(intent.meeting_date, dt.min.time()).replace(tzinfo=timezone.utc)
+    end = start.replace(hour=start.hour + 1)  # default 1h duration
+
+    calendar_event = CalendarEvent(
+        user_id=user.user_id,
+        title=intent.meeting_title or "Meeting",
+        start_time=start,
+        end_time=end,
+        participants=[intent.sender_email] if intent.sender_email else [],
+        timezone="UTC",
+        source_message_id=intent.message_id,
+        provider="manual",
+        status="created",
+        label="meeting",
+    )
+    db.add(calendar_event)
+    intent.status = "added"
+    intent.matched_event_id = calendar_event.id
+    db.commit()
+    db.refresh(calendar_event)
+
+    from core.cache import calendar_cache
+    calendar_cache.invalidate_all(user.user_id)
+
+    return {"success": True, "event_id": calendar_event.id}
+
+
+# ── Backwards compatibility stubs ────────────────────────────────────────────
+# These keep old mobile/web clients from 404-ing during the transition.
+
+@router.get("/suggestions")
+def get_scheduling_suggestions_compat(db: Session = Depends(get_db_for_user)):
+    """Deprecated. Use GET /scheduling/intents instead."""
+    return {"suggestions": [], "total": 0}
+
+
+@router.get("/suggestions/{suggestion_id}")
+def get_scheduling_suggestion_compat(suggestion_id: int, db: Session = Depends(get_db_for_user)):
+    """Deprecated."""
+    raise HTTPException(status_code=404, detail="Suggestions have been replaced by intents")
 
 
 @router.post("/detect")
-def detect_scheduling_intent(
-    message_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
-):
-    """
-    Manually trigger scheduling detection for a message.
-
-    This is useful for testing or re-processing messages.
-    Normally, this happens automatically via the message_received event.
-    """
-
-    message = db.query(Message).filter(Message.id == message_id).first()
-    if not message:
-        raise HTTPException(status_code=404, detail="Message not found")
-
-    scheduling_module = SchedulingModule()
-
-    # Run synchronously for immediate feedback
-    result = scheduling_module.generate_suggestions(
-        message_id=message.id,
-        message_body=message.decrypted_body,
-        message_subject=message.subject,
-        sender_email=message.sender,
-        thread_id=message.thread_id,
-        db=db
-    )
-
-    return result
+def detect_scheduling_intent_compat(message_id: int, db: Session = Depends(get_db_for_user)):
+    """Deprecated. Intent detection is automatic during email processing."""
+    return {"success": False, "reason": "Manual detection is no longer supported. Intents are created automatically during email processing."}

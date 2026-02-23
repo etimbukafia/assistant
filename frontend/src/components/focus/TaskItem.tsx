@@ -84,19 +84,18 @@ export function TaskItem({
                 </button>
             )}
 
-            {/* Status circle */}
+            {/* Non-interactive status dot (kept visually distinct from selection checkbox) */}
             <div
-                className={`shrink-0 w-4 h-4 rounded border flex items-center justify-center ${isCompleted
-                    ? "bg-sage border-sage"
+                aria-hidden
+                className={`shrink-0 w-2.5 h-2.5 rounded-full ${isCompleted
+                    ? "bg-sage"
                     : isPending
-                        ? "border-copper border-dashed"
+                        ? "bg-copper"
                         : isActive
-                            ? "border-sage/60"
-                            : "border-faint/50"
+                            ? "bg-primary/70"
+                            : "bg-faint/50"
                     }`}
-            >
-                {isCompleted && <Check size={10} className="text-white" />}
-            </div>
+            />
 
             <div className="flex-1 min-w-0">
                 <span className={`text-sm font-inter ${isCompleted ? "line-through text-faint" : "text-obsidian"

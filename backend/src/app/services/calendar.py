@@ -5,6 +5,7 @@ Uses the same OAuth credentials as Gmail to access Google Calendar.
 Provides availability checking and event creation.
 """
 import os
+import re
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
@@ -659,6 +660,72 @@ class CalendarService:
             'all_day': all_day
         }
 
+    @staticmethod
+    def _classify_event_label(title: str, description: Optional[str], participants: List[Any]) -> str:
+        """
+        Classify an event into a label using keyword heuristics.
+
+        Labels:
+          meeting  — has explicit meeting signals or external participants
+          personal — social / life events
+          travel   — transport / logistics
+          deadline — deliverable / launch
+          other    — everything else
+        """
+        MEETING_KW = {
+            "meeting", "call", "sync", "interview", "standup", "stand-up", "stand up",
+            "1:1", "one-on-one", "one on one", "review", "discussion", "conference",
+            "workshop", "webinar", "zoom", "teams", "meet", "huddle", "session",
+            "check-in", "check in", "catchup", "catch-up",
+        }
+        PERSONAL_KW = {
+            "lunch", "dinner", "breakfast", "birthday", "anniversary",
+            "holiday", "vacation", "pto", "day off", "off", "personal",
+        }
+        TRAVEL_KW = {
+            "flight", "travel", "transit", "drive", "commute", "trip",
+            "hotel", "depart", "arrive", "train", "ferry",
+        }
+        DEADLINE_KW = {
+            "deadline", "due", "submit", "submission", "delivery",
+            "launch", "release", "ship", "go live",
+        }
+
+        text = f"{title} {description or ''}".lower()
+
+        # Check multi-word phrases first
+        for phrase in MEETING_KW | PERSONAL_KW | TRAVEL_KW | DEADLINE_KW:
+            if " " in phrase and phrase in text:
+                if phrase in MEETING_KW:
+                    return "meeting"
+                if phrase in PERSONAL_KW:
+                    return "personal"
+                if phrase in TRAVEL_KW:
+                    return "travel"
+                if phrase in DEADLINE_KW:
+                    return "deadline"
+
+        words = set(re.findall(r"\w+", text))
+        single_meeting = {kw for kw in MEETING_KW if " " not in kw}
+        single_personal = {kw for kw in PERSONAL_KW if " " not in kw}
+        single_travel = {kw for kw in TRAVEL_KW if " " not in kw}
+        single_deadline = {kw for kw in DEADLINE_KW if " " not in kw}
+
+        if words & single_meeting:
+            return "meeting"
+        if words & single_personal:
+            return "personal"
+        if words & single_travel:
+            return "travel"
+        if words & single_deadline:
+            return "deadline"
+
+        # No keywords — if there are external participants it's likely a meeting
+        if len(participants) > 1:
+            return "meeting"
+
+        return "other"
+
     async def sync_upcoming_events(
         self,
         days_ahead: int = 7,
@@ -687,15 +754,18 @@ class CalendarService:
         updated = 0
         unchanged = 0
 
-        def _schedule_briefing(event_id: int, start_time: datetime) -> None:
+        def _schedule_briefing(event: CalendarEvent, start_time: datetime) -> Optional[datetime]:
+            """Schedule a briefing only for meeting-labelled events."""
             if not enable_briefings:
-                return
+                return None
+            if event.label != "meeting":
+                return None
             briefing_time = start_time - timedelta(hours=briefing_hours_before)
             if briefing_time <= now:
-                return
+                return None
             enqueue_task(
                 task_type="generate_briefing",
-                payload={"event_id": event_id},
+                payload={"event_id": event.id},
                 scheduled_for=briefing_time,
                 db=self.db
             )
@@ -712,6 +782,11 @@ class CalendarService:
             target.timezone = data['timezone']
             target.all_day = data.get('all_day', False)
             target.last_synced_at = now
+            # Re-classify label if the event doesn't have one yet, or if core fields changed
+            if not target.label:
+                target.label = self._classify_event_label(
+                    data['title'], data['description'], data['attendees']
+                )
 
         for event_data in events:
             existing = self.db.query(CalendarEvent).filter(
@@ -727,14 +802,17 @@ class CalendarService:
                     _apply_event_fields(existing, event_data)
                     updated += 1
 
-                    briefing_time = _schedule_briefing(existing.id, event_data['start_time'])
+                    briefing_time = _schedule_briefing(existing, event_data['start_time'])
                     if briefing_time:
                         existing.briefing_scheduled_for = briefing_time
                 else:
                     existing.last_synced_at = now
                     unchanged += 1
             else:
-                # Create new
+                # Classify label for new events
+                label = self._classify_event_label(
+                    event_data['title'], event_data['description'], event_data['attendees']
+                )
                 new_event = CalendarEvent(
                     external_event_id=event_data['external_event_id'],
                     calendar_id=event_data['calendar_id'],
@@ -747,6 +825,7 @@ class CalendarService:
                     participants=event_data['attendees'],
                     timezone=event_data['timezone'],
                     all_day=event_data.get('all_day', False),
+                    label=label,
                     source='synced',
                     status='upcoming',
                     last_synced_at=now
@@ -754,11 +833,10 @@ class CalendarService:
                 self.db.add(new_event)
                 self.db.flush()  # Get the ID
 
-                # Schedule briefing generation
-                briefing_time = _schedule_briefing(new_event.id, event_data['start_time'])
+                briefing_time = _schedule_briefing(new_event, event_data['start_time'])
                 if briefing_time:
                     new_event.briefing_scheduled_for = briefing_time
-                    logger.info(f"Scheduled briefing for event {new_event.id} at {briefing_time}")
+                    logger.info(f"Scheduled briefing for event {new_event.id} (label={label}) at {briefing_time}")
 
                 created += 1
 

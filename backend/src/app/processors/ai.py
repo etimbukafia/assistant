@@ -122,8 +122,11 @@ class AIProcessor:
   "decisions": [],
   "scheduling_intent": {
     "detected": true/false,
-    "type": "availability_request|time_request|reschedule_request|none",
-    "confidence": 0.0-1.0
+    "type": "availability_request|time_request|meeting_confirmation|meeting_reminder|reschedule_request|none",
+    "confidence": 0.0-1.0,
+    "summary": "One sentence e.g. Sarah asked when you are free for the Q4 review (null if not detected)",
+    "meeting_title": "Clean meeting title e.g. Q4 Review (null if not specified)",
+    "meeting_date": "ISO date e.g. 2024-12-20 or null if not specified"
   }
 }'''
 
@@ -195,7 +198,10 @@ class AIProcessor:
                 'extracted_decisions': result.get('decisions', []),
                 'scheduling_intent': scheduling.get('detected', False),
                 'scheduling_intent_type': scheduling.get('type', 'none'),
-                'scheduling_intent_confidence': scheduling.get('confidence', 0.0)
+                'scheduling_intent_confidence': scheduling.get('confidence', 0.0),
+                'scheduling_intent_summary': scheduling.get('summary'),
+                'scheduling_intent_meeting_title': scheduling.get('meeting_title'),
+                'scheduling_intent_meeting_date': scheduling.get('meeting_date'),
             }
         except Exception as e:
             logger.error(f"Error processing message: {e}")
@@ -213,7 +219,10 @@ class AIProcessor:
             'extracted_decisions': [],
             'scheduling_intent': False,
             'scheduling_intent_type': 'none',
-            'scheduling_intent_confidence': 0.0
+            'scheduling_intent_confidence': 0.0,
+            'scheduling_intent_summary': None,
+            'scheduling_intent_meeting_title': None,
+            'scheduling_intent_meeting_date': None,
         }
 
     def summarize(self, text: str, db=None, thread_id: str = None) -> str:

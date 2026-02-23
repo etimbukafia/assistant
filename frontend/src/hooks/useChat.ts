@@ -91,9 +91,9 @@ export function useChat() {
             id: string;
             message_id?: number;
             action_type: string;
-            action_data: Record<string, unknown>;
+            action_data: unknown;
             status: string;
-            created_at: string;
+            created_at?: string;
         }>;
     };
     type SendMessageResult = {

@@ -23,7 +23,6 @@ import { setCalendarView } from "./actions";
 import {
     CalendarEvent,
     CalendarSettings,
-    createEventFromSuggestion,
     createManualEvent,
     deleteEvent,
     fetchCalendarEvents,
@@ -35,10 +34,14 @@ import {
     updateEvent,
 } from "@/services/calendar";
 import {
-    SchedulingSuggestion,
-    dismissSchedulingSuggestion,
-    fetchSchedulingSuggestions,
-    sendSchedulingSuggestion,
+    SchedulingIntent,
+    OrchestratorResult,
+    fetchSchedulingIntents,
+    runOrchestrator,
+    sendIntentReply,
+    dismissIntent,
+    acknowledgeIntent,
+    addIntentToCalendar,
 } from "@/services/scheduling";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -56,6 +59,45 @@ const VIEW_LABELS: Record<CalendarView, string> = {
 
 const WEEK_STARTS_ON = 1; // Monday
 const CARD_SHADOW = "0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)";
+
+// Calendar color palette — used only for the left accent bar in ListView and dots in settings.
+// Order = calendar list order: first calendar gets palette[0], etc.
+const CALENDAR_COLOR_PALETTE = [
+    { dot: "bg-primary" },
+    { dot: "bg-copper" },
+    { dot: "bg-sage" },
+    { dot: "bg-teal" },
+    { dot: "bg-burgundy" },
+    { dot: "bg-obsidian/60" },
+] as const;
+
+function getCalendarColor(calendarId: string | null | undefined, calendars: { id: string }[]) {
+    const idx = calendars.findIndex((c) => c.id === calendarId);
+    return CALENDAR_COLOR_PALETTE[(idx < 0 ? 0 : idx) % CALENDAR_COLOR_PALETTE.length];
+}
+
+// Label sticker palette — solid fills with white text for a tactile sticker feel.
+// Each label has its own color; this drives all event chip/block colors in the views.
+const LABEL_STICKER: Record<string, {
+    chip: string;       // compact chip (MonthView, all-day)
+    block: string;      // timed block (TimeGrid)
+    badge: string;      // sticker badge (ListView, EventDialog active)
+    inactive: string;   // EventDialog inactive picker border + text
+    leftBar: string;    // ListView left accent bar
+}> = {
+    meeting:  { chip: "bg-primary text-white",          block: "bg-primary border-primary/20 text-white",    badge: "bg-primary text-white",      inactive: "border-primary/30 text-primary",      leftBar: "bg-primary" },
+    personal: { chip: "bg-sage text-white",             block: "bg-sage border-sage/20 text-white",          badge: "bg-sage text-white",         inactive: "border-sage/40 text-sage",            leftBar: "bg-sage" },
+    travel:   { chip: "bg-copper text-white",           block: "bg-copper border-copper/20 text-white",      badge: "bg-copper text-white",       inactive: "border-copper/40 text-copper",        leftBar: "bg-copper" },
+    deadline: { chip: "bg-burgundy text-white",         block: "bg-burgundy border-burgundy/20 text-white",  badge: "bg-burgundy text-white",     inactive: "border-burgundy/40 text-burgundy",    leftBar: "bg-burgundy" },
+    other:    { chip: "bg-border/70 text-foreground/60", block: "bg-muted border-border text-foreground/70", badge: "bg-muted text-muted-foreground", inactive: "border-border text-muted-foreground", leftBar: "bg-border" },
+};
+
+const STICKER_SHADOW = "0 1px 4px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.04)";
+const STICKER_SHADOW_LG = "0 2px 8px rgba(0,0,0,0.22), 0 1px 3px rgba(0,0,0,0.10)";
+
+function getLabelColor(label: string | null | undefined) {
+    return LABEL_STICKER[label || "other"] ?? LABEL_STICKER.other;
+}
 
 export default function CalendarClient({ initialView }: { initialView: string }) {
     const [view, setView] = useState<CalendarView>(
@@ -108,9 +150,9 @@ export default function CalendarClient({ initialView }: { initialView: string })
         queryFn: fetchCalendars,
     });
 
-    const suggestionsQuery = useQuery({
-        queryKey: ["scheduling-suggestions"],
-        queryFn: () => fetchSchedulingSuggestions({ status: "pending", limit: 20 }),
+    const intentsQuery = useQuery({
+        queryKey: ["scheduling-intents"],
+        queryFn: () => fetchSchedulingIntents({ status: "pending", limit: 20 }),
     });
 
     const syncMutation = useMutation({
@@ -153,32 +195,34 @@ export default function CalendarClient({ initialView }: { initialView: string })
         onError: (error: any) => toast.error(error?.message || "Failed to delete event"),
     });
 
-    const suggestionAcceptMutation = useMutation({
-        mutationFn: createEventFromSuggestion,
+    const [orchestratorIntent, setOrchestratorIntent] = useState<SchedulingIntent | null>(null);
+
+    const dismissIntentMutation = useMutation({
+        mutationFn: dismissIntent,
         onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ["scheduling-intents"] });
+            toast.success("Dismissed");
+        },
+        onError: (error: any) => toast.error(error?.message || "Failed to dismiss"),
+    });
+
+    const acknowledgeIntentMutation = useMutation({
+        mutationFn: acknowledgeIntent,
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ["scheduling-intents"] });
+            toast.success("Acknowledged");
+        },
+        onError: (error: any) => toast.error(error?.message || "Failed to acknowledge"),
+    });
+
+    const addIntentToCalendarMutation = useMutation({
+        mutationFn: addIntentToCalendar,
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ["scheduling-intents"] });
             await queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
-            await queryClient.invalidateQueries({ queryKey: ["scheduling-suggestions"] });
-            toast.success("Event created from suggestion");
+            toast.success("Added to calendar");
         },
-        onError: (error: any) => toast.error(error?.message || "Failed to create event"),
-    });
-
-    const suggestionSendMutation = useMutation({
-        mutationFn: ({ id, reply }: { id: number; reply?: string }) => sendSchedulingSuggestion(id, reply),
-        onSuccess: async () => {
-            await queryClient.invalidateQueries({ queryKey: ["scheduling-suggestions"] });
-            toast.success("Availability reply sent");
-        },
-        onError: (error: any) => toast.error(error?.message || "Failed to send reply"),
-    });
-
-    const suggestionDismissMutation = useMutation({
-        mutationFn: dismissSchedulingSuggestion,
-        onSuccess: async () => {
-            await queryClient.invalidateQueries({ queryKey: ["scheduling-suggestions"] });
-            toast.success("Suggestion dismissed");
-        },
-        onError: (error: any) => toast.error(error?.message || "Failed to dismiss suggestion"),
+        onError: (error: any) => toast.error(error?.message || "Failed to add to calendar"),
     });
 
     const generateBriefMutation = useMutation({
@@ -356,13 +400,12 @@ export default function CalendarClient({ initialView }: { initialView: string })
                     calendars={calendarsQuery.data?.calendars ?? []}
                     onUpdate={(payload) => updateSettingsMutation.mutateAsync(payload)}
                 />
-                <SuggestionsPanel
-                    suggestions={suggestionsQuery.data?.suggestions ?? []}
-                    onAccept={(suggestionId, slotIndex) =>
-                        suggestionAcceptMutation.mutate({ suggestion_id: suggestionId, selected_slot_index: slotIndex })
-                    }
-                    onSend={(suggestionId, reply) => suggestionSendMutation.mutate({ id: suggestionId, reply })}
-                    onDismiss={(suggestionId) => suggestionDismissMutation.mutate(suggestionId)}
+                <SchedulingIntentsPanel
+                    intents={intentsQuery.data?.intents ?? []}
+                    onDismiss={(id) => dismissIntentMutation.mutate(id)}
+                    onAcknowledge={(id) => acknowledgeIntentMutation.mutate(id)}
+                    onAddToCalendar={(id) => addIntentToCalendarMutation.mutate(id)}
+                    onOpenOrchestrator={(intent) => setOrchestratorIntent(intent)}
                 />
             </aside>
 
@@ -376,6 +419,18 @@ export default function CalendarClient({ initialView }: { initialView: string })
                 onDelete={(id) => deleteEventMutation.mutate(id)}
                 onGenerateBrief={(id) => generateBriefMutation.mutate(id)}
             />
+
+            {orchestratorIntent && (
+                <OrchestratorPanel
+                    intent={orchestratorIntent}
+                    onClose={() => setOrchestratorIntent(null)}
+                    onIntentActioned={() => {
+                        queryClient.invalidateQueries({ queryKey: ["scheduling-intents"] });
+                        queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
+                        setOrchestratorIntent(null);
+                    }}
+                />
+            )}
         </div>
     );
 }
@@ -453,15 +508,19 @@ function MonthView({
                                 )}
                             </div>
                             <div className="space-y-0.5">
-                                {dayEvents.slice(0, 3).map((event) => (
-                                    <div
-                                        key={event.id}
-                                        onClick={(e) => { e.stopPropagation(); onSelectEvent(event); }}
-                                        className="truncate rounded-[4px] bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary font-inter font-medium cursor-pointer hover:bg-primary/15 transition-colors"
-                                    >
-                                        {event.title}
-                                    </div>
-                                ))}
+                                {dayEvents.slice(0, 3).map((event) => {
+                                    const sticker = getLabelColor(event.label);
+                                    return (
+                                        <div
+                                            key={event.id}
+                                            onClick={(e) => { e.stopPropagation(); onSelectEvent(event); }}
+                                            style={{ boxShadow: STICKER_SHADOW }}
+                                            className={cn("truncate rounded-[4px] px-1.5 py-0.5 text-[10px] font-inter font-medium cursor-pointer transition-opacity hover:opacity-80", sticker.chip)}
+                                        >
+                                            {event.title}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </button>
                     );
@@ -552,15 +611,19 @@ function TimeGrid({
                         <div className="flex flex-wrap gap-1 mb-1">
                             {events
                                 .filter((event) => event.all_day && isSameDay(parseISO(event.start_time), day))
-                                .map((event) => (
-                                    <button
-                                        key={event.id}
-                                        onClick={() => onSelectEvent(event)}
-                                        className="rounded-[4px] bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary font-inter font-medium"
-                                    >
-                                        {event.title}
-                                    </button>
-                                ))}
+                                .map((event) => {
+                                    const sticker = getLabelColor(event.label);
+                                    return (
+                                        <button
+                                            key={event.id}
+                                            onClick={() => onSelectEvent(event)}
+                                            style={{ boxShadow: STICKER_SHADOW }}
+                                            className={cn("rounded-[4px] px-1.5 py-0.5 text-[10px] font-inter font-medium hover:opacity-80 transition-opacity", sticker.chip)}
+                                        >
+                                            {event.title}
+                                        </button>
+                                    );
+                                })}
                         </div>
                         {/* Timed events */}
                         <div className="relative" style={{ height: hours.length * hourHeight }}>
@@ -581,16 +644,17 @@ function TimeGrid({
                                     const endMinutes = end.getHours() * 60 + end.getMinutes();
                                     const top = (startMinutes / 60) * hourHeight;
                                     const height = Math.max(24, ((endMinutes - startMinutes) / 60) * hourHeight);
+                                    const sticker = getLabelColor(event.label);
                                     return (
                                         <button
                                             key={event.id}
                                             onClick={() => onSelectEvent(event)}
-                                            className="absolute left-1 right-1 rounded-[6px] bg-primary/10 border border-primary/20 px-2 py-1 text-left hover:bg-primary/15 transition-colors"
-                                            style={{ top, height }}
+                                            className={cn("absolute left-1 right-1 rounded-[6px] border px-2 py-1 text-left opacity-90 hover:opacity-100 transition-opacity", sticker.block)}
+                                            style={{ top, height, boxShadow: STICKER_SHADOW }}
                                         >
-                                            <div className="text-[11px] font-semibold font-inter text-primary truncate">{event.title}</div>
+                                            <div className="text-[11px] font-semibold font-inter truncate">{event.title}</div>
                                             {height > 30 && (
-                                                <div className="text-[10px] font-inter text-primary/60">
+                                                <div className="text-[10px] font-inter opacity-70">
                                                     {format(start, "p")}
                                                 </div>
                                             )}
@@ -647,28 +711,45 @@ function ListView({
                             <div className="flex-1 h-px bg-border/40" />
                         </div>
                         <div className="space-y-1.5">
-                            {dayEvents.map((event) => (
-                                <button
-                                    key={event.id}
-                                    onClick={() => onSelectEvent(event)}
-                                    style={{ boxShadow: CARD_SHADOW }}
-                                    className="w-full rounded-[12px] border border-border bg-white px-4 py-3 text-left hover:border-border/80 transition-colors"
-                                >
-                                    <div className="flex items-center justify-between gap-4">
-                                        <span className="font-playfair text-[15px] font-semibold text-foreground">
-                                            {event.title}
-                                        </span>
-                                        <span className="text-[11px] font-inter text-muted-foreground/60 shrink-0">
-                                            {event.all_day
-                                                ? "All day"
-                                                : `${format(parseISO(event.start_time), "p")} – ${format(parseISO(event.end_time), "p")}`}
-                                        </span>
-                                    </div>
-                                    {event.location && (
-                                        <p className="text-[12px] font-inter text-muted-foreground/60 mt-0.5">{event.location}</p>
-                                    )}
-                                </button>
-                            ))}
+                            {dayEvents.map((event) => {
+                                const sticker = getLabelColor(event.label);
+                                return (
+                                    <button
+                                        key={event.id}
+                                        onClick={() => onSelectEvent(event)}
+                                        style={{ boxShadow: CARD_SHADOW }}
+                                        className="w-full rounded-[12px] border border-border bg-white text-left hover:border-border/80 transition-colors overflow-hidden flex"
+                                    >
+                                        {/* Label color accent bar */}
+                                        <div className={cn("w-1 shrink-0 self-stretch", sticker.leftBar)} />
+                                        <div className="flex-1 px-4 py-3">
+                                            <div className="flex items-center justify-between gap-4">
+                                                <span className="font-playfair text-[15px] font-semibold text-foreground">
+                                                    {event.title}
+                                                </span>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    {event.label && event.label !== "other" && (
+                                                        <span
+                                                            style={{ boxShadow: STICKER_SHADOW }}
+                                                            className={cn("px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-[0.8px] font-inter", sticker.badge)}
+                                                        >
+                                                            {event.label}
+                                                        </span>
+                                                    )}
+                                                    <span className="text-[11px] font-inter text-muted-foreground/60">
+                                                        {event.all_day
+                                                            ? "All day"
+                                                            : `${format(parseISO(event.start_time), "p")} – ${format(parseISO(event.end_time), "p")}`}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            {event.location && (
+                                                <p className="text-[12px] font-inter text-muted-foreground/60 mt-0.5">{event.location}</p>
+                                            )}
+                                        </div>
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
                 );
@@ -701,6 +782,16 @@ function CalendarSettingsPanel({
         }
     };
 
+    const selectedIds = settings?.calendar_ids ?? [];
+
+    const toggleCalendar = (calId: string) => {
+        const current = settings?.calendar_ids ?? [];
+        const next = current.includes(calId)
+            ? current.filter((id) => id !== calId)
+            : [...current, calId];
+        handleChange({ calendar_ids: next });
+    };
+
     return (
         <div
             className="rounded-[14px] border border-border bg-white p-4 space-y-4"
@@ -709,6 +800,53 @@ function CalendarSettingsPanel({
             <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
                 Settings
             </p>
+
+            {/* Calendar selector */}
+            {calendars.length > 0 && (
+                <div className="space-y-2">
+                    <label className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                        Calendars to sync
+                    </label>
+                    <p className="text-[11px] font-inter text-muted-foreground/50 -mt-1">
+                        {selectedIds.length === 0 ? "All calendars are synced." : `${selectedIds.length} selected.`}
+                    </p>
+                    <div className="space-y-1">
+                        {calendars.map((cal, idx) => {
+                            const checked = selectedIds.includes(cal.id);
+                            const color = CALENDAR_COLOR_PALETTE[idx % CALENDAR_COLOR_PALETTE.length];
+                            return (
+                                <button
+                                    key={cal.id}
+                                    onClick={() => toggleCalendar(cal.id)}
+                                    disabled={saving}
+                                    className={cn(
+                                        "w-full flex items-center gap-2.5 px-3 py-2 rounded-[8px] text-left transition-colors",
+                                        checked
+                                            ? "bg-linen/60 border border-border"
+                                            : selectedIds.length === 0
+                                            ? "bg-linen/50 border border-border/50"
+                                            : "bg-transparent border border-border/30 opacity-50"
+                                    )}
+                                >
+                                    {/* Calendar color dot */}
+                                    <span className={cn("w-2.5 h-2.5 rounded-full flex-shrink-0", color.dot)} />
+                                    <span className={cn(
+                                        "flex-1 text-[12px] font-inter truncate",
+                                        checked || selectedIds.length === 0 ? "text-foreground font-medium" : "text-muted-foreground"
+                                    )}>
+                                        {cal.summary}{cal.primary ? " (Primary)" : ""}
+                                    </span>
+                                    {checked && (
+                                        <svg className="w-3 h-3 text-foreground/40 shrink-0" viewBox="0 0 8 8" fill="none">
+                                            <path d="M1.5 4L3.5 6L6.5 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                        </svg>
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
 
             <div className="space-y-1.5">
                 <label className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
@@ -764,20 +902,54 @@ function CalendarSettingsPanel({
     );
 }
 
-// ─── SUGGESTIONS PANEL ───────────────────────────────────────────────────────
+// ─── SCHEDULING INTENTS PANEL ────────────────────────────────────────────────
 
-function SuggestionsPanel({
-    suggestions,
-    onAccept,
-    onSend,
+const INTENT_LABELS: Record<string, string> = {
+    availability_request: "Availability request",
+    time_request: "Time request",
+    meeting_confirmation: "Meeting confirmation",
+    meeting_reminder: "Meeting reminder",
+    reschedule_request: "Reschedule request",
+};
+
+function getPrimaryAction(
+    intent: SchedulingIntent,
+    onOpenOrchestrator: (intent: SchedulingIntent) => void,
+    onAcknowledge: (id: number) => void,
+    onAddToCalendar: (id: number) => void,
+): { label: string; action: () => void } {
+    switch (intent.intent_type) {
+        case "availability_request":
+            return { label: "Suggest availability", action: () => onOpenOrchestrator(intent) };
+        case "time_request":
+            return { label: "Suggest time", action: () => onOpenOrchestrator(intent) };
+        case "reschedule_request":
+            return { label: "Suggest new times", action: () => onOpenOrchestrator(intent) };
+        case "meeting_confirmation":
+            return { label: "Add to calendar", action: () => onAddToCalendar(intent.id) };
+        case "meeting_reminder":
+            return intent.matched_event_id
+                ? { label: "Acknowledge", action: () => onAcknowledge(intent.id) }
+                : { label: "Add to calendar", action: () => onAddToCalendar(intent.id) };
+        default:
+            return { label: "View", action: () => onOpenOrchestrator(intent) };
+    }
+}
+
+function SchedulingIntentsPanel({
+    intents,
     onDismiss,
+    onAcknowledge,
+    onAddToCalendar,
+    onOpenOrchestrator,
 }: {
-    suggestions: SchedulingSuggestion[];
-    onAccept: (suggestionId: number, slotIndex: number) => void;
-    onSend: (suggestionId: number, reply?: string) => void;
-    onDismiss: (suggestionId: number) => void;
+    intents: SchedulingIntent[];
+    onDismiss: (intentId: number) => void;
+    onAcknowledge: (intentId: number) => void;
+    onAddToCalendar: (intentId: number) => void;
+    onOpenOrchestrator: (intent: SchedulingIntent) => void;
 }) {
-    if (suggestions.length === 0) return null;
+    if (intents.length === 0) return null;
 
     return (
         <div
@@ -785,47 +957,244 @@ function SuggestionsPanel({
             style={{ boxShadow: CARD_SHADOW }}
         >
             <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
-                Scheduling suggestions
+                Scheduling
             </p>
 
-            {suggestions.map((suggestion) => (
-                <div key={suggestion.id} className="space-y-3">
-                    <p className="text-sm font-semibold font-inter text-foreground">
-                        {suggestion.meeting_type}
-                        {suggestion.participants.length > 0 && (
-                            <span className="font-normal text-muted-foreground"> with {suggestion.participants.join(", ")}</span>
-                        )}
-                    </p>
-
-                    <div className="space-y-1.5">
-                        {suggestion.suggested_slots.slice(0, 3).map((slot, idx) => (
+            {intents.map((intent) => {
+                const primary = getPrimaryAction(intent, onOpenOrchestrator, onAcknowledge, onAddToCalendar);
+                return (
+                    <div
+                        key={intent.id}
+                        className="space-y-2.5 pb-4 border-b border-border/50 last:border-0 last:pb-0"
+                    >
+                        <button
+                            onClick={() => onOpenOrchestrator(intent)}
+                            className="text-left w-full space-y-1"
+                        >
+                            <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                                {INTENT_LABELS[intent.intent_type] ?? "Scheduling"}
+                                {intent.sender_name && ` · ${intent.sender_name}`}
+                            </p>
+                            {intent.intent_summary ? (
+                                <p className="text-sm font-inter text-foreground leading-snug">
+                                    {intent.intent_summary}
+                                </p>
+                            ) : intent.meeting_title ? (
+                                <p className="text-sm font-inter text-foreground">{intent.meeting_title}</p>
+                            ) : null}
+                        </button>
+                        <div className="flex items-center gap-2">
                             <button
-                                key={`${suggestion.id}-${idx}`}
-                                onClick={() => onAccept(suggestion.id, idx)}
-                                className="w-full rounded-[8px] bg-copper/[0.06] border border-copper/20 px-3 py-2 text-left text-[12px] font-inter text-copper hover:bg-copper/10 transition-colors"
+                                onClick={primary.action}
+                                className="flex-1 py-1.5 rounded-[8px] bg-primary text-white text-[12px] font-medium font-inter hover:bg-primary/90 transition-colors"
                             >
-                                {format(parseISO(slot.start_time), "EEE, MMM d · p")} – {format(parseISO(slot.end_time), "p")}
+                                {primary.label}
                             </button>
-                        ))}
+                            <button
+                                onClick={() => onDismiss(intent.id)}
+                                className="px-3 py-1.5 rounded-[8px] border border-border text-muted-foreground text-[12px] font-inter hover:bg-muted/40 transition-colors"
+                            >
+                                Dismiss
+                            </button>
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+// ─── ORCHESTRATOR PANEL ───────────────────────────────────────────────────────
+
+function OrchestratorPanel({
+    intent,
+    onClose,
+    onIntentActioned,
+}: {
+    intent: SchedulingIntent;
+    onClose: () => void;
+    onIntentActioned: () => void;
+}) {
+    const [userNote, setUserNote] = useState("");
+    const [result, setResult] = useState<OrchestratorResult | null>(null);
+    const [selectedSlotIndex, setSelectedSlotIndex] = useState<number>(0);
+    const [editedReply, setEditedReply] = useState("");
+    const [running, setRunning] = useState(false);
+    const [sending, setSending] = useState(false);
+    const [addingToCalendar, setAddingToCalendar] = useState(false);
+
+    const needsOrchestrator = ["availability_request", "time_request", "reschedule_request"].includes(intent.intent_type);
+
+    const handleRun = async () => {
+        setRunning(true);
+        try {
+            const res = await runOrchestrator(intent.id, userNote || undefined);
+            setResult(res);
+            setEditedReply(res.draft_reply);
+            setSelectedSlotIndex(0);
+        } catch (error: any) {
+            toast.error(error?.message || "Failed to get recommendations");
+        } finally {
+            setRunning(false);
+        }
+    };
+
+    const handleSend = async () => {
+        if (!editedReply.trim()) return;
+        setSending(true);
+        try {
+            await sendIntentReply(intent.id, editedReply);
+            toast.success("Reply sent");
+            onIntentActioned();
+        } catch (error: any) {
+            toast.error(error?.message || "Failed to send reply");
+        } finally {
+            setSending(false);
+        }
+    };
+
+    const handleAddToCalendar = async () => {
+        setAddingToCalendar(true);
+        try {
+            await addIntentToCalendar(intent.id);
+            toast.success("Added to calendar");
+            onIntentActioned();
+        } catch (error: any) {
+            toast.error(error?.message || "Failed to add to calendar");
+        } finally {
+            setAddingToCalendar(false);
+        }
+    };
+
+    return (
+        <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+            <DialogContent className="max-w-lg">
+                <DialogHeader>
+                    <DialogTitle className="font-playfair text-xl">
+                        {intent.meeting_title || "Scheduling"}
+                    </DialogTitle>
+                </DialogHeader>
+
+                <div className="space-y-4">
+                    {/* Intent context */}
+                    <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter mb-1">
+                            {INTENT_LABELS[intent.intent_type] ?? "Scheduling"}
+                            {intent.sender_name && ` · ${intent.sender_name}`}
+                        </p>
+                        {intent.intent_summary && (
+                            <p className="text-sm font-inter text-foreground/80 leading-relaxed">
+                                {intent.intent_summary}
+                            </p>
+                        )}
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    {needsOrchestrator && !result && (
+                        <div className="space-y-2">
+                            <label className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                                Add context (optional)
+                            </label>
+                            <Textarea
+                                placeholder='e.g. "Keep Friday free" or "Prefer afternoons"'
+                                value={userNote}
+                                onChange={(e) => setUserNote(e.target.value)}
+                                rows={2}
+                                className="font-inter text-sm rounded-[8px] resize-none"
+                                disabled={running}
+                            />
+                            <button
+                                onClick={handleRun}
+                                disabled={running}
+                                className="w-full py-2 rounded-[8px] bg-primary text-white text-[13px] font-medium font-inter hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                            >
+                                {running ? (
+                                    <span className="flex items-center justify-center gap-1">
+                                        <span className="teeks-dot" style={{ width: 4, height: 4 }} />
+                                        <span className="teeks-dot" style={{ width: 4, height: 4 }} />
+                                        <span className="teeks-dot" style={{ width: 4, height: 4 }} />
+                                    </span>
+                                ) : (
+                                    "Get recommendations"
+                                )}
+                            </button>
+                        </div>
+                    )}
+
+                    {needsOrchestrator && result && (
+                        <div className="space-y-3">
+                            {result.reasoning && (
+                                <p className="text-[11px] font-inter text-muted-foreground/60 italic">
+                                    {result.reasoning}
+                                </p>
+                            )}
+
+                            {result.suggested_slots.length > 0 && (
+                                <div className="space-y-1.5">
+                                    <label className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                                        Suggested slots
+                                    </label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {result.suggested_slots.map((slot, idx) => (
+                                            <button
+                                                key={idx}
+                                                onClick={() => setSelectedSlotIndex(idx)}
+                                                style={selectedSlotIndex === idx ? { boxShadow: STICKER_SHADOW_LG } : undefined}
+                                                className={cn(
+                                                    "px-3 py-1.5 rounded-full text-[12px] font-inter font-medium border transition-all",
+                                                    selectedSlotIndex === idx
+                                                        ? "bg-primary text-white border-primary"
+                                                        : "bg-white text-foreground/70 border-border hover:border-primary/40"
+                                                )}
+                                            >
+                                                {format(parseISO(slot.start_time), "EEE, MMM d · p")}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="space-y-1.5">
+                                <label className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                                    Draft reply
+                                </label>
+                                <Textarea
+                                    value={editedReply}
+                                    onChange={(e) => setEditedReply(e.target.value)}
+                                    rows={4}
+                                    className="font-inter text-sm rounded-[8px]"
+                                />
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={handleSend}
+                                    disabled={sending || !editedReply.trim()}
+                                    className="flex-1 py-2 rounded-[8px] bg-primary text-white text-[13px] font-medium font-inter hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                                >
+                                    {sending ? "Sending…" : "Send reply"}
+                                </button>
+                                <button
+                                    onClick={() => { setResult(null); setUserNote(""); }}
+                                    className="px-3 py-2 rounded-[8px] border border-border text-[13px] font-inter text-muted-foreground hover:bg-muted/40 transition-colors"
+                                >
+                                    Re-run
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {!needsOrchestrator && (
                         <button
-                            onClick={() => onSend(suggestion.id, suggestion.draft_reply || undefined)}
-                            className="flex-1 py-1.5 rounded-[8px] bg-primary text-white text-[12px] font-medium font-inter hover:bg-primary/90 transition-colors"
+                            onClick={handleAddToCalendar}
+                            disabled={addingToCalendar}
+                            className="w-full py-2 rounded-[8px] bg-primary text-white text-[13px] font-medium font-inter hover:bg-primary/90 disabled:opacity-50 transition-colors"
                         >
-                            Send availability
+                            {addingToCalendar ? "Adding…" : "Add to calendar"}
                         </button>
-                        <button
-                            onClick={() => onDismiss(suggestion.id)}
-                            className="px-3 py-1.5 rounded-[8px] border border-border text-muted-foreground text-[12px] font-inter hover:bg-muted/40 transition-colors"
-                        >
-                            Dismiss
-                        </button>
-                    </div>
+                    )}
                 </div>
-            ))}
-        </div>
+            </DialogContent>
+        </Dialog>
     );
 }
 
@@ -854,6 +1223,7 @@ function EventDialog({
     const [location, setLocation] = useState(event?.location || "");
     const [description, setDescription] = useState(event?.description || "");
     const [notes, setNotes] = useState(event?.notes || "");
+    const [label, setLabel] = useState<string>(event?.label || "other");
     const [participants, setParticipants] = useState(
         Array.isArray(event?.participants)
             ? event?.participants.map((p) => (typeof p === "string" ? p : p.email || "")).filter(Boolean).join(", ")
@@ -868,6 +1238,7 @@ function EventDialog({
         setLocation(event?.location || "");
         setDescription(event?.description || "");
         setNotes(event?.notes || "");
+        setLabel(event?.label || "other");
         setParticipants(
             Array.isArray(event?.participants)
                 ? event?.participants.map((p) => (typeof p === "string" ? p : p.email || "")).filter(Boolean).join(", ")
@@ -886,7 +1257,8 @@ function EventDialog({
         const { start_time, end_time } = buildTimes(startValue, endValue, allDay);
         const payload = {
             title, description: description || undefined, notes: notes || undefined,
-            participants: participantList, all_day: allDay, timezone, location: location || undefined,
+            participants: participantList, all_day: allDay, timezone,
+            location: location || undefined, label,
         };
         if (event) {
             onUpdate(event.id, { ...payload, start_time, end_time });
@@ -911,6 +1283,41 @@ function EventDialog({
                         onChange={(e) => setTitle(e.target.value)}
                         className="font-inter text-sm rounded-[8px]"
                     />
+
+                    {/* Label selector */}
+                    {(() => {
+                        const LABELS: { value: string; display: string }[] = [
+                            { value: "meeting",  display: "Meeting"  },
+                            { value: "personal", display: "Personal" },
+                            { value: "travel",   display: "Travel"   },
+                            { value: "deadline", display: "Deadline" },
+                            { value: "other",    display: "Other"    },
+                        ];
+                        return (
+                            <div className="flex flex-wrap gap-1.5">
+                                {LABELS.map(({ value, display }) => {
+                                    const sticker = getLabelColor(value);
+                                    const isActive = label === value;
+                                    return (
+                                        <button
+                                            key={value}
+                                            type="button"
+                                            onClick={() => setLabel(value)}
+                                            style={isActive ? { boxShadow: STICKER_SHADOW_LG } : undefined}
+                                            className={cn(
+                                                "px-3 py-1 rounded-full text-[12px] font-medium font-inter border transition-all",
+                                                isActive
+                                                    ? sticker.badge
+                                                    : cn("bg-transparent border hover:opacity-80 transition-opacity", sticker.inactive)
+                                            )}
+                                        >
+                                            {display}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        );
+                    })()}
                     <div className="grid grid-cols-2 gap-3">
                         <Input
                             type={allDay ? "date" : "datetime-local"}
@@ -933,6 +1340,13 @@ function EventDialog({
                     <Input placeholder="Attendees (comma separated)" value={participants} onChange={(e) => setParticipants(e.target.value)} className="font-inter text-sm rounded-[8px]" />
                     <Textarea placeholder="Description (optional)" value={description || ""} onChange={(e) => setDescription(e.target.value)} className="font-inter text-sm rounded-[8px]" />
                     <Textarea placeholder="Internal notes (not synced)" value={notes || ""} onChange={(e) => setNotes(e.target.value)} className="font-inter text-sm rounded-[8px]" />
+
+                    {/* Briefing eligibility note */}
+                    {label !== "meeting" && (
+                        <p className="text-[11px] font-inter text-muted-foreground/50">
+                            Meeting briefs are only generated for events labelled <span className="font-semibold">Meeting</span>.
+                        </p>
+                    )}
 
                     {/* Meeting brief */}
                     {event?.briefing && (

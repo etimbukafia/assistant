@@ -184,6 +184,14 @@ def connect_gmail_with_provider_token(
         db.commit()
         logger.info(f"GmailAccount committed successfully for user={user.user_id}, email={verified_email}")
 
+        # Set up Google Calendar push notifications (non-fatal if it fails)
+        try:
+            from app.services.calendar_watch import setup_watches_for_user
+            watch_result = setup_watches_for_user(db=db, user_id=user.user_id)
+            logger.info(f"Calendar watch setup for user={user.user_id}: {watch_result}")
+        except Exception as watch_err:
+            logger.warning(f"Calendar watch setup failed for user={user.user_id}: {watch_err}")
+
         return {
             "status": "success",
             "message": "Google connected successfully",

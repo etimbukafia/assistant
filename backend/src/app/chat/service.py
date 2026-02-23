@@ -41,6 +41,7 @@ from app.data.models import (
 )
 from app.jobs.queue import queue_service
 from .orchestrator import ChatOrchestrator
+from .approval_intent import ApprovalIntentKind, PendingActionRef, parse_approval_intent
 from app.services.hot_context_cache import get_hot_context_cache_service
 from app.services.mention_context import MentionContextService
 from app.services.warm_cache import get_warm_cache_service
@@ -898,6 +899,10 @@ class ChatService:
                 status=ProcessingStatus.FAILED,
                 error="Session not found"
             )
+
+        approval_response = self._maybe_handle_text_approval(session, content)
+        if approval_response is not None:
+            return approval_response
         started_at = time.perf_counter()
 
         mentions = mentions or []
@@ -1063,6 +1068,177 @@ class ChatService:
                 int((time.perf_counter() - started_at) * 1000),
             )
             return result
+
+    def _maybe_handle_text_approval(
+        self,
+        session: ChatSession,
+        content: str,
+    ) -> Optional[ChatResponse]:
+        """
+        Handle pending-action approvals via user text instruction.
+
+        Returns ChatResponse when handled; otherwise None.
+        """
+        pending = self.get_pending_actions(session.id)
+        if not pending:
+            return None
+
+        refs = [
+            PendingActionRef(id=item.id, index=idx + 1, action_type=item.action_type)
+            for idx, item in enumerate(pending)
+        ]
+        intent = parse_approval_intent(content, refs)
+        if intent.kind == ApprovalIntentKind.NONE:
+            return None
+
+        user_msg = self.add_message(
+            session.id,
+            "user",
+            content,
+            metadata={"approval_intent": intent.kind.value, "approval_reason": intent.reason},
+            auto_commit=False,
+        )
+        get_hot_context_cache_service().append_message(
+            tenant_id="default",
+            user_id=self.user_id,
+            session_id=session.id,
+            role="user",
+            content=content,
+        )
+
+        if intent.kind == ApprovalIntentKind.AMBIGUOUS:
+            assistant_text = (
+                "I found pending actions. Tell me what to run: "
+                "\"approve all\", \"run 1 and 3\", \"skip 2\", or \"cancel\"."
+            )
+            assistant_msg = self.add_message(
+                session.id,
+                "assistant",
+                assistant_text,
+                metadata={"approval_status": "clarification_requested"},
+                auto_commit=False,
+            )
+            get_hot_context_cache_service().append_message(
+                tenant_id="default",
+                user_id=self.user_id,
+                session_id=session.id,
+                role="assistant",
+                content=assistant_text,
+            )
+            self.db.commit()
+            return ChatResponse(
+                status=ProcessingStatus.COMPLETE,
+                message_id=assistant_msg.id,
+                response=assistant_text,
+                pending_actions=self._serialize_pending_actions(self.get_pending_actions(session.id)),
+            )
+
+        approve_ids = set(intent.approve_ids)
+        reject_ids = set(intent.reject_ids)
+        if intent.kind == ApprovalIntentKind.APPROVE_ALL:
+            approve_ids = {item.id for item in pending}
+        if intent.kind == ApprovalIntentKind.CANCEL_ALL:
+            reject_ids = {item.id for item in pending}
+
+        approved_labels: List[str] = []
+        rejected_labels: List[str] = []
+        failed_labels: List[str] = []
+
+        for action in pending:
+            label = self._pending_action_label(action)
+            if action.id in reject_ids:
+                result = self.reject_action(action.id)
+                if result.get("success"):
+                    rejected_labels.append(label)
+                else:
+                    failed_labels.append(label)
+                continue
+            if action.id in approve_ids:
+                result = self.approve_action(action.id)
+                if result.get("success"):
+                    approved_labels.append(label)
+                else:
+                    failed_labels.append(label)
+
+        remaining_pending = self.get_pending_actions(session.id)
+
+        clauses: List[str] = []
+        if approved_labels:
+            done = ", ".join([f"\"{item}\"" for item in approved_labels])
+            clauses.append(f"I've completed {done}.")
+        if rejected_labels:
+            skipped = ", ".join([f"\"{item}\"" for item in rejected_labels])
+            clauses.append(f"I've skipped {skipped}.")
+        if failed_labels:
+            failed = ", ".join([f"\"{item}\"" for item in failed_labels])
+            clauses.append(f"I couldn't finish {failed} right now.")
+        if remaining_pending:
+            remaining = ", ".join([f"\"{self._pending_action_label(item)}\"" for item in remaining_pending[:5]])
+            clauses.append(f"I still have {remaining} pending. Tell me to proceed when ready.")
+        if not clauses:
+            clauses.append("No pending actions were changed.")
+
+        assistant_text = " ".join(clauses)
+        assistant_msg = self.add_message(
+            session.id,
+            "assistant",
+            assistant_text,
+            metadata={
+                "approval_status": "applied",
+                "approval_intent": intent.kind.value,
+                "approved_count": len(approved_labels),
+                "rejected_count": len(rejected_labels),
+                "failed_count": len(failed_labels),
+            },
+            auto_commit=False,
+        )
+        get_hot_context_cache_service().append_message(
+            tenant_id="default",
+            user_id=self.user_id,
+            session_id=session.id,
+            role="assistant",
+            content=assistant_text,
+        )
+
+        self.db.commit()
+        logger.info(
+            "chat_text_approval_applied user=%s session=%s intent=%s approved=%s rejected=%s failed=%s remaining=%s",
+            self.user_id,
+            session.id,
+            intent.kind.value,
+            len(approved_labels),
+            len(rejected_labels),
+            len(failed_labels),
+            len(remaining_pending),
+        )
+        return ChatResponse(
+            status=ProcessingStatus.COMPLETE,
+            message_id=assistant_msg.id,
+            response=assistant_text,
+            pending_actions=self._serialize_pending_actions(remaining_pending),
+        )
+
+    @staticmethod
+    def _pending_action_label(action: ChatPendingAction) -> str:
+        data = action.action_data or {}
+        action_type = (action.action_type or "action").replace("_", " ").strip()
+        title = (data.get("title") or data.get("subject") or "").strip()
+        if title:
+            return f"{action_type}: {title}"
+        return action_type
+
+    @staticmethod
+    def _serialize_pending_actions(actions: List[ChatPendingAction]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "id": action.id,
+                "action_type": action.action_type,
+                "action_data": action.action_data,
+                "status": action.status,
+                "message_id": action.message_id,
+            }
+            for action in actions
+        ]
 
     async def _process_sync(
         self,

@@ -29,6 +29,9 @@ from app.services.telemetry_writer import get_telemetry_writer
 from app.services.warm_cache import get_warm_cache_service
 from app.security.prompt_sanitizer import detect_injection_patterns
 from app.security.security_logger import log_injection_attempt
+from .dag_executor import DependencyAwareExecutor, NodeRunStatus
+from .planner_parser import PlanParseError, parse_execution_plan
+from .tool_policy import TOOL_FAMILY_BY_NAME, ToolPolicyDecision, ToolPolicyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +216,7 @@ class ChatOrchestrator:
         self.user_name = user_name
         self.context_manager = ChatContextManager(db, user_id)
         self.tool_registry = ChatToolRegistry(db, user_id)
+        self.tool_policy = ToolPolicyEngine()
 
     async def process_message(
         self,
@@ -260,8 +264,8 @@ class ChatOrchestrator:
             context=context,
             tool_registry=self.tool_registry,
         )
-        has_explicit_entity_mentions = bool((mention_context or {}).get("entities"))
-        tools_allowed_this_turn = bool(mode.use_tools and has_explicit_entity_mentions)
+        policy_decision = self.tool_policy.decide(user_message, mention_context or {})
+        tools_allowed_this_turn = bool(mode.use_tools and policy_decision.tools_allowed)
         response_profile = self._select_response_profile(user_message)
 
         no_context_message = self._is_no_context_message(user_message)
@@ -302,7 +306,7 @@ class ChatOrchestrator:
         }
         context_trace["tool_policy"] = {
             "tools_allowed_this_turn": tools_allowed_this_turn,
-            "reason": "requires_explicit_mentions" if not tools_allowed_this_turn else "mentions_present",
+            "reason": policy_decision.reason,
         }
         context_trace["response_policy"] = {
             "task_type": response_profile.task_type,
@@ -409,168 +413,197 @@ class ChatOrchestrator:
                 rounds = 0
                 action_count = 0
                 newly_deferred: List[Dict[str, Any]] = []
-                active_tools = mode.tools if tools_allowed_this_turn else []
-                attempted_richness_retry = False
-                attempted_batch_recovery = False
-
-                while rounds < MAX_TOOL_ROUNDS:
-                    response = await self._call_llm(
-                        llm_messages,
-                        active_tools,
+                active_tools = (
+                    self._filter_tools_by_policy(mode.tools, policy_decision)
+                    if tools_allowed_this_turn
+                    else []
+                )
+                if tools_allowed_this_turn and active_tools:
+                    planned = await self._run_planned_tool_execution(
+                        user_message=user_message,
+                        mention_context=mention_context or {},
+                        active_tools=active_tools,
+                        policy_decision=policy_decision,
                         session_id=session.id,
-                        max_output_tokens=response_profile.max_output_tokens,
                     )
-                    llm_timing = response.get("timing", {})
-                    llm_prompt_ms_total += int(llm_timing.get("prompt_ms", 0) or 0)
-                    llm_ms_total += int(llm_timing.get("llm_ms", 0) or 0)
-                    llm_calls_total += 1
-                    response_text = (response.get("content") or "").strip()
-                    if response_text:
-                        assistant_message = response_text
-                        llm_messages.append({"role": "assistant", "content": response_text})
+                    if planned is not None:
+                        llm_prompt_ms_total += int(planned.get("llm_prompt_ms", 0) or 0)
+                        llm_ms_total += int(planned.get("llm_ms", 0) or 0)
+                        llm_calls_total += int(planned.get("llm_calls", 0) or 0)
+                        assistant_message = str(planned.get("assistant_message") or "").strip()
+                        tool_results.extend(planned.get("tool_results", []))
+                        tool_execution_records.extend(planned.get("tool_execution_records", []))
+                        pending_actions.extend(planned.get("pending_actions", []))
+                        newly_deferred.extend(planned.get("deferred_actions", []))
+                    else:
+                        logger.info(
+                            "planner_execution_fallback user=%s session=%s reason=planner_parse_or_validation_failed",
+                            self.user_id,
+                            session.id,
+                        )
 
-                    tool_calls = response.get("tool_calls", [])
-                    if not tools_allowed_this_turn or not tool_calls:
-                        if (
-                            tools_allowed_this_turn
-                            and not tool_calls
-                            and mention_context
-                            and not attempted_batch_recovery
-                        ):
-                            recovery_prompt = self._build_batch_recovery_instruction(
-                                user_message=user_message,
-                                mention_context=mention_context or {},
-                                assistant_text=response_text,
-                            )
-                            if recovery_prompt:
-                                attempted_batch_recovery = True
-                                llm_messages.append({"role": "system", "content": recovery_prompt})
+                if not tools_allowed_this_turn or not assistant_message:
+                    attempted_richness_retry = False
+                    attempted_batch_recovery = False
+
+                    while rounds < MAX_TOOL_ROUNDS:
+                        response = await self._call_llm(
+                            llm_messages,
+                            active_tools,
+                            session_id=session.id,
+                            max_output_tokens=response_profile.max_output_tokens,
+                        )
+                        llm_timing = response.get("timing", {})
+                        llm_prompt_ms_total += int(llm_timing.get("prompt_ms", 0) or 0)
+                        llm_ms_total += int(llm_timing.get("llm_ms", 0) or 0)
+                        llm_calls_total += 1
+                        response_text = (response.get("content") or "").strip()
+                        if response_text:
+                            assistant_message = response_text
+                            llm_messages.append({"role": "assistant", "content": response_text})
+
+                        tool_calls = response.get("tool_calls", [])
+                        if not tools_allowed_this_turn or not tool_calls:
+                            if (
+                                tools_allowed_this_turn
+                                and not tool_calls
+                                and mention_context
+                                and not attempted_batch_recovery
+                            ):
+                                recovery_prompt = self._build_batch_recovery_instruction(
+                                    user_message=user_message,
+                                    mention_context=mention_context or {},
+                                    assistant_text=response_text,
+                                )
+                                if recovery_prompt:
+                                    attempted_batch_recovery = True
+                                    llm_messages.append({"role": "system", "content": recovery_prompt})
+                                    continue
+                            if (
+                                not tools_allowed_this_turn
+                                and response_text
+                                and response_profile.enable_richness_retry
+                                and not attempted_richness_retry
+                                and self._is_under_detailed_response(response_text, response_profile)
+                            ):
+                                attempted_richness_retry = True
+                                llm_messages.append(
+                                    {
+                                        "role": "system",
+                                        "content": (
+                                            "Rewrite your last answer as a complete, polished draft. "
+                                            "Keep it practical and natural. Do not explain your reasoning."
+                                        ),
+                                    }
+                                )
+                                retry_response = await self._call_llm(
+                                    llm_messages,
+                                    [],
+                                    session_id=session.id,
+                                    max_output_tokens=response_profile.retry_max_output_tokens,
+                                )
+                                retry_llm_timing = retry_response.get("timing", {})
+                                llm_prompt_ms_total += int(retry_llm_timing.get("prompt_ms", 0) or 0)
+                                llm_ms_total += int(retry_llm_timing.get("llm_ms", 0) or 0)
+                                llm_calls_total += 1
+                                retry_text = (retry_response.get("content") or "").strip()
+                                if retry_text:
+                                    assistant_message = retry_text
+                                    llm_messages.append({"role": "assistant", "content": retry_text})
+                            break
+
+                        parsed_calls: List[Dict[str, Any]] = []
+                        for tool_call in tool_calls:
+                            tool_name = (tool_call.get("function", {}) or {}).get("name")
+                            tool_args = self._parse_tool_args((tool_call.get("function", {}) or {}).get("arguments", "{}"))
+                            if not tool_name:
                                 continue
-                        if (
-                            not tools_allowed_this_turn
-                            and response_text
-                            and response_profile.enable_richness_retry
-                            and not attempted_richness_retry
-                            and self._is_under_detailed_response(response_text, response_profile)
-                        ):
-                            attempted_richness_retry = True
-                            llm_messages.append(
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        "Rewrite your last answer as a complete, polished draft. "
-                                        "Keep it practical and natural. Do not explain your reasoning."
-                                    ),
+                            parsed_calls.append({"name": tool_name, "arguments": tool_args})
+
+                        if not parsed_calls:
+                            break
+
+                        llm_messages.append(
+                            {
+                                "role": "assistant",
+                                "content": "",
+                                "function_calls": parsed_calls,
+                            }
+                        )
+
+                        for call in parsed_calls:
+                            tool_name = call["name"]
+                            tool_args = call["arguments"]
+                            is_action_tool = bool(self.tool_registry.is_action_tool(tool_name))
+                            if tool_name == "draft_email" and self.user_name and not tool_args.get("sender_name"):
+                                tool_args["sender_name"] = self.user_name
+
+                            if is_action_tool and action_count >= MAX_ACTION_TOOLS_PER_TURN:
+                                record = {
+                                    "name": tool_name,
+                                    "arguments": tool_args,
+                                    "success": False,
+                                    "data": None,
+                                    "error": "deferred_due_to_auto_action_limit",
+                                    "deferred": True,
+                                    "action_tool": True,
                                 }
-                            )
-                            retry_response = await self._call_llm(
-                                llm_messages,
-                                [],
-                                session_id=session.id,
-                                max_output_tokens=response_profile.retry_max_output_tokens,
-                            )
-                            retry_llm_timing = retry_response.get("timing", {})
-                            llm_prompt_ms_total += int(retry_llm_timing.get("prompt_ms", 0) or 0)
-                            llm_ms_total += int(retry_llm_timing.get("llm_ms", 0) or 0)
-                            llm_calls_total += 1
-                            retry_text = (retry_response.get("content") or "").strip()
-                            if retry_text:
-                                assistant_message = retry_text
-                                llm_messages.append({"role": "assistant", "content": retry_text})
-                        break
+                                tool_execution_records.append(record)
+                                newly_deferred.append(
+                                    {
+                                        "name": tool_name,
+                                        "arguments": tool_args,
+                                        "reason": "auto_action_limit",
+                                    }
+                                )
+                                llm_messages.append(
+                                    {
+                                        "role": "tool",
+                                        "name": tool_name,
+                                        "response": {
+                                            "success": False,
+                                            "data": None,
+                                            "error": "deferred_due_to_auto_action_limit",
+                                        },
+                                    }
+                                )
+                                continue
 
-                    parsed_calls: List[Dict[str, Any]] = []
-                    for tool_call in tool_calls:
-                        tool_name = (tool_call.get("function", {}) or {}).get("name")
-                        tool_args = self._parse_tool_args((tool_call.get("function", {}) or {}).get("arguments", "{}"))
-                        if not tool_name:
-                            continue
-                        parsed_calls.append({"name": tool_name, "arguments": tool_args})
+                            result = self.tool_registry.execute_tool(tool_name, tool_args)
+                            tool_results.append(result)
+                            if is_action_tool:
+                                action_count += 1
 
-                    if not parsed_calls:
-                        break
+                            if result.state_updates:
+                                for key, value in result.state_updates.items():
+                                    setattr(state, key, value)
 
-                    llm_messages.append(
-                        {
-                            "role": "assistant",
-                            "content": "",
-                            "function_calls": parsed_calls,
-                        }
-                    )
+                            if result.pending_action:
+                                pending_actions.append(result.pending_action)
 
-                    for call in parsed_calls:
-                        tool_name = call["name"]
-                        tool_args = call["arguments"]
-                        is_action_tool = bool(self.tool_registry.is_action_tool(tool_name))
-                        if tool_name == "draft_email" and self.user_name and not tool_args.get("sender_name"):
-                            tool_args["sender_name"] = self.user_name
-
-                        if is_action_tool and action_count >= MAX_ACTION_TOOLS_PER_TURN:
                             record = {
                                 "name": tool_name,
                                 "arguments": tool_args,
-                                "success": False,
-                                "data": None,
-                                "error": "deferred_due_to_auto_action_limit",
-                                "deferred": True,
-                                "action_tool": True,
+                                "success": result.success,
+                                "data": result.data if result.success else None,
+                                "error": result.error,
+                                "deferred": False,
+                                "action_tool": is_action_tool,
                             }
                             tool_execution_records.append(record)
-                            newly_deferred.append(
-                                {
-                                    "name": tool_name,
-                                    "arguments": tool_args,
-                                    "reason": "auto_action_limit",
-                                }
-                            )
                             llm_messages.append(
                                 {
                                     "role": "tool",
                                     "name": tool_name,
                                     "response": {
-                                        "success": False,
-                                        "data": None,
-                                        "error": "deferred_due_to_auto_action_limit",
+                                        "success": result.success,
+                                        "data": result.data,
+                                        "error": result.error,
                                     },
                                 }
                             )
-                            continue
 
-                        result = self.tool_registry.execute_tool(tool_name, tool_args)
-                        tool_results.append(result)
-                        if is_action_tool:
-                            action_count += 1
-
-                        if result.state_updates:
-                            for key, value in result.state_updates.items():
-                                setattr(state, key, value)
-
-                        if result.pending_action:
-                            pending_actions.append(result.pending_action)
-
-                        record = {
-                            "name": tool_name,
-                            "arguments": tool_args,
-                            "success": result.success,
-                            "data": result.data if result.success else None,
-                            "error": result.error,
-                            "deferred": False,
-                            "action_tool": is_action_tool,
-                        }
-                        tool_execution_records.append(record)
-                        llm_messages.append(
-                            {
-                                "role": "tool",
-                                "name": tool_name,
-                                "response": {
-                                    "success": result.success,
-                                    "data": result.data,
-                                    "error": result.error,
-                                },
-                            }
-                        )
-
-                    rounds += 1
+                        rounds += 1
 
                 deferred_remaining = self._merge_deferred_actions(deferred_remaining, newly_deferred)
             except Exception as exc:
@@ -1643,6 +1676,222 @@ class ChatOrchestrator:
             "- Prefer partial completion over blocking; defer extras politely.\n"
             "- Keep the final reply concise and user-facing; do not expose this hint."
         )
+
+    async def _run_planned_tool_execution(
+        self,
+        user_message: str,
+        mention_context: Dict[str, Any],
+        active_tools: List[Dict[str, Any]],
+        policy_decision: ToolPolicyDecision,
+        session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Build a structured execution plan, then run it through dependency-aware executor.
+
+        Returns None when planning cannot be validated so caller can fall back.
+        """
+        planner_messages = self._build_plan_builder_messages(
+            user_message=user_message,
+            mention_context=mention_context,
+            active_tools=active_tools,
+        )
+        planner_response = await self._call_llm(
+            planner_messages,
+            tools=[],
+            session_id=session_id,
+            max_output_tokens=760,
+        )
+        planner_timing = planner_response.get("timing", {}) or {}
+        raw_plan = (planner_response.get("content") or "").strip()
+        if not raw_plan:
+            return None
+
+        try:
+            plan = parse_execution_plan(raw_plan)
+        except PlanParseError:
+            logger.warning(
+                "plan_parse_failed user=%s session=%s raw_preview=%s",
+                self.user_id,
+                session_id,
+                raw_plan[:220],
+            )
+            return None
+
+        if plan.clarification.needed and plan.clarification.question:
+            return {
+                "assistant_message": str(plan.clarification.question).strip(),
+                "pending_actions": [],
+                "tool_results": [],
+                "tool_execution_records": [],
+                "deferred_actions": [],
+                "llm_prompt_ms": int(planner_timing.get("prompt_ms", 0) or 0),
+                "llm_ms": int(planner_timing.get("llm_ms", 0) or 0),
+                "llm_calls": 1,
+            }
+
+        node_by_id = {node.id: node for node in plan.nodes}
+        allowed_tool_names = {
+            ((item.get("function") or {}).get("name") or "").strip()
+            for item in active_tools
+            if isinstance(item, dict)
+        }
+
+        action_count = 0
+        deferred_actions: List[Dict[str, Any]] = []
+        execution_records: List[Dict[str, Any]] = []
+        tool_results: List[ToolResult] = []
+        pending_actions: List[Dict[str, Any]] = []
+
+        executor = DependencyAwareExecutor()
+
+        def _execute_node(node) -> ToolResult:
+            nonlocal action_count
+            tool_name = (node.tool or "").strip()
+            tool_args = dict(node.args or {})
+
+            if tool_name not in allowed_tool_names:
+                raise ValueError("tool_not_allowed_by_catalog")
+            if not policy_decision.allows_tool(tool_name):
+                raise ValueError("tool_not_allowed_by_policy")
+
+            is_action_tool = bool(self.tool_registry.is_action_tool(tool_name))
+            if tool_name == "draft_email" and self.user_name and not tool_args.get("sender_name"):
+                tool_args["sender_name"] = self.user_name
+
+            if is_action_tool and action_count >= MAX_ACTION_TOOLS_PER_TURN:
+                deferred_actions.append(
+                    {
+                        "name": tool_name,
+                        "arguments": tool_args,
+                        "reason": "auto_action_limit",
+                    }
+                )
+                return ToolResult(success=False, error="deferred_due_to_auto_action_limit")
+
+            result = self.tool_registry.execute_tool(tool_name, tool_args)
+            if is_action_tool and result.success:
+                action_count += 1
+            return result
+
+        dag_result = await executor.execute(
+            plan=plan,
+            execute_node=_execute_node,
+            approved_node_ids={node.id for node in plan.nodes},  # write tools stay approval-gated by ToolRegistry.
+        )
+
+        for rec in dag_result.records:
+            node = node_by_id.get(rec.node_id)
+            tool_name = (node.tool or "") if node else ""
+            tool_args = dict(node.args or {}) if node else {}
+            is_action_tool = bool(tool_name and self.tool_registry.is_action_tool(tool_name))
+
+            if rec.status == NodeRunStatus.SUCCESS and isinstance(rec.output, ToolResult):
+                result = rec.output
+                tool_results.append(result)
+                if result.pending_action:
+                    pending_actions.append(result.pending_action)
+                execution_records.append(
+                    {
+                        "name": tool_name,
+                        "arguments": tool_args,
+                        "success": result.success,
+                        "data": result.data if result.success else None,
+                        "error": result.error,
+                        "deferred": bool(result.error == "deferred_due_to_auto_action_limit"),
+                        "action_tool": is_action_tool,
+                    }
+                )
+                continue
+
+            execution_records.append(
+                {
+                    "name": tool_name,
+                    "arguments": tool_args,
+                    "success": False,
+                    "data": None,
+                    "error": rec.error or rec.status.value,
+                    "deferred": False,
+                    "action_tool": is_action_tool,
+                }
+            )
+
+        assistant_message = ""
+        if tool_results:
+            assistant_message = self._format_tool_results(tool_results)
+        elif pending_actions:
+            assistant_message = "I prepared actions for your approval."
+
+        return {
+            "assistant_message": assistant_message,
+            "pending_actions": pending_actions,
+            "tool_results": tool_results,
+            "tool_execution_records": execution_records,
+            "deferred_actions": deferred_actions,
+            "llm_prompt_ms": int(planner_timing.get("prompt_ms", 0) or 0),
+            "llm_ms": int(planner_timing.get("llm_ms", 0) or 0),
+            "llm_calls": 1,
+        }
+
+    def _build_plan_builder_messages(
+        self,
+        user_message: str,
+        mention_context: Dict[str, Any],
+        active_tools: List[Dict[str, Any]],
+    ) -> List[Dict[str, str]]:
+        """Build planner prompt messages for strict JSON ExecutionPlan output."""
+        catalog: List[Dict[str, Any]] = []
+        for tool in active_tools:
+            fn = tool.get("function") or {}
+            name = (fn.get("name") or "").strip()
+            if not name:
+                continue
+            family = TOOL_FAMILY_BY_NAME.get(name)
+            catalog.append(
+                {
+                    "name": name,
+                    "family": family.value if family else "read_context",
+                    "description": str(fn.get("description") or ""),
+                }
+            )
+
+        planner_system = (
+            "You are a strict planning engine for Teeks chat. "
+            "Return ONLY a valid JSON object (no markdown, no prose) matching this contract: "
+            "{plan_id, sub_requests[], nodes[], clarification}. "
+            "Each node must include: id, sub_request_id, family, tool, args, depends_on[]. "
+            "Use only tools from the provided catalog. "
+            "Prefer minimal plans. "
+            "If the request is blocked, set clarification.needed=true with one concise question. "
+            "If not blocked, clarification.needed=false."
+        )
+        planner_user = (
+            f"User message: {user_message}\n"
+            f"Resolved mention context JSON: {json.dumps(mention_context or {}, ensure_ascii=True, separators=(',', ':'))}\n"
+            f"Tool catalog JSON: {json.dumps(catalog, ensure_ascii=True, separators=(',', ':'))}\n"
+            "Constraints:\n"
+            f"- Max {MAX_ACTION_TOOLS_PER_TURN} action nodes for this turn.\n"
+            "- For independent reads, keep dependencies empty so they can run in parallel.\n"
+            "- Keep args concrete and executable.\n"
+            "- Never include tools outside catalog."
+        )
+        return [
+            {"role": "system", "content": planner_system},
+            {"role": "user", "content": planner_user},
+        ]
+
+    def _filter_tools_by_policy(
+        self,
+        tools: List[Dict[str, Any]],
+        decision: ToolPolicyDecision,
+    ) -> List[Dict[str, Any]]:
+        """Filter function declarations by tool-family policy decision."""
+        filtered: List[Dict[str, Any]] = []
+        for tool_def in tools:
+            function_decl = tool_def.get("function") or {}
+            name = (function_decl.get("name") or "").strip()
+            if decision.allows_tool(name):
+                filtered.append(tool_def)
+        return filtered
 
     def _normalize_single_action_reply(self, reply: str, tool_outputs: List[Dict[str, Any]]) -> str:
         text = (reply or "").strip()

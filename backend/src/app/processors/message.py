@@ -135,7 +135,10 @@ def process_message(
                     "user_id": message.user_id,
                     "thread_id": message.thread_id,
                     "intent_type": ai_results["scheduling_intent_type"],
-                    "confidence": ai_results["scheduling_intent_confidence"]
+                    "confidence": ai_results["scheduling_intent_confidence"],
+                    "intent_summary": ai_results.get("scheduling_intent_summary"),
+                    "meeting_title": ai_results.get("scheduling_intent_meeting_title"),
+                    "meeting_date": ai_results.get("scheduling_intent_meeting_date"),
                 }
             },
             correlation_id=correlation_id,
@@ -239,7 +242,10 @@ def process_messages_batch(
                                 "user_id": message.user_id,
                                 "thread_id": message.thread_id,
                                 "intent_type": ai_results["scheduling_intent_type"],
-                                "confidence": ai_results["scheduling_intent_confidence"]
+                                "confidence": ai_results["scheduling_intent_confidence"],
+                                "intent_summary": ai_results.get("scheduling_intent_summary"),
+                                "meeting_title": ai_results.get("scheduling_intent_meeting_title"),
+                                "meeting_date": ai_results.get("scheduling_intent_meeting_date"),
                             }
                         },
                         correlation_id=correlation_id,

@@ -5,7 +5,7 @@ import { ArrowUp, Check, Plus, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { ActionBubble } from "@/components/chat/ActionBubble";
+import { ApprovalGateComposer } from "@/components/chat/ApprovalGateComposer";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
@@ -169,12 +169,8 @@ export default function ChatWorkspacePage() {
         sendMessage,
         createSession,
         deleteSession,
-        approveAction,
-        rejectAction,
         isSending,
         isCreating,
-        isApproving,
-        isRejecting,
     } = useChat();
 
     const { data: sessionList } = useChatSessions({ limit: 20, offset: 0, enabled: true });
@@ -661,26 +657,11 @@ export default function ChatWorkspacePage() {
                             </div>
                         )}
 
-                        {messages?.map((msg) => {
-                            const action = pendingActions?.find((a) => a.message_id === Number(msg.id));
-                            return (
-                                <div key={msg.id} className="flex flex-col">
-                                    <MessageBubble role={msg.role} content={msg.content} timestamp={msg.created_at} />
-                                    {action && currentSessionId && (
-                                        <ActionBubble
-                                            action={action}
-                                            onApprove={async (id) => {
-                                                await approveAction({ sessionId: currentSessionId, actionId: id });
-                                                trackUIEvent("chat_action_approved", { action_id: id, source: "dashboard_chat" });
-                                            }}
-                                            onReject={(id) => rejectAction({ sessionId: currentSessionId, actionId: id })}
-                                            isApproving={isApproving}
-                                            isRejecting={isRejecting}
-                                        />
-                                    )}
-                                </div>
-                            );
-                        })}
+                        {messages?.map((msg) => (
+                            <div key={msg.id} className="flex flex-col">
+                                <MessageBubble role={msg.role} content={msg.content} timestamp={msg.created_at} />
+                            </div>
+                        ))}
 
                         {isSending && (
                             <div className="flex justify-start">
@@ -700,6 +681,25 @@ export default function ChatWorkspacePage() {
                 </ScrollArea>
 
                 <div className="p-4 border-t border-border">
+                    {currentSessionId && pendingActions?.length > 0 && (
+                        <ApprovalGateComposer
+                            pendingActions={pendingActions}
+                            disabled={isSending || isCreating}
+                            onSendDecision={async (command) => {
+                                await sendMessage({
+                                    session_id: currentSessionId,
+                                    content: command,
+                                    mode: "action",
+                                    mentions: [],
+                                });
+                                trackUIEvent("chat_approval_sent", {
+                                    source: "dashboard_chat",
+                                    pending_count: pendingActions.length,
+                                });
+                            }}
+                        />
+                    )}
+
                     {!hasMessages && (
                         <div className="flex flex-wrap gap-2 mb-3">
                             {actionChips.map((chip) => (

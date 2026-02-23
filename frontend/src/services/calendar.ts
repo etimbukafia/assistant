@@ -51,6 +51,7 @@ export const CalendarEventSchema = z.object({
     }).nullable().optional(),
     briefing_generated_at: z.string().nullable().optional(),
     briefing_scheduled_for: z.string().nullable().optional(),
+    label: z.string().nullable().optional(), // meeting | personal | travel | deadline | other
     created_at: z.string(),
     updated_at: z.string(),
 });
@@ -118,6 +119,7 @@ export async function createManualEvent(payload: {
     timezone?: string;
     location?: string | null;
     calendar_id?: string | null;
+    label?: string | null;
 }): Promise<CalendarEvent> {
     const response = await api.post("/calendar/events/manual", payload);
     return CalendarEventSchema.parse(response.data);
@@ -134,6 +136,7 @@ export async function updateEvent(eventId: number, payload: {
     timezone?: string;
     location?: string | null;
     calendar_id?: string | null;
+    label?: string | null;
 }): Promise<CalendarEvent> {
     const response = await api.patch(`/calendar/events/${eventId}`, payload);
     return CalendarEventSchema.parse(response.data);

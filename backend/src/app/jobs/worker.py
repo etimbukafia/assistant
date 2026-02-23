@@ -1501,6 +1501,74 @@ async def handle_renew_gmail_watches(task_id: int, task_type: str, payload: Dict
     logger.info(f"[{correlation_id}] Next Gmail watch renewal scheduled for {next_run}")
 
 
+async def handle_renew_calendar_watches(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Renew Google Calendar push notification channels for all users.
+
+    Calendar watches expire after ~7 days. Unlike Gmail, renewal requires
+    stopping the old channel (channels().stop()) then creating a new one
+    (events().watch()) with a fresh UUID.
+    """
+    from app.services.calendar_watch import renew_all_watches as renew_calendar_watches
+
+    logger.info(f"[{correlation_id}] Renewing Calendar watches")
+    result = renew_calendar_watches()
+    logger.info(f"[{correlation_id}] Calendar watch renewal: {result}")
+
+    # Re-schedule for tomorrow
+    next_run = datetime.utcnow() + timedelta(days=1)
+    queue_service.enqueue(
+        task_type="renew_calendar_watches",
+        payload={},
+        scheduled_for=next_run,
+    )
+    logger.info(f"[{correlation_id}] Next Calendar watch renewal scheduled for {next_run}")
+
+
+async def handle_sync_calendar_for_user(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'sync_calendar_for_user' tasks.
+
+    Triggered by Google Calendar push notifications (via POST /webhooks/calendar).
+    Syncs upcoming events for the affected user and invalidates the calendar cache
+    so the next frontend load gets fresh data.
+    """
+    from app.services.calendar import CalendarService
+    from app.infra.database import SessionLocal
+    from core.cache import calendar_cache
+
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise ValueError(f"Task {task_id}: user_id is required")
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
+    try:
+        # Invalidate the calendar cache so the next load fetches fresh data
+        calendar_cache.invalidate_all(user_id)
+
+        from app.data.models import UserSettings as _UserSettings
+        user_settings = db.query(_UserSettings).filter(_UserSettings.user_id == user_id).first()
+        chosen = (user_settings.calendar_ids or []) if user_settings else []
+        default_cal = (user_settings.default_calendar_id or "primary") if user_settings else "primary"
+        calendar_ids = chosen if chosen else [default_cal]
+
+        cal_service = CalendarService(db=db, user_id=user_id)
+        await cal_service.sync_upcoming_events(
+            days_ahead=14,
+            calendar_ids=calendar_ids,
+        )
+        logger.info(
+            f"[{correlation_id}] Calendar synced for user={user_id} (push notification)"
+        )
+    except Exception as e:
+        logger.error(f"[{correlation_id}] Calendar sync failed for user={user_id}: {e}", exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
 # Map task types to handlers
 TASK_HANDLERS = {
     "process_email": handle_process_email,
@@ -1518,6 +1586,8 @@ TASK_HANDLERS = {
     "email_backfill": handle_email_backfill,
     "process_chat_message": handle_process_chat_message,
     "renew_gmail_watches": handle_renew_gmail_watches,
+    "renew_calendar_watches": handle_renew_calendar_watches,
+    "sync_calendar_for_user": handle_sync_calendar_for_user,
     "check_trial_expirations": handle_check_trial_expirations,
     "check_webhook_health": handle_check_webhook_health,
 }
@@ -1640,7 +1710,10 @@ def _notify_permanent_failure(task_id: int, task_type: str, payload: Dict[str, A
 
     db = SessionLocal()
     try:
-        db.execute(text(f"SET app.current_user_id = '{user_id}'"))
+        db.execute(
+            text("SELECT set_config('app.current_user_id', :uid, true)"),
+            {"uid": user_id},
+        )
         svc = NotificationService(db=db, user_id=user_id)
         svc.create_notification(
             title=msg["title"],

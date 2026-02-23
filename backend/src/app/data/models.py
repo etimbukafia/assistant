@@ -447,6 +447,34 @@ class SchedulingSuggestion(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class SchedulingIntent(Base):
+    """
+    Lean scheduling intent record created when an email with scheduling intent is processed.
+
+    Replaces the old SchedulingSuggestion model. No pre-generated slots or draft replies —
+    those are produced on-demand by CalendarOrchestrator when the user takes action.
+    """
+    __tablename__ = "scheduling_intents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id", ondelete="CASCADE"), nullable=True, index=True)
+    thread_id = Column(String, index=True)
+    sender_name = Column(String, nullable=True)
+    sender_email = Column(String, nullable=True)
+    intent_type = Column(String, nullable=False, default="availability_request")
+    # availability_request | time_request | meeting_confirmation | meeting_reminder | reschedule_request
+    intent_summary = Column(Text, nullable=True)  # "Sarah asked when you're free for the Q4 review"
+    meeting_title = Column(String, nullable=True)  # extracted for calendar matching
+    meeting_date = Column(Date, nullable=True)     # extracted date for calendar matching
+    matched_event_id = Column(Integer, ForeignKey("calendar_events.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String, nullable=False, default="pending", index=True)
+    # pending | sent | dismissed | acknowledged | added | expired
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
 class CalendarEvent(Base):
     """
     Calendar events - both created by us and synced from Google Calendar.
@@ -488,6 +516,10 @@ class CalendarEvent(Base):
     briefing_scheduled_for = Column(DateTime, nullable=True)
     related_message_ids = Column(JSON, default=list)  # Messages involving attendees
     related_task_ids = Column(JSON, default=list)  # Tasks involving attendees
+
+    # Label: meeting | personal | travel | deadline | other
+    # Only 'meeting' events get briefings. Auto-classified during sync; user can override.
+    label = Column(String, nullable=True, index=True)
 
     # Status: upcoming | completed | cancelled | pending | created | failed
     status = Column(String, default="upcoming", index=True)
@@ -1014,6 +1046,26 @@ class WebhookLog(Base):
     received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
+class WebhookDelivery(Base):
+    """
+    Dedupe table for webhook delivery IDs.
+
+    Stores provider delivery IDs after successful processing so retried
+    deliveries can be acknowledged idempotently.
+    """
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        UniqueConstraint("source", "delivery_id", name="uq_webhook_deliveries_source_delivery"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String, nullable=False, index=True)  # "gmail" | "polar"
+    delivery_id = Column(String, nullable=False, index=True)
+    event_type = Column(String, nullable=True, index=True)
+    customer_id = Column(String, nullable=True, index=True)
+    processed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
 class UITelemetryEvent(Base):
     """Product telemetry events emitted from frontend interactions."""
     __tablename__ = "ui_telemetry_events"
@@ -1070,4 +1122,21 @@ class ChatModelCallMetric(Base):
 
     success = Column(Boolean, nullable=False, default=True)
     error_type = Column(String, nullable=True)
+
+
+class CalendarWatchChannel(Base):
+    """Active Google Calendar push notification watch channels.
+
+    Each channel corresponds to one calendar being watched for one user.
+    Channels must be explicitly stopped before renewal (unlike Gmail Pub/Sub).
+    """
+    __tablename__ = "calendar_watch_channels"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)
+    channel_id = Column(String, nullable=False, unique=True)  # UUID we generate, sent to Google
+    resource_id = Column(String, nullable=False)              # Google's resource ID, needed to stop
+    calendar_id = Column(String, nullable=False)              # Which calendar this channel watches
+    expiration = Column(DateTime, nullable=False)             # When Google will stop sending notifications (UTC)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

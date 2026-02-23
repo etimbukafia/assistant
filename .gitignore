@@ -21,6 +21,15 @@ ENV/
 tests/
 **/tests/
 **/__tests__/
+!backend/tests/
+!backend/tests/unit/
+!backend/tests/unit/test_sql_injection_guards.py
+!backend/tests/unit/test_chat_planner_models.py
+!backend/tests/unit/test_chat_tool_policy.py
+!backend/tests/unit/test_chat_approval_intent.py
+!backend/tests/unit/test_chat_dag_executor.py
+!backend/tests/integration/
+!backend/tests/integration/test_chat_plan_dag_approval_execution.py
 
 # Ignore all markdown files
 *.md
@@ -39,7 +48,6 @@ tests/
 !BUSINESS_ANALYSIS.md
 !knowledge-vault-prd.md
 !backend/principles.md
-tests/
 
 # Google credentials
 credentials.json

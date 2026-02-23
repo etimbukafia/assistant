@@ -31,20 +31,20 @@
 - [ ] Delete reference removes from `@` picker
 
 ## 4) Mentions
-- [ ] Typing `@` opens suggestions
-- [ ] Typing `@a` filters suggestions by prefix/substr
-- [ ] Suggestions include `kind/ref/label` and render label correctly
-- [ ] Selecting a suggestion inserts `@label` into input
-- [ ] Sent payload includes structured mentions (`kind/ref/label`)
-- [ ] Backend resolves mentions and logs `chat_mentions_resolved`
+- [✅ ] Typing `@` opens suggestions
+- [✅ ] Typing `@a` filters suggestions by prefix/substr
+- [✅ ] Suggestions include `kind/ref/label` and render label correctly
+- [✅ ] Selecting a suggestion inserts `@label` into input
+- [✅ ] Sent payload includes structured mentions (`kind/ref/label`)
+- [✅ ] Backend resolves mentions and logs `chat_mentions_resolved`
 
 ## 5) Chat: Tool Use + Gating
 - [ ✅] Greeting (`hi`) does not trigger context tool calls
 - [ ✅] Simple self-contained request avoids unnecessary retrieval
 - [ ✅] Entity-referenced request (`@thread`) triggers relevant context tools
 - [✅ ] Draft request triggers `draft_email`
-- [ ] Meeting brief request triggers `generate_meeting_brief`
-- [ ] Tool failures return human-safe response (no provider/internal wording)
+- [✅ ] Meeting brief request triggers `generate_meeting_brief`
+- [✅ ] Tool failures return human-safe response (no provider/internal wording)
 
 ## 6) Chat: Multi-Action Cap
 - [ ] One message requesting 6+ actions executes up to 5 actions
@@ -104,26 +104,26 @@
 - [ ] AI-detected task (from email) created via `POST /v1/tasks/` with valid `message_id` succeeds
 - [✅] Manual task created via `POST /v1/tasks/manual` (no `message_id`) succeeds and uses placeholder message
 - [ ✅] Manual task with `deadline` saves `deadline_source=explicit` and `deadline_user_confirmed=true`
-- [ ] Manual task without `deadline` saves `deadline_user_confirmed=false`
+- [✅ ] Manual task without `deadline` saves `deadline_user_confirmed=false`
 - [✅ ] Creating a task removes it from `extracted_tasks` on the source message
 - [✅ ] Creating a task with invalid `message_id` returns 404
 
 ### 12b) Task Lifecycle Transitions
-- [ ] `approve` → moves `pending_approval` to `approved`, sets `approved_at`
+- [✅ ] `approve` → moves `pending_approval` to `approved`, sets `approved_at`
 - [ ] Approving a task with `scheduled_reminder_at` enqueues `evaluate_reminder` job
-- [ ] `dismiss` → moves any status to `dismissed`, sets `dismissed_at`
-- [ ] `start` → moves `waiting_for` to `in_progress`
-- [ ] `complete` → sets `status=completed`, `completed_at`
-- [ ] `snooze` → sets `status=snoozed`, `snoozed_until`
-- [ ] Any action on a non-existent task returns 404
+- [✅ ] `dismiss` → moves any status to `dismissed`, sets `dismissed_at`
+- [ ✅] `start` → moves `waiting_for` to `in_progress`
+- [✅ ] `complete` → sets `status=completed`, `completed_at`
+- [✅ ] `snooze` → sets `status=snoozed`, `snoozed_until` - no "snooze"
+- [ ✅] Any action on a non-existent task returns 404
 
 ### 12c) Task Update (Edit)
-- [ ] `PUT /v1/tasks/{id}` with `title` / `description` / `priority` updates those fields
-- [ ] Setting `priority` explicitly clears `urgency_suggested_by_ai`
-- [ ] Setting `deadline` stores `deadline_source=explicit` and `deadline_user_confirmed=true`
-- [ ] Setting `deadline_confirmed=true` sets `deadline_user_confirmed=true` without overriding the deadline value
-- [ ] Setting `mark_urgent=true` sets `priority=urgent` and clears `urgency_suggested_by_ai`
-- [ ] Setting `clear_deadline=true` nulls `deadline`, `deadline_source`, and `deadline_confidence`
+- [✅ ] `PUT /v1/tasks/{id}` with `title` / `description` / `priority` updates those fields
+- [✅ ] Setting `priority` explicitly clears `urgency_suggested_by_ai`
+- [✅ ] Setting `deadline` stores `deadline_source=explicit` and `deadline_user_confirmed=true`
+- [✅ ] Setting `deadline_confirmed=true` sets `deadline_user_confirmed=true` without overriding the deadline value
+- [✅ ] Setting `mark_urgent=true` sets `priority=urgent` and clears `urgency_suggested_by_ai`
+- [✅ ] Setting `clear_deadline=true` nulls `deadline`, `deadline_source`, and `deadline_confidence`
 - [ ] Thread-linked task update triggers cache invalidation + prewarm of action chips
 
 ### 12d) Listing + Filtering
