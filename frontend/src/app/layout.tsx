@@ -18,6 +18,7 @@ import { Toaster } from "sonner";
 
 import { ChatProvider } from "@/context/ChatContext";
 import { OmniChatOverlay } from "@/components/chat/OmniChatOverlay";
+import { StickyNoteWidget } from "@/components/vault/StickyNoteWidget";
 
 export default function RootLayout({
   children,
@@ -26,12 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
-        <link
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+      <head />
       <body className={cn(
         "min-h-screen bg-background font-sans antialiased",
         inter.variable,
@@ -41,8 +37,9 @@ export default function RootLayout({
           <AuthProvider>
             <ChatProvider>
               {children}
+              <StickyNoteWidget />
               <OmniChatOverlay />
-              <Toaster position="bottom-right" />
+              <Toaster position="bottom-left" />
             </ChatProvider>
           </AuthProvider>
         </QueryProvider>

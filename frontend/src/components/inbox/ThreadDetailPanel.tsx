@@ -8,7 +8,7 @@ import { ReplyComposer } from "./ReplyComposer";
 import {
     AlertCircle, X,
     Mail, Clock, Users, Calendar,
-    CheckCircle2, ArrowRight, Zap, Archive,
+    CheckCircle2, ArrowRight, Zap, Archive, RotateCcw,
 } from "lucide-react";
 import { formatDistanceToNow, parseISO, format } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -18,9 +18,10 @@ import { useMessageMutations } from "@/hooks/useInbox";
 interface ThreadDetailPanelProps {
     threadId: string | null;
     onClose: () => void;
+    statusContext?: "inbox" | "archived";
 }
 
-export function ThreadDetailPanel({ threadId, onClose }: ThreadDetailPanelProps) {
+export function ThreadDetailPanel({ threadId, onClose, statusContext = "inbox" }: ThreadDetailPanelProps) {
     const { data, isLoading, error } = useQuery({
         queryKey: ["thread-detail", threadId],
         queryFn: () => fetchThreadDetail(threadId!),
@@ -74,16 +75,28 @@ export function ThreadDetailPanel({ threadId, onClose }: ThreadDetailPanelProps)
                     <p className="text-sm font-inter">Failed to load thread.</p>
                 </div>
             ) : data ? (
-                <ThreadContent data={data} threadId={threadId!} onClose={onClose} />
+                <ThreadContent data={data} threadId={threadId!} onClose={onClose} statusContext={statusContext} />
             ) : null}
         </div>
     );
 }
 
-function ThreadContent({ data, threadId, onClose }: { data: ThreadDetailResponse; threadId: string; onClose: () => void }) {
+function ThreadContent({
+    data,
+    threadId,
+    onClose,
+    statusContext,
+}: {
+    data: ThreadDetailResponse;
+    threadId: string;
+    onClose: () => void;
+    statusContext: "inbox" | "archived";
+}) {
     const { thread_state, messages, tasks, scheduling_suggestions } = data;
     const latestMessage = messages[messages.length - 1];
-    const { markDone, archive } = useMessageMutations();
+    const archivedTarget = [...messages].reverse().find((m) => m.status === "archived");
+    const actionTargetMessage = statusContext === "archived" ? (archivedTarget || latestMessage) : latestMessage;
+    const { markDone, archive, restore } = useMessageMutations();
 
     return (
         <ScrollArea className="flex-1">
@@ -105,27 +118,42 @@ function ThreadContent({ data, threadId, onClose }: { data: ThreadDetailResponse
                         threadId={threadId}
                     />
 
-                    <button
-                        onClick={() => {
-                            if (latestMessage) markDone.mutate(latestMessage.id);
-                            onClose();
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] border border-sage/40 text-sage hover:bg-sage/10 text-[13px] font-medium font-inter transition-colors"
-                    >
-                        <CheckCircle2 size={13} />
-                        Done
-                    </button>
+                    {actionTargetMessage?.status !== "archived" && (
+                        <button
+                            onClick={() => {
+                                if (actionTargetMessage) markDone.mutate(actionTargetMessage.id);
+                                onClose();
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] border border-sage/40 text-sage hover:bg-sage/10 text-[13px] font-medium font-inter transition-colors"
+                        >
+                            <CheckCircle2 size={13} />
+                            Done
+                        </button>
+                    )}
 
-                    <button
-                        onClick={() => {
-                            if (latestMessage) archive.mutate(latestMessage.id);
-                            onClose();
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] border border-border text-muted-foreground hover:bg-linen text-[13px] font-medium font-inter transition-colors"
-                    >
-                        <Archive size={13} />
-                        Archive
-                    </button>
+                    {actionTargetMessage?.status === "archived" ? (
+                        <button
+                            onClick={() => {
+                                if (actionTargetMessage) restore.mutate(actionTargetMessage.id);
+                                onClose();
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] border border-border text-muted-foreground hover:bg-linen text-[13px] font-medium font-inter transition-colors"
+                        >
+                            <RotateCcw size={13} />
+                            Restore
+                        </button>
+                    ) : (
+                        <button
+                            onClick={() => {
+                                if (actionTargetMessage) archive.mutate(actionTargetMessage.id);
+                                onClose();
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] border border-border text-muted-foreground hover:bg-linen text-[13px] font-medium font-inter transition-colors"
+                        >
+                            <Archive size={13} />
+                            Archive
+                        </button>
+                    )}
                 </div>
 
                 <div className="h-px bg-border/40 my-1" />
@@ -279,7 +307,13 @@ function ActionPointsHero({
 
 // ─── MESSAGE BUBBLE ──────────────────────────────────────────────────────────
 
-function MessageBubble({ message }: { message: ThreadMessageDetail }) {
+function MessageBubble({
+    message,
+}: {
+    message: ThreadMessageDetail;
+    expanded?: boolean;
+    isLatest?: boolean;
+}) {
     const senderName = message.sender.split('<')[0].trim().replace(/"/g, '');
     const initials = senderName.split(' ').filter(Boolean).map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 

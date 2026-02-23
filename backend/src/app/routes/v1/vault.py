@@ -69,6 +69,26 @@ def _prewarm_action_chips_cache(db: Session, user: AuthenticatedUser) -> None:
     )
 
 
+def _effective_diary_status(
+    *,
+    expires_at: Optional[datetime],
+    requested_status: Optional[str] = None,
+) -> str:
+    if requested_status in {"resolved", "archived"}:
+        return requested_status
+    now = datetime.now(timezone.utc)
+    if expires_at is not None and expires_at <= now:
+        return "stale"
+    return "active"
+
+
+def _to_context_entry_response(entry: ContextEntry) -> ContextEntryResponse:
+    response = ContextEntryResponse.model_validate(entry)
+    if response.status == "active" and response.expires_at is not None and response.expires_at <= datetime.now(timezone.utc):
+        response.status = "stale"
+    return response
+
+
 def _assert_proposals_enabled() -> None:
     if not get_settings().PROPOSALS_ENABLED:
         raise HTTPException(status_code=404, detail="Not found")
@@ -356,31 +376,44 @@ def list_context_entries(
         query = query.filter(ContextEntry.entity_id == entity_id)
     if entry_type:
         query = query.filter(ContextEntry.type == entry_type)
-    return query.order_by(ContextEntry.created_at.desc()).all()
+    rows = query.order_by(ContextEntry.created_at.desc()).all()
+    visible_rows: List[ContextEntryResponse] = []
+    for row in rows:
+        response = _to_context_entry_response(row)
+        if response.status in {"active", "stale"}:
+            visible_rows.append(response)
+    return visible_rows
 
 
 @router.post("/diary/context-entries", response_model=ContextEntryResponse)
 def create_context_entry(
     payload: ContextEntryCreate,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
-    if payload.status.value == "stale" and payload.expires_at is None:
-        raise HTTPException(status_code=400, detail="Stale entries must include an expiry date.")
-
     _validate_diary_entity_reference(db=db, user_id=user.user_id, payload=payload)
+    now = datetime.now(timezone.utc)
+    primary_link = payload.links[0] if payload.links else None
+    entity_type = primary_link.entity_type if primary_link else payload.entity_type.value
+    entity_id = primary_link.entity_id if primary_link else ((payload.entity_id or "").strip() or None)
+    linked_to = primary_link.display_name if primary_link else payload.linked_to
+
     entry = ContextEntry(
         user_id=user.user_id,
         type=payload.type.value,
         content=payload.content.strip(),
-        entity_type=payload.entity_type.value,
-        entity_id=(payload.entity_id or "").strip() or None,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        linked_to=linked_to,
         created_by=payload.created_by.value,
         importance_level=payload.importance_level.value,
-        status=payload.status.value,
+        status=_effective_diary_status(
+            expires_at=payload.expires_at,
+            requested_status=payload.status.value,
+        ),
         expires_at=payload.expires_at,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        created_at=now,
+        updated_at=now,
     )
     db.add(entry)
     db.flush()  # get entry.id before committing
@@ -397,14 +430,14 @@ def create_context_entry(
     db.refresh(entry)
     cache_coordinator.invalidate_from_context_entry(_tenant_id_for_user(user), entry)
     _prewarm_action_chips_cache(db, user)
-    return entry
+    return _to_context_entry_response(entry)
 
 
 @router.put("/diary/context-entries/{entry_id}", response_model=ContextEntryResponse)
 def update_context_entry(
     entry_id: int,
     payload: ContextEntryUpdate,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     entry = (
@@ -431,12 +464,18 @@ def update_context_entry(
         entry.content = payload.content.strip()
     if payload.importance_level is not None:
         entry.importance_level = payload.importance_level.value
-    if payload.status is not None:
-        entry.status = payload.status.value
     if "expires_at" in payload.model_fields_set:
         entry.expires_at = payload.expires_at
-    if entry.status == "stale" and entry.expires_at is None:
-        raise HTTPException(status_code=400, detail="Stale entries must include an expiry date.")
+    if payload.status is not None:
+        entry.status = _effective_diary_status(
+            expires_at=entry.expires_at,
+            requested_status=payload.status.value,
+        )
+    elif entry.status in {"active", "stale"}:
+        entry.status = _effective_diary_status(
+            expires_at=entry.expires_at,
+            requested_status=None,
+        )
 
     entry.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -447,13 +486,13 @@ def update_context_entry(
         prior_entry=prior_entry,
     )
     _prewarm_action_chips_cache(db, user)
-    return entry
+    return _to_context_entry_response(entry)
 
 
 @router.delete("/diary/context-entries/{entry_id}")
 def delete_context_entry(
     entry_id: int,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     entry = (
@@ -475,9 +514,15 @@ def delete_context_entry(
         status=entry.status,
         expires_at=entry.expires_at,
     )
-    db.delete(entry)
+    entry.status = "resolved"
+    entry.updated_at = datetime.now(timezone.utc)
     db.commit()
-    cache_coordinator.invalidate_from_context_entry(_tenant_id_for_user(user), prior_entry)
+    db.refresh(entry)
+    cache_coordinator.invalidate_from_context_entry(
+        _tenant_id_for_user(user),
+        entry,
+        prior_entry=prior_entry,
+    )
     _prewarm_action_chips_cache(db, user)
     return {"deleted": True, "id": entry_id}
 
@@ -504,7 +549,7 @@ def list_diary_contacts(
 @router.post("/diary/contacts", response_model=ContactResponse)
 def create_diary_contact(
     payload: ContactCreate,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     name = payload.name.strip()
@@ -560,7 +605,7 @@ def create_diary_contact(
 def update_diary_contact(
     contact_id: int,
     payload: ContactUpdate,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     contact = (
@@ -571,6 +616,7 @@ def update_diary_contact(
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found.")
 
+    old_name = (contact.name or "").strip()
     old_email = (contact.email or "").lower()
     next_name = (payload.name.strip() if payload.name is not None else contact.name).strip()
     if not next_name:
@@ -615,7 +661,60 @@ def update_diary_contact(
         contact.organization = payload.organization.strip() or None
     if payload.notes is not None:
         contact.notes = payload.notes.strip() or None
-    contact.updated_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    contact.updated_at = now
+
+    if old_email:
+        # Keep diary links and linked memory text in sync with renamed contacts.
+        linked_entries = (
+            db.query(ContextEntry)
+            .join(DiaryEntryLink, DiaryEntryLink.entry_id == ContextEntry.id)
+            .filter(
+                ContextEntry.user_id == user.user_id,
+                DiaryEntryLink.entity_type == "contact",
+                func.lower(DiaryEntryLink.entity_id) == old_email,
+            )
+            .all()
+        )
+        mention_old = f"@{old_name}" if old_name else None
+        mention_new = f"@{next_name}" if next_name else None
+
+        for entry in linked_entries:
+            updated_entry = False
+            for link in entry.links:
+                if link.entity_type != "contact":
+                    continue
+                if (link.entity_id or "").strip().lower() != old_email:
+                    continue
+                prior_label = (link.display_name or "").strip()
+                if link.display_name != next_name:
+                    link.display_name = next_name
+                    updated_entry = True
+                    if prior_label and prior_label != next_name:
+                        old_token = f"@{prior_label}"
+                        new_token = f"@{next_name}"
+                        if old_token in (entry.content or ""):
+                            entry.content = (entry.content or "").replace(old_token, new_token)
+                            updated_entry = True
+                if next_email and next_email != old_email and link.entity_id != next_email:
+                    link.entity_id = next_email
+                    updated_entry = True
+
+            if mention_old and mention_new and mention_old in (entry.content or ""):
+                entry.content = (entry.content or "").replace(mention_old, mention_new)
+                updated_entry = True
+
+            if (
+                entry.entity_type == "contact"
+                and (entry.entity_id or "").strip().lower() == old_email
+                and next_email
+                and next_email != old_email
+            ):
+                entry.entity_id = next_email
+                updated_entry = True
+
+            if updated_entry:
+                entry.updated_at = now
 
     db.commit()
     db.refresh(contact)
@@ -631,7 +730,7 @@ def update_diary_contact(
 @router.delete("/diary/contacts/{contact_id}")
 def delete_diary_contact(
     contact_id: int,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     contact = (
@@ -678,7 +777,7 @@ def list_entity_references(
 @router.post("/diary/entity-references", response_model=EntityReferenceResponse)
 def create_entity_reference(
     payload: EntityReferenceCreate,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     display_name = payload.display_name.strip()
@@ -740,7 +839,7 @@ def create_entity_reference(
 def update_entity_reference(
     entity_id: int,
     payload: EntityReferenceUpdate,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     entity = (
@@ -790,7 +889,6 @@ def update_entity_reference(
 
     if payload.notes is not None:
         entity.notes = payload.notes.strip() or None
-
     entity.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(entity)
@@ -809,7 +907,7 @@ def update_entity_reference(
 @router.delete("/diary/entity-references/{entity_id}")
 def delete_entity_reference(
     entity_id: int,
-    user: AuthenticatedUser = Depends(require_active_subscription),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
     entity = (

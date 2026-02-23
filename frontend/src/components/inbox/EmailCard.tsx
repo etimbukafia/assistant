@@ -2,7 +2,7 @@
 
 import { Message } from "@/services/messages";
 import { formatDistanceToNow, parseISO } from "date-fns";
-import { Archive, CheckCircle, Trash2, Sparkles } from "lucide-react";
+import { Archive, CheckCircle, RotateCcw, Trash2, Sparkles } from "lucide-react";
 import { useMessageMutations } from "@/hooks/useInbox";
 import { cn } from "@/lib/utils";
 
@@ -17,7 +17,7 @@ interface EmailCardProps {
 const CARD_SHADOW = '0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)';
 
 export function EmailCard({ message, highlight, selected, compact, onClick }: EmailCardProps) {
-    const { markDone, archive, remove } = useMessageMutations();
+    const { markDone, archive, restore, remove } = useMessageMutations();
 
     const handleDone = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -32,6 +32,11 @@ export function EmailCard({ message, highlight, selected, compact, onClick }: Em
     const handleDelete = (e: React.MouseEvent) => {
         e.stopPropagation();
         remove.mutate(message.id);
+    };
+
+    const handleRestore = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        restore.mutate(message.id);
     };
 
     const isUrgent = message.needs_reply;
@@ -119,20 +124,32 @@ export function EmailCard({ message, highlight, selected, compact, onClick }: Em
 
                 {!compact && (
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                        <button
-                            onClick={handleDone}
-                            title="Mark Done"
-                            className="p-1.5 rounded-[6px] text-muted-foreground hover:text-sage hover:bg-sage/10 transition-colors"
-                        >
-                            <CheckCircle size={14} />
-                        </button>
-                        <button
-                            onClick={handleArchive}
-                            title="Archive"
-                            className="p-1.5 rounded-[6px] text-muted-foreground hover:text-muted-foreground/80 hover:bg-muted/50 transition-colors"
-                        >
-                            <Archive size={14} />
-                        </button>
+                        {message.status === "archived" ? (
+                            <button
+                                onClick={handleRestore}
+                                title="Restore to inbox"
+                                className="p-1.5 rounded-[6px] text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                            >
+                                <RotateCcw size={14} />
+                            </button>
+                        ) : (
+                            <>
+                                <button
+                                    onClick={handleDone}
+                                    title="Mark Done"
+                                    className="p-1.5 rounded-[6px] text-muted-foreground hover:text-sage hover:bg-sage/10 transition-colors"
+                                >
+                                    <CheckCircle size={14} />
+                                </button>
+                                <button
+                                    onClick={handleArchive}
+                                    title="Archive"
+                                    className="p-1.5 rounded-[6px] text-muted-foreground hover:text-muted-foreground/80 hover:bg-muted/50 transition-colors"
+                                >
+                                    <Archive size={14} />
+                                </button>
+                            </>
+                        )}
                         <button
                             onClick={handleDelete}
                             title="Delete"

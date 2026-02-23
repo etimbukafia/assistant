@@ -53,9 +53,17 @@ class MentionContextService:
         self.user_id = user_id
         self.session_id = session_id
 
-    def suggest_mentions(self, query: str, limit: int = 8) -> List[Dict[str, str]]:
+    def suggest_mentions(
+        self,
+        query: str,
+        limit: int = 8,
+        offset: int = 0,
+        kind: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
         q = (query or "").strip()
-        limit = max(1, min(limit, 20))
+        limit = max(1, min(limit, 500))
+        offset = max(0, min(offset, 5000))
+        kind_norm = (kind or "").strip().lower()
 
         context_query = (
             self.db.query(ContextEntry)
@@ -65,6 +73,8 @@ class MentionContextService:
                 ContextEntry.entity_id.isnot(None),
             )
         )
+        if kind_norm in {"contact", "event", "thread", "message"}:
+            context_query = context_query.filter(ContextEntry.entity_type == kind_norm)
         if q:
             context_query = context_query.filter(
                 or_(
@@ -101,6 +111,8 @@ class MentionContextService:
         grouped: Dict[str, Dict[str, Any]] = {}
 
         contact_query = self.db.query(Contact).filter(Contact.user_id == self.user_id)
+        if kind_norm and kind_norm != "contact":
+            contact_query = contact_query.filter(Contact.id == -1)
         if q:
             contact_query = contact_query.filter(
                 or_(
@@ -131,6 +143,10 @@ class MentionContextService:
                 EntityReference.entity_type.in_(["thread", "event", "message"]),
             )
         )
+        if kind_norm in {"thread", "event", "message"}:
+            entity_query = entity_query.filter(EntityReference.entity_type == kind_norm)
+        elif kind_norm:
+            entity_query = entity_query.filter(EntityReference.id == -1)
         if q:
             entity_query = entity_query.filter(
                 or_(
@@ -177,7 +193,7 @@ class MentionContextService:
                 _last_seen_rank(item.get("last_seen_at", "")),
             )
         )
-        suggestions = suggestions[:limit]
+        suggestions = suggestions[offset : offset + limit]
 
         label_counts: Dict[str, int] = {}
         for item in suggestions:
@@ -205,6 +221,68 @@ class MentionContextService:
                     "label": item["label"],
                     "display_label": display_label,
                     "subtitle": subtitle,
+                    "last_seen_at": item.get("last_seen_at") or None,
+                    "created_at": None,
+                    "updated_at": item.get("last_seen_at") or None,
+                    "search_text": (item.get("sample") or "").strip() or None,
+                }
+            )
+        return results
+
+    def suggest_memory_entries(
+        self,
+        query: str,
+        limit: int = 8,
+        offset: int = 0,
+        memory_type: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        q = (query or "").strip()
+        limit = max(1, min(limit, 500))
+        offset = max(0, min(offset, 5000))
+        memory_type_norm = (memory_type or "").strip().lower()
+
+        qy = self.db.query(ContextEntry).filter(ContextEntry.user_id == self.user_id)
+        if memory_type_norm:
+            qy = qy.filter(ContextEntry.type == memory_type_norm)
+        if q:
+            qy = qy.filter(
+                or_(
+                    ContextEntry.content.ilike(f"%{q}%"),
+                    ContextEntry.type.ilike(f"%{q}%"),
+                    ContextEntry.entity_type.ilike(f"%{q}%"),
+                    ContextEntry.entity_id.ilike(f"%{q}%"),
+                )
+            )
+
+        rows = (
+            qy.order_by(ContextEntry.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+        results: List[Dict[str, str]] = []
+        for row in rows:
+            label = (row.content or "").strip()
+            if len(label) > 96:
+                label = label[:93].rstrip() + "..."
+            subtitle = _memory_subtitle(
+                entity_type=row.entity_type,
+                entity_id=row.entity_id,
+                status=row.status,
+                importance=row.importance_level,
+            )
+            results.append(
+                {
+                    "kind": "memory",
+                    "ref": f"memory:{row.id}",
+                    "label": label,
+                    "display_label": label,
+                    "subtitle": subtitle,
+                    "last_seen_at": row.updated_at.isoformat() if row.updated_at else "",
+                    "created_at": row.created_at.isoformat() if row.created_at else "",
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+                    "search_text": (row.content or "").strip(),
                 }
             )
         return results
@@ -607,6 +685,26 @@ def _last_seen_rank(last_seen_at: str) -> int:
         return -int(dt.timestamp())
     except Exception:
         return 0
+
+
+def _memory_subtitle(
+    entity_type: Optional[str],
+    entity_id: Optional[str],
+    status: Optional[str],
+    importance: Optional[str],
+) -> str:
+    parts: List[str] = ["Remember"]
+    if entity_type:
+        scope = str(entity_type).strip().title()
+        if entity_id:
+            parts.append(f"{scope} · {entity_id}")
+        else:
+            parts.append(scope)
+    if status:
+        parts.append(str(status).title())
+    if importance:
+        parts.append(str(importance).title())
+    return " | ".join(parts)
 
 
 def _format_suggestion_subtitle(kind: str, last_seen_at: str, sample: str, mention_count: int) -> str:

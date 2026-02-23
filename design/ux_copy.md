@@ -1,76 +1,168 @@
-# Donna: UX Copy Guide
+# Teeks: UX Copy Guide
 
-This guide ensures that every word in Donna reflects her persona: Sophisticated, Direct, and Slightly Playful.
+> *Every word in the interface is a sentence the product says to a professional. Make it count.*
+
+Teeks sounds like a sharp, discreet colleague. Not a cheerful assistant. Not a formal enterprise system. A person who knows what they are doing, gets to the point, and never wastes your time.
 
 ---
 
-## 🏗️ 1. Core Navigation
+## 1. The Voice
 
-| Item | Context | Donna's Choice |
+**Calm. Direct. One degree warmer than clinical.**
+
+| Quality | In practice |
+| :--- | :--- |
+| No exclamation marks | Anywhere. Ever. In any state. |
+| Active voice | "I've drafted a reply." Not "A reply has been drafted." |
+| Brevity | If a label needs a second sentence, the label is wrong. |
+| Specific, not vague | "Sent. Thread archived." Not "Action completed successfully." |
+| No apologies | "That didn't send. Try again." Not "Sorry! Something went wrong." |
+
+---
+
+## 2. Navigation Labels
+
+| Element | Label | Why |
 | :--- | :--- | :--- |
-| **Tab 1** | Primary dashboard | **Inbox** |
-| **Tab 2** | Task list | **Focus** |
-| **Tab 3** | Calendar | **Schedule** |
-| **Tab 4** | AI Chat | **Chat** |
-| **Header** | User settings | **Profile (Avatar)** |
+| Tab 1 | **Today** | Anchors the EA in now, not a general "Dashboard" |
+| Tab 2 | **Chats** | What it is. Unambiguous. |
+| Tab 3 | **Calendar** | Familiar, precise |
+| Tab 4 | **Profile** | Settings + identity, one word |
+| New chat button | `+` icon, no label | The icon is enough at this position |
+| Mode: Action | **ACTION** | Uppercase overline — declares intent |
+| Mode: Reflection | **REFLECTION** | Same treatment, different meaning |
 
 ---
 
-## 👋 2. Onboarding & Handover
+## 3. Chat — Input Placeholders
 
-- **Welcome**: "Good morning. I've secured the perimeter for your Executive. Let's look at what's ahead."
-- **Connecting**: "Syncing with the Executive's landscape... (Connecting Gmail)"
-- **Initial Briefing**: "The horizon is clear. I've synthesized the latest 50 messages for the Executive. 4 require your direct intervention."
+| Mode | Placeholder |
+| :--- | :--- |
+| Action | `Ask Teeks` |
+| Reflection | `What's on your mind?` |
 
----
-
-## 📇 3. The Donna Card (Synthesis)
-
-### CTAs & Actions
-- **Standard Action**: `[Handle This]`
-- **Communication**: `[Review Draft]` / `[Send]`
-- **Scheduling**: `[Confirm Slot]` / `[Suggest Others]`
-- **Dismissal**: `[Archive]` / `[Handled]`
-
-### Status Indicators
-- **High Priority**: "⚠️ Direct Action Needed"
-- **FYI**: "☕ FYI: For your review"
-- **Confidence**: "💎 Cerulean Precision: High Confidence"
+Two modes. Two questions. The difference in tone is intentional.
 
 ---
 
-## ⚠️ 4. Error & Loading States
+## 4. Onboarding
 
-### Errors (Unflappable Calm)
-- **Auth Loss**: "I've lost visibility. Please re-authorize your account to resume."
-- **Network**: "Connectivity interrupted. I'm standing by to reconnect."
-- **Action Failure**: "I couldn't complete that action. Shall we try again?"
+| Moment | Copy |
+| :--- | :--- |
+| Landing headline | `Your inbox, handled.` |
+| Landing subheadline | `Teeks drafts replies, creates events, and surfaces what matters — for your approval.` |
+| Connect CTA | `Connect Gmail` |
+| Syncing | `Syncing your inbox.` |
+| First entry to Today feed | *(no splash copy — the content speaks)* |
 
-### Loading (The Pulse)
-- **General**: "Synthesizing your context..."
-- **Syncing**: "Filtering the chaos..."
-- **AI Processing**: "Donna is thinking..."
-
----
-
-## 🕳️ 5. Empty States
-
-### Dashboard Clear
-- "The desk is clear. Everything for the Executive has been either handled or scheduled."
-- "No new interventions needed for the Executive. You're free to focus."
-
-### No Tasks
-- "No pending obligations. A rare moment of quiet—use it wisely."
+**Rule**: No welcome message once the EA is inside the app. The content is the welcome.
 
 ---
 
-## ⚡ 6. Interaction Micro-copy
+## 5. Action Cards
 
-- **Approval Toast**: "Briefing approved. Relocating to Task Hub."
-- **Send Toast**: "Message sent. I've archived the thread for you."
-- **Pattern Match**: "I've noticed you always skip these. Should I do it for you automatically? `[Yes, Automate]` `[Not yet]`"
+### Draft Email
+
+```
+Draft Email
+To: [Name]  ·  Re: [Subject]
+
+[Body — 2–3 lines maximum. Never truncated.]
+
+[Send]     [Edit]
+```
+
+- No "I" — the card is not speaking, it is showing
+- Body is the exact text that will be sent — not a summary of it
+- "Send" is the label. Not "Send Reply." Not "Approve & Send." Just **Send**.
+
+### Create Event
+
+```
+Create Event
+✈ Vienna Flight
+Thursday, Feb 27 · 6:00 – 10:00 AM
+Blocked — no notifications
+
+[Confirm]     [Cancel]
+```
+
+### Create Task
+
+```
+Create Task
+Follow up with Marcus re: Q1 numbers
+Due: Friday
+
+[Add to tasks]     [Dismiss]
+```
+
+---
+
+## 6. Error States
+
+| Error | Copy |
+| :--- | :--- |
+| Send failed | `That didn't send. Try again.` |
+| Network lost | `No connection. Standing by.` |
+| Auth expired | `Session expired. Sign in again.` |
+| Sync failed | `Inbox sync failed. Pull to retry.` |
+| Unknown | `Something went wrong. Try again.` |
+
+**Rule**: Every error message has two parts — what happened, what to do. If you can't state both in one sentence, break it into two short ones. Never one without the other.
+
+---
+
+## 7. Empty States
+
+| Screen | Copy | CTA |
+| :--- | :--- | :--- |
+| No sessions | `Your conversations appear here.` | `Start a chat` |
+| No calendar events | `Nothing scheduled today.` | — |
+| Search no results | `No results.` | — |
+| Inbox clear | `All handled.` | — |
+
+**Rule**: One line. Present tense. Statement, not question. No emoji.
+
+---
+
+## 8. Loading States
+
+| Context | Copy |
+| :--- | :--- |
+| Inbox syncing | `Syncing your inbox.` |
+| AI processing | `Thinking…` |
+| Sending | *(no copy — send button shows spinner)* |
+| Creating session | *(no copy — transition is immediate)* |
+
+**Rule**: If it takes less than 800ms, no copy is needed — just the visual state. Copy is for waits the user might interpret as broken.
+
+---
+
+## 9. Interaction Toasts
+
+Toasts appear at the bottom, disappear after 2.5 seconds, no close button.
+
+| Action | Toast |
+| :--- | :--- |
+| Message sent | `Sent. Thread archived.` |
+| Event created | `Added to your calendar.` |
+| Task created | `Task added.` |
+| Session deleted | `Conversation deleted.` |
+| Action dismissed | `Dismissed.` |
+
+Toasts confirm. They do not celebrate. They do not apologise. They state the fact.
+
+---
+
+## 10. Mode Switch
+
+When switching between Action and Reflection:
+
+- **Entering Reflection**: `Reflection mode. This conversation is private.`
+- This appears as a thin inline note below the mode pill, grey, 12pt. Once only per session — not on every message.
 
 ---
 
 > [!IMPORTANT]
-> **Tone Rule**: Avoid "Please wait" or "Loading...". Use active, professional verbs that imply Donna is working for the user.
+> **The copy test**: Read every piece of UI copy out loud. If it sounds like a software product talking, rewrite it. It should sound like a person — specifically, a sharp, unhurried professional who knows exactly what they mean.

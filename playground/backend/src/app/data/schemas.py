@@ -1,4 +1,4 @@
-"""Playground schemas for diary resources."""
+"""Playground schemas for diary and chat resources."""
 
 from datetime import datetime
 from enum import Enum
@@ -50,6 +50,7 @@ class ContextEntryBase(BaseModel):
     entity_id: Optional[str] = None
     created_by: CreatedBy
     created_at: datetime
+    updated_at: datetime
     importance_level: ImportanceLevel = ImportanceLevel.normal
     status: EntryStatus = EntryStatus.active
     expires_at: Optional[datetime] = None
@@ -193,6 +194,49 @@ class CalendarEventResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# =============================================================================
+# Chat schemas
+# =============================================================================
+
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    user_id: str
+    session_type: str
+    title: Optional[str] = None
+    created_at: datetime
+    last_activity_at: datetime
+    state: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    session_id: str
+    role: str
+    content: str
+    created_at: datetime
+    message_metadata: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ChatPendingActionResponse(BaseModel):
+    id: str
+    session_id: str
+    message_id: Optional[int] = None
+    action_type: str
+    action_data: dict
+    status: str
+    created_at: datetime
 
     class Config:
         from_attributes = True

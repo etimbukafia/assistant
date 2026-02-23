@@ -492,6 +492,7 @@ def get_thread_detail(
                 body=msg.decrypted_body,
                 summary=msg.summary,
                 received_at=msg.received_at,
+                status=msg.status or "inbox",
                 scheduling_intent=msg.scheduling_intent or False,
                 scheduling_intent_type=msg.scheduling_intent_type,
             )

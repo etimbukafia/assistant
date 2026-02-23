@@ -49,6 +49,8 @@ class ToolResult:
     success: bool
     data: Any = None
     error: Optional[str] = None
+    state_updates: Optional[Dict[str, Any]] = None
+    pending_action: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -64,10 +66,20 @@ class ToolValidationError(ValueError):
 class ChatToolRegistry:
     """Registry and executor for context retrieval tools."""
 
-    def __init__(self, db: Session, tenant_id: str, user_id: str, session_id: str):
+    def __init__(
+        self,
+        db: Session,
+        tenant_id: str = "default",
+        user_id: Optional[str] = None,
+        session_id: str = "default",
+    ):
+        if user_id is None and tenant_id not in {"", "default"}:
+            # Backward-compatible positional signature: ChatToolRegistry(db, user_id)
+            user_id = tenant_id
+            tenant_id = "default"
         self.db = db
-        self.tenant_id = tenant_id
-        self.user_id = user_id
+        self.tenant_id = tenant_id or "default"
+        self.user_id = user_id or "anonymous"
         self.session_id = session_id
         self._tools = self._register_tools()
 
@@ -242,6 +254,22 @@ class ChatToolRegistry:
             for t in self._tools.values()
         ]
 
+    def get_tool_definitions(self) -> List[Dict[str, Any]]:
+        """Compatibility shape with backend chat orchestrator."""
+        definitions: List[Dict[str, Any]] = []
+        for tool in self._tools.values():
+            definitions.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+            )
+        return definitions
+
     def list_function_declarations(self) -> List[genai_types.FunctionDeclaration]:
         declarations: List[genai_types.FunctionDeclaration] = []
         for tool in self._tools.values():
@@ -258,9 +286,16 @@ class ChatToolRegistry:
         tool = self._tools.get((name or "").strip())
         return bool(tool and tool.tool_type == ToolType.ACTION)
 
-    def execute_tool(self, call: ToolCall) -> ToolResult:
-        if call.name not in self._tools:
-            return ToolResult(success=False, error=f"Unknown tool: {call.name}")
+    def execute_tool(self, call: ToolCall | str, arguments: Optional[Dict[str, Any]] = None) -> ToolResult:
+        if isinstance(call, ToolCall):
+            tool_name = call.name
+            tool_args = call.arguments
+        else:
+            tool_name = (call or "").strip()
+            tool_args = arguments or {}
+
+        if tool_name not in self._tools:
+            return ToolResult(success=False, error=f"Unknown tool: {tool_name}")
 
         handlers = {
             "get_contact_context": self._get_contact_context,
@@ -273,13 +308,13 @@ class ChatToolRegistry:
             "generate_thread_intelligence": self._generate_thread_intelligence,
         }
 
-        handler = handlers.get(call.name)
+        handler = handlers.get(tool_name)
         if handler is None:
-            return ToolResult(success=False, error=f"No handler for tool: {call.name}")
+            return ToolResult(success=False, error=f"No handler for tool: {tool_name}")
 
         try:
-            tool = self._tools[call.name]
-            validated_args = self._validate_and_normalize_args(tool, call.arguments or {})
+            tool = self._tools[tool_name]
+            validated_args = self._validate_and_normalize_args(tool, tool_args or {})
             return handler(**validated_args)
         except ToolValidationError as exc:
             return ToolResult(success=False, error=f"Invalid tool arguments: {exc}")

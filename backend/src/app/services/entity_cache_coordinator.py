@@ -184,5 +184,5 @@ class EntityCacheCoordinator:
         elif entity_type == "message" and entity_id:
             self.invalidate_message(tenant_id=tenant_id, user_id=user_id, message_id=entity_id)
 
-        if entity_type in {"assistant", "executive"} or entry.type == "preferences":
+        if entity_type == "global":
             self.invalidate_profile(tenant_id=tenant_id, user_id=user_id)

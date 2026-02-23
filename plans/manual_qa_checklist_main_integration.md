@@ -7,28 +7,28 @@
 - [ ✅] Diary API reachable: `GET /v1/vault/diary/contacts`
 
 ## 1) Diary: Contacts
-- [ ] Create contact with `name` + `email` succeeds
-- [ ] Create duplicate contact with same `email` returns conflict and UI toast
-- [ ] Create second contact with same `name` + different `email` succeeds
-- [ ] Create same `name` without email when same-name already exists returns guided conflict message
-- [ ] Update contact email invalidates mention resolution immediately
-- [ ] Delete contact removes it from mention suggestions
+- [ ✅] Create contact with `name` + `email` succeeds
+- [ ✅] Create duplicate contact with same `email` returns conflict and UI toast
+- [ ✅] Create second contact with same `name` + different `email` succeeds
+- [ ✅] Create same `name` without email when same-name already exists returns guided conflict message
+- [ ✅] Update contact email invalidates mention resolution immediately
+- [ ✅] Delete contact removes it from mention suggestions
 
 ## 2) Diary: Remember Entries
-- [ ] Create `decision` for `executive` succeeds
-- [ ] Create `preferences` for `assistant` succeeds
-- [ ] Create `commitment` for `thread` with `entity_id` succeeds
-- [ ] Create `relationships` for `contact` with email `entity_id` succeeds
-- [ ] Create entry with `status=resolved` and `expires_at` in past saves correctly
+- [ ✅] Create `decision` for `executive` succeeds. Note: not how it works
+- [ ✅] Create `preferences` for `assistant` succeeds
+- [ ✅] Create `commitment` for `thread` with `entity_id` succeeds
+- [✅ ] Create `relationships` for `contact` with email `entity_id` succeeds
+- [ ✅] Create entry with `status=resolved` and `expires_at` in past saves correctly
 - [ ] Update entry `status` from `active` -> `resolved` invalidates warm scope
-- [ ] Delete entry invalidates related scope and removes from retrieval
+- [ ✅] Delete entry invalidates related scope and removes from retrieval
 
 ## 3) Diary: Linked References
-- [ ] Create `thread` reference appears in mention suggestions
-- [ ] Create `event` reference appears in mention suggestions
-- [ ] Create `message` reference appears in mention suggestions
-- [ ] Update reference display name reflects in `@` picker
-- [ ] Delete reference removes from `@` picker
+- [ ✅] Create `thread` reference appears in mention suggestions
+- [ ✅] Create `event` reference appears in mention suggestions
+- [ ✅] Create `message` reference appears in mention suggestions
+- [ ✅] Update reference display name reflects in `@` picker
+- [ ✅] Delete reference removes from `@` picker
 
 ## 4) Mentions
 - [✅ ] Typing `@` opens suggestions
@@ -39,19 +39,29 @@
 - [✅ ] Backend resolves mentions and logs `chat_mentions_resolved`
 
 ## 5) Chat: Tool Use + Gating
-- [ ✅] Greeting (`hi`) does not trigger context tool calls
-- [ ✅] Simple self-contained request avoids unnecessary retrieval
-- [ ✅] Entity-referenced request (`@thread`) triggers relevant context tools
-- [✅ ] Draft request triggers `draft_email`
-- [✅ ] Meeting brief request triggers `generate_meeting_brief`
-- [✅ ] Tool failures return human-safe response (no provider/internal wording)
+- [✅ ] Greeting (`hi`) does not trigger context/tool calls
+- [✅ ] Simple self-contained request avoids unnecessary retrieval
+- [ ] Mention-referenced request (`@thread`, `@contact`, `@event`) allows tool use
+- [ ] Mention presence does not force tool calls when response is already self-contained
+- [ ] No-mention draft request returns a normal LLM draft (no tool path)
+- [ ] `draft_email` tool is used only when references/context make it necessary
+- [ ] `generate_meeting_brief` tool is used when meeting/event context is required
+- [ ] Tool failures return human-safe response (no provider/internal wording)
+- [ ] `chat_context_trace` logs accurate `tool_records` and `action_records`
 
-## 6) Chat: Multi-Action Cap
-- [ ] One message requesting 6+ actions executes up to 5 actions
-- [ ] Response naturally confirms completed items and asks to continue remaining
-- [ ] Follow-up (`continue`, `proceed`, `go on`) executes deferred actions
+## 6) Chat: Multi-Action + DAG Planner
+- [ ] One message with 6+ action requests is decomposed into atomic sub-requests
+- [ ] Mixed request with actions + trivial question handles both (actions executed, trivial answered)
+- [ ] Up to 5 actions execute in current turn; overflow remains deferred
+- [ ] Assistant response confirms completed actions and naturally asks whether to continue deferred ones
+- [ ] Follow-up (`continue`, `proceed`, `go on`, `run`) executes deferred actions
 - [ ] Deferred actions persist in session state across turns
-- [ ] Per-action failure does not fail whole request
+- [ ] Dependency ordering is respected (downstream action runs only after prerequisite succeeds)
+- [ ] Per-action failure does not fail the whole request
+- [ ] Failed node is reported clearly while independent nodes still complete
+- [ ] Re-running continuation does not duplicate already completed actions
+- [ ] Truly blocking ambiguity asks one concise clarifying question
+- [ ] Low-risk ambiguity proceeds without unnecessary blocking
 
 ## 7) Cache Invalidation
 - [ ] Update thread-scoped entry invalidates:
@@ -187,3 +197,159 @@
 - [ ] Setting weekly target on any day of the week persists it to all 7 days in that ISO week
 - [ ] Updating the weekly target on a later day retroactively updates earlier rows in the DB
 - [ ] Weekly target text appears in both daily focus and weekly summary views
+
+---
+
+## 14) Scheduling Intents
+
+### 14a) Intent Detection (Email Processing)
+- [ ] Email with scheduling language (e.g. "when are you free?") creates a `SchedulingIntent` row with `status=pending`
+- [ ] Created intent has `intent_summary`, `meeting_title`, `meeting_date` populated from AI extraction
+- [ ] Email below confidence threshold (< 0.6) does not create an intent
+- [ ] Processing the same message twice does not create a duplicate intent (deduplication by `message_id`)
+- [ ] New intent for a thread expires any previous `pending` intents for the same thread (`status=expired`)
+- [ ] `meeting_reminder` intent where title + date matches a calendar event sets `matched_event_id`
+- [ ] `meeting_reminder` intent with no calendar match has `matched_event_id = null`
+
+### 14b) Intents API
+- [ ] `GET /v1/scheduling/intents?status=pending` returns pending intents with all fields
+- [ ] `GET /v1/scheduling/intents/{id}` returns a single intent; unknown id returns 404
+- [ ] `POST /v1/scheduling/intents/{id}/run` returns `suggested_slots`, `draft_reply`, `reasoning`
+- [ ] `POST /v1/scheduling/intents/{id}/run` with `user_note="prefer afternoons"` biases suggested slots to afternoon windows
+- [ ] `POST /v1/scheduling/intents/{id}/send` with `edited_reply` sends Gmail reply, sets `status=sent`, creates follow-up task
+- [ ] `POST /v1/scheduling/intents/{id}/send` without `edited_reply` returns 400
+- [ ] `POST /v1/scheduling/intents/{id}/dismiss` sets `status=dismissed`
+- [ ] `POST /v1/scheduling/intents/{id}/acknowledge` sets `status=acknowledged`
+- [ ] `POST /v1/scheduling/intents/{id}/add-to-calendar` creates a `CalendarEvent`, sets `status=added`, sets `matched_event_id`
+- [ ] `POST /v1/scheduling/intents/{id}/add-to-calendar` on intent without `meeting_date` returns 400
+- [ ] All action endpoints on unknown intent id return 404
+- [ ] `GET /v1/scheduling/suggestions` returns `{"suggestions": [], "total": 0}` (backwards compat stub)
+- [ ] `POST /v1/scheduling/detect` returns deprecated message (backwards compat stub)
+
+### 14c) Calendar Orchestrator
+- [ ] Run result is not persisted — re-running the same intent returns a fresh result each time
+- [ ] Slots respect working hours from `UserSettings` (no slots outside configured window)
+- [ ] If no `UserSettings` exist, `/run` returns empty `suggested_slots` and a fallback draft reply
+- [ ] Reasoning field summarises: events checked, urgent tasks noted, user note applied
+- [ ] Orchestrator for `meeting_confirmation` or `meeting_reminder` type is not called by the run endpoint (the `/run` route still works but returns no slots for confirmation types)
+
+### 14d) Frontend — SchedulingIntentsPanel
+- [ ] Panel is hidden when there are no pending intents
+- [ ] `availability_request` intent card shows primary button labelled "Suggest availability"
+- [ ] `time_request` intent card shows primary button labelled "Suggest time"
+- [ ] `reschedule_request` intent card shows primary button labelled "Suggest new times"
+- [ ] `meeting_confirmation` intent card shows primary button labelled "Add to calendar"
+- [ ] `meeting_reminder` with `matched_event_id` shows primary button labelled "Acknowledge"
+- [ ] `meeting_reminder` without `matched_event_id` shows primary button labelled "Add to calendar"
+- [ ] Every card has a "Dismiss" secondary button
+- [ ] `intent_summary` is shown as card body text; falls back to `meeting_title` if summary is absent
+- [ ] Clicking card body (summary text) opens OrchestratorPanel
+- [ ] Clicking "Dismiss" calls dismiss endpoint; card disappears from panel
+- [ ] Clicking "Acknowledge" calls acknowledge endpoint; card disappears from panel
+- [ ] Clicking "Add to calendar" (direct action) calls add-to-calendar endpoint; card disappears and calendar events refresh
+
+### 14e) Frontend — OrchestratorPanel
+- [ ] Panel opens as a dialog with `meeting_title` as the heading (falls back to "Scheduling")
+- [ ] Intent type label and sender name shown as overline
+- [ ] `intent_summary` shown as context body text
+- [ ] For `availability_request` / `time_request` / `reschedule_request`: user note textarea and "Get recommendations" button visible before running
+- [ ] "Get recommendations" shows three-dot loader while request is in-flight
+- [ ] After run: slot chips appear; clicking a chip selects it (highlighted in primary colour)
+- [ ] Draft reply textarea is pre-filled with the orchestrator's `draft_reply` and is editable
+- [ ] Reasoning text shown in italic above slot chips when present
+- [ ] Clicking "Send reply" sends the (edited) reply, closes dialog, refreshes intents list
+- [ ] "Send reply" disabled when draft reply textarea is empty
+- [ ] Clicking "Re-run" clears results and restores the user-note input form
+- [ ] For `meeting_confirmation` / `meeting_reminder`: only "Add to calendar" button shown (no orchestrator flow)
+- [ ] "Add to calendar" from panel closes dialog, refreshes intents list and calendar events
+
+---
+
+## 15) Webhooks (Gmail + Polar)
+
+### 15a) Gmail Webhook Security + Delivery (`POST /v1/webhooks/gmail`)
+- [ ] Unauthorized request (missing/invalid token or auth) returns `401 unauthorized_webhook_source`
+- [ ] If `GMAIL_PUBSUB_SUBSCRIPTION` is set and incoming subscription mismatches, request is rejected with `401`
+- [ ] Malformed JSON body returns `200` with `{status: "ignored", reason: "invalid_json"}`
+- [ ] Missing Pub/Sub `message.data` returns `200` with `{status: "ignored", reason: "no_data"}`
+- [ ] Invalid base64 payload returns `200` with `{status: "ignored", reason: "decode_failed"}`
+- [ ] Missing `emailAddress` in decoded payload returns `200` with `{status: "ignored", reason: "no_email"}`
+- [ ] Unknown Gmail account (`emailAddress` not linked) returns `200` with `{status: "ignored", reason: "unknown_account"}`
+- [ ] Duplicate Pub/Sub `messageId` is idempotent and returns `{status: "duplicate"}`
+- [ ] First webhook for an account with empty `last_history_id` initializes cursor and returns `{status: "initialized"}`
+- [ ] Webhook with no new messages updates `last_history_id` and returns `{status: "ok", new_messages: 0}`
+- [ ] `last_history_id` never regresses when out-of-order/older `historyId` is received (monotonic cursor behavior)
+- [ ] Processing failures return `500` with generic `gmail_webhook_processing_failed` (no internal stack/error details leaked)
+- [ ] Successful processing inserts a row in `webhook_deliveries` for source `gmail`
+- [ ] `webhook_logs` includes `source=gmail`, `event_type=gmail_push`, and correct `processed/error` values
+
+### 15b) Polar Webhook Security + Idempotency (`POST /v1/webhooks/polar`)
+- [ ] Invalid signature returns `400 Invalid webhook signature`
+- [ ] Missing `POLAR_WEBHOOK_SECRET` returns `200` and `{handled: false, reason: "webhook_secret_not_configured"}`
+- [ ] Unknown event type returns `200` and `{handled: false}` and is logged with `error=no_handler`
+- [ ] Valid `subscription.created` activates user (`tier=pro`, `status=active`) and sets `polar_subscription_id`
+- [ ] Valid `subscription.canceled` sets `subscription_status=canceled` without removing pro access immediately
+- [ ] Valid `subscription.revoked` sets `tier=trial`, `status=expired`, clears `polar_subscription_id`
+- [ ] Duplicate `webhook-id` is idempotent and returns `{duplicate: true}` without re-applying side effects
+- [ ] Concurrent duplicate delivery (race) is safely handled (no crash; duplicate result returned)
+- [ ] Payload shape with top-level `data.customer_id` is handled correctly
+- [ ] Payload shape with nested `data.subscription.customer_id` is handled correctly
+- [ ] Successful processing inserts a row in `webhook_deliveries` for source `polar`
+- [ ] `webhook_logs` includes `source=polar`, correct `event_type`, and correct `processed/error` values
+
+### 15c) Webhook Data Integrity
+- [ ] `webhook_deliveries` enforces uniqueness on `(source, delivery_id)`
+- [ ] Replaying the same delivery ID does not create duplicate rows in `webhook_deliveries`
+- [ ] Webhook logs are append-only and do not block webhook request handling if logging fails
+
+### 15d) Automated Test Coverage (must pass)
+- [ ] `backend/tests/unit/test_gmail_webhook_route.py` passes
+- [ ] `backend/tests/unit/test_polar_webhook_route.py` passes
+- [ ] Existing Polar webhook tests in `backend/tests/unit/test_webhook_handlers.py` still pass
+- [ ] Existing Polar integration tests in `backend/tests/integration/test_webhook_endpoint.py` still pass
+
+---
+
+## 16) Chat DAG Implementation (Planner + Executor + Approval)
+
+### 16a) Planner Output Quality
+- [ ] Multi-intent request is split into atomic steps with no missing user intent
+- [ ] Planner marks read-only vs action steps correctly
+- [ ] Planner assigns dependencies only when needed (no unnecessary chaining)
+- [ ] Planner does not create cyclic dependencies
+- [ ] Planner keeps trivial/small-talk items out of action DAG
+
+### 16b) DAG Execution Semantics
+- [ ] Execution order follows topological dependency order
+- [ ] Independent nodes run without waiting on unrelated nodes
+- [ ] Dependent node is skipped/held when prerequisite fails
+- [ ] Partial completion is returned when one branch fails
+- [ ] Retry/continue runs only pending or blocked nodes
+
+### 16c) Approval Gate (Text + Chips)
+- [ ] Approval-required actions are surfaced in approval step before execution
+- [ ] Selecting one chip executes only selected action(s)
+- [ ] Selecting multiple chips executes selected batch only
+- [ ] User text approvals (`continue`, `proceed`, `run`) are interpreted correctly
+- [ ] User text targeting a specific action (e.g., `run send email to Sarah`) executes only that matching action
+- [ ] Reject/cancel text prevents execution of pending approval actions
+- [ ] Approved actions are not re-requested for approval on next turn
+
+### 16d) Tool Family + Gating Behavior
+- [ ] Planning stage respects tool-family constraints (communication/scheduling/context)
+- [ ] Disallowed tool family for a sub-task triggers fallback/clarification instead of unsafe execution
+- [ ] No SQL write tool is exposed via chat where not intended
+- [ ] Task write actions remain scoped to authorized user only
+
+### 16e) Observability + Failure Handling
+- [ ] Planner parse errors safely fallback to non-DAG path (no crash)
+- [ ] Invalid plan node/tool schemas are rejected with user-safe fallback response
+- [ ] Logs include planner summary, DAG step status, and approval decisions
+- [ ] User-facing errors stay human-readable and avoid internal implementation jargon
+
+### 16f) Automated Test Coverage (must pass)
+- [ ] `backend/tests/unit/test_chat_planner_models.py` passes
+- [ ] `backend/tests/unit/test_chat_tool_policy.py` passes
+- [ ] `backend/tests/unit/test_chat_approval_intent.py` passes
+- [ ] `backend/tests/unit/test_chat_dag_executor.py` passes
+- [ ] `backend/tests/integration/test_chat_plan_dag_approval_execution.py` passes

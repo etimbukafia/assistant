@@ -1,14 +1,12 @@
 "use client"
 
 import * as React from "react"
+import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { usePathname } from "next/navigation"
-import { MessageSquare, X, Send, Sparkles, Loader2 } from "lucide-react"
+import { ArrowUp, MessageSquare, X } from "lucide-react"
 
-import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { DonnaButton } from "@/components/ui/DonnaButton"
-import { DonnaText } from "@/components/ui/DonnaText"
-import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Input } from "@/components/ui/input"
 import { useChatContext } from "@/context/ChatContext"
 import { useChat, useChatMessages } from "@/hooks/useChat"
 import { trackUIEvent } from "@/services/telemetry"
@@ -24,26 +22,18 @@ function mentionToneClass(kind: "contact" | "thread" | "event" | "task" | "memor
     if (kind === "event") return "border-emerald-300/70 bg-emerald-50 text-emerald-900"
     if (kind === "thread") return "border-violet-300/70 bg-violet-50 text-violet-900"
     if (kind === "task") return "border-rose-300/70 bg-rose-50 text-rose-900"
-    return "border-auburn/30 bg-auburn/[0.06] text-auburn"
+    return "border-primary/30 bg-primary/[0.06] text-primary"
 }
 
 export function OmniChatOverlay() {
     const { isOpen, setIsOpen, mode } = useChatContext()
-    const {
-        currentSessionId,
-        sendMessage,
-        createSession,
-        isSending,
-        isCreating,
-    } = useChat()
-
-    // Updated hook utilization to get pendingActions
+    const { currentSessionId, sendMessage, createSession, isSending, isCreating } = useChat()
     const { data: messages, pendingActions } = useChatMessages(currentSessionId)
 
     const [inputValue, setInputValue] = React.useState("")
     const scrollRef = React.useRef<HTMLDivElement>(null)
-    const inputRef = React.useRef<HTMLInputElement>(null)
-    const pathname = usePathname()
+    const inputRef  = React.useRef<HTMLInputElement>(null)
+    const pathname  = usePathname()
 
     const {
         listboxId,
@@ -66,12 +56,19 @@ export function OmniChatOverlay() {
         },
     })
 
-    // Auto-scroll to bottom when messages change
     React.useEffect(() => {
         if (scrollRef.current) {
-            scrollRef.current.scrollIntoView({ behavior: 'smooth' })
+            scrollRef.current.scrollIntoView({ behavior: "smooth" })
         }
     }, [messages, pendingActions, isSending])
+
+    // Focus input as soon as the panel is open
+    React.useEffect(() => {
+        if (isOpen) {
+            const t = setTimeout(() => inputRef.current?.focus(), 80)
+            return () => clearTimeout(t)
+        }
+    }, [isOpen])
 
     const selectedInlineMentions = React.useMemo(() => {
         if (!inputValue.trim()) return []
@@ -89,219 +86,301 @@ export function OmniChatOverlay() {
 
         const content = inputValue.trim()
         const mentions = parseMentions(content)
-        setInputValue("") // Optimistic clear
+        setInputValue("")
         clearMentionState()
 
         try {
             if (!currentSessionId) {
-                // First create a session, then send the message to it.
                 const session = await createSession({ mode })
                 await sendMessage({ session_id: session.id, content, mode, mentions })
-                trackUIEvent("chat_message_sent", {
-                    has_mentions: mentions.length > 0,
-                    mention_count: mentions.length,
-                    source: "overlay",
-                })
             } else {
                 await sendMessage({ session_id: currentSessionId, content, mode, mentions })
-                trackUIEvent("chat_message_sent", {
-                    has_mentions: mentions.length > 0,
-                    mention_count: mentions.length,
-                    source: "overlay",
-                })
             }
+            trackUIEvent("chat_message_sent", {
+                has_mentions: mentions.length > 0,
+                mention_count: mentions.length,
+                source: "overlay",
+            })
         } catch {
-            toast.error("Failed to send message")
-            setInputValue(content) // Restore on error
+            toast.error("That didn't send. Try again.")
+            setInputValue(content)
         }
     }
 
-    // Don't show overlay if already on a dedicated chat page or auth pages
-    if (pathname === "/chat" ||
+    if (
+        pathname === "/chat" ||
         pathname.startsWith("/dashboard/chat") ||
         pathname === "/login" ||
-        pathname.startsWith("/auth")) return null
+        pathname.startsWith("/auth")
+    ) return null
 
     return (
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
-            <DialogTrigger asChild>
-                <DonnaButton
-                    variant="default" // Auburn
-                    size="icon"
-                    className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-card-hover hover:scale-105 transition-transform z-50"
-                    onClick={() => setIsOpen(true)}
+        <DialogPrimitive.Root open={isOpen} onOpenChange={setIsOpen}>
+
+            {/* ── FAB trigger — Peony, bottom-right ── */}
+            <DialogPrimitive.Trigger asChild>
+                <button
+                    aria-label={isOpen ? "Close chat" : "Open Teeks chat"}
+                    className={cn(
+                        "fixed bottom-6 right-6 z-50",
+                        "h-14 w-14 rounded-full",
+                        "bg-primary text-white",
+                        "flex items-center justify-center",
+                        "shadow-[0_4px_20px_rgba(194,24,91,0.30)]",
+                        "transition-all duration-150",
+                        "hover:bg-primary/90 active:scale-[0.94]",
+                    )}
                 >
-                    <MessageSquare className="h-6 w-6 text-linen" />
-                </DonnaButton>
-            </DialogTrigger>
+                    {isOpen
+                        ? <X size={20} strokeWidth={2} />
+                        : <MessageSquare size={20} strokeWidth={1.8} />
+                    }
+                </button>
+            </DialogPrimitive.Trigger>
 
-            {/* Vellum Overlay Content */}
-            <DialogContent
-                className="sm:max-w-[500px] h-[80vh] flex flex-col p-0 gap-0 border-border/40 shadow-2xl bg-white/95 backdrop-blur-sm"
-                // Override default dialog overlay to be lighter/vellum
-                overlayClassName="bg-white/60 backdrop-blur-[2px]"
-                onInteractOutside={(e) => e.preventDefault()} // Prevent closing when interacting outside heavily
-            >
-                {/* Header */}
-                <div className="flex items-center justify-between p-4 border-b border-border/40 bg-linen/50">
-                    <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-auburn flex items-center justify-center">
-                            <Sparkles size={16} className="text-linen" />
-                        </div>
-                        <div>
-                            <DialogTitle className="font-playfair text-lg text-auburn font-semibold">Teeks</DialogTitle>
-                            <DialogDescription className="sr-only">Chat with Teeks assistant</DialogDescription>
-                            <DonnaText variant="label" className="text-[10px] text-muted-foreground/80">
-                                {mode === 'action' ? 'Action Mode' : 'Reflection Mode'}
-                            </DonnaText>
-                        </div>
-                    </div>
-                    <DonnaButton variant="ghost" size="icon" onClick={() => setIsOpen(false)} className="h-8 w-8 text-muted-foreground hover:text-auburn">
-                        <X size={18} />
-                    </DonnaButton>
-                </div>
+            <DialogPrimitive.Portal>
 
-                {/* Chat Area */}
-                <ScrollArea className="flex-1 p-4 bg-linen/20">
-                    <div className="flex flex-col gap-4 min-h-full">
-                        {!currentSessionId && messages?.length === 0 && (
-                            <div className="flex flex-col items-center justify-center flex-1 mt-20 opacity-60">
-                                <Sparkles size={32} className="text-copper mb-3" />
-                                <DonnaText variant="h4" className="text-muted-foreground text-base">How can I help you clear your desk?</DonnaText>
-                            </div>
-                        )}
+                {/* Barely-there backdrop — 10% black, not 80% */}
+                <DialogPrimitive.Overlay className={cn(
+                    "fixed inset-0 z-50 bg-black/10",
+                    "data-[state=open]:animate-in  data-[state=open]:fade-in-0",
+                    "data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+                    "duration-200",
+                )} />
 
-                        {messages?.map((msg) => (
-                            <div key={msg.id} className="flex flex-col">
-                                <MessageBubble
-                                    role={msg.role}
-                                    content={msg.content}
-                                    timestamp={msg.created_at}
-                                />
-                            </div>
-                        ))}
-
-                        {(isSending || isCreating) && (
-                            <div className="flex justify-start mb-4">
-                                <div className="bg-white border border-border/40 rounded-2xl rounded-tl-sm p-3 shadow-sm flex items-center gap-2">
-                                    <Loader2 className="h-4 w-4 animate-spin text-auburn" />
-                                    <span className="text-sm text-muted-foreground">Teeks is thinking...</span>
-                                </div>
-                            </div>
-                        )}
-                        <div ref={scrollRef} />
-                    </div>
-                </ScrollArea>
-
-                {/* Input Area */}
-                <div className="p-4 bg-white border-t border-border/40">
-                    {currentSessionId && pendingActions?.length > 0 && (
-                        <ApprovalGateComposer
-                            pendingActions={pendingActions}
-                            disabled={isSending || isCreating}
-                            onSendDecision={async (command) => {
-                                await sendMessage({
-                                    session_id: currentSessionId,
-                                    content: command,
-                                    mode: "action",
-                                    mentions: [],
-                                })
-                                trackUIEvent("chat_approval_sent", {
-                                    source: "overlay",
-                                    pending_count: pendingActions.length,
-                                })
-                            }}
-                        />
+                {/* ── Floating panel — bottom-right, drops in from below ── */}
+                <DialogPrimitive.Content
+                    style={{
+                        boxShadow: "0 12px 40px rgba(0,0,0,0.14), 0 4px 12px rgba(0,0,0,0.08)",
+                    }}
+                    className={cn(
+                        // Position — sits just above the FAB
+                        "fixed bottom-24 right-6 z-50",
+                        // Size
+                        "w-[400px] h-[68vh] max-h-[640px]",
+                        // Mobile: stretch edge-to-edge above FAB
+                        "max-sm:left-3 max-sm:right-3 max-sm:w-auto max-sm:bottom-20",
+                        // Surface — frosted glass per design spec
+                        "bg-white/92 backdrop-blur-xl",
+                        "border border-white/50",
+                        "rounded-[20px]",
+                        // Layout
+                        "flex flex-col overflow-hidden",
+                        // Animation — scale from bottom-right corner (near FAB)
+                        "origin-bottom-right",
+                        "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:slide-in-from-bottom-2",
+                        "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:slide-out-to-bottom-2",
+                        "duration-200",
                     )}
+                >
+                    <DialogPrimitive.Title className="sr-only">Teeks chat</DialogPrimitive.Title>
+                    <DialogPrimitive.Description className="sr-only">Quick chat with your AI assistant</DialogPrimitive.Description>
 
-                    {selectedInlineMentions.length > 0 && (
-                        <div className="mb-2.5 flex flex-wrap gap-1.5">
-                            {selectedInlineMentions.map((mention) => (
-                                <span
-                                    key={`${mention.kind}:${mention.ref}`}
-                                    className={cn(
-                                        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium",
-                                        mentionToneClass(mention.kind)
-                                    )}
-                                >
-                                    {mention.kind === "memory" ? "/" : "@"}{mention.label}
-                                    <button
-                                        type="button"
-                                        className="opacity-70 hover:opacity-100"
-                                        onClick={() => removeInlineMention(mention.kind, mention.label)}
-                                        aria-label={`Remove ${mention.label}`}
-                                    >
-                                        <X size={12} />
-                                    </button>
-                                </span>
-                            ))}
+                    {/* ── Header ── */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 flex-shrink-0">
+                        <div className="flex items-center gap-2.5">
+                            {/* Logo mark */}
+                            <span className="w-7 h-7 bg-primary rounded-[6px] flex items-center justify-center flex-shrink-0">
+                                <span className="font-playfair font-bold text-[13px] text-white leading-none">T</span>
+                            </span>
+                            <span className="font-playfair font-semibold text-[16px] text-foreground tracking-tight">
+                                Teeks
+                            </span>
+                            {/* Mode pill — Brass for action, Sage for reflection */}
+                            <span className={cn(
+                                "text-[10px] font-bold uppercase tracking-[1px] font-inter px-2 py-0.5 rounded-full",
+                                mode === "action"
+                                    ? "bg-[#A07850]/10 text-[#A07850]"
+                                    : "bg-[#4D7C0F]/10 text-[#4D7C0F]"
+                            )}>
+                                {mode === "action" ? "Action" : "Reflect"}
+                            </span>
                         </div>
-                    )}
-                    <form className="flex gap-2" onSubmit={handleSubmit}>
-                        <div className="relative flex-1">
-                            <Input
-                                ref={inputRef}
-                                aria-label="Chat message input"
-                                placeholder="Ask Teeks to draft specific..."
-                                className="flex-1 bg-linen border-border focus-visible:ring-auburn/20 font-inter"
-                                value={inputValue}
-                                role="combobox"
-                                aria-autocomplete="list"
-                                aria-expanded={Boolean(mentionContext || loadingSuggestions)}
-                                aria-controls={listboxId}
-                                aria-activedescendant={mentionSuggestions[activeSuggestionIndex] ? `${listboxId}-option-${activeSuggestionIndex}` : undefined}
-                                onChange={(e) => {
-                                    const value = e.target.value
-                                    const cursor = e.target.selectionStart ?? value.length
-                                    onInputChange(value, cursor)
-                                }}
-                                onKeyDown={onInputKeyDown}
-                                disabled={isSending || isCreating}
-                            />
-                            {(mentionContext || loadingSuggestions) && (
-                                <div
-                                    id={listboxId}
-                                    role="listbox"
-                                    className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border border-border/60 bg-white shadow-md max-h-72 overflow-y-auto overscroll-contain"
-                                >
-                                    {loadingSuggestions ? (
-                                        <div className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">Loading mentions...</div>
-                                    ) : mentionSuggestions.length > 0 ? (
-                                        mentionSuggestions.map((suggestion, index) => (
-                                            <button
-                                                id={`${listboxId}-option-${index}`}
-                                                key={suggestion.key}
-                                                type="button"
-                                                role="option"
-                                                aria-selected={index === activeSuggestionIndex}
-                                                className={`w-full px-3 py-2 text-left text-xs hover:bg-linen/80 ${index === activeSuggestionIndex ? "bg-linen outline-none ring-1 ring-auburn/30" : ""
-                                                    }`}
-                                                onMouseDown={(evt) => {
-                                                    evt.preventDefault()
-                                                    applySuggestion(suggestion)
-                                                }}
-                                            >
-                                                {suggestion.display}
-                                            </button>
-                                        ))
-                                    ) : (
-                                        <div className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">No matches</div>
-                                    )}
+                        <button
+                            type="button"
+                            onClick={() => setIsOpen(false)}
+                            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                            aria-label="Close"
+                        >
+                            <X size={16} strokeWidth={1.8} />
+                        </button>
+                    </div>
+
+                    {/* ── Messages ── */}
+                    <ScrollArea className="flex-1 px-4 py-4">
+                        <div className="flex flex-col gap-3 min-h-full">
+
+                            {/* Empty state */}
+                            {!messages?.length && !isSending && (
+                                <div className="pt-6">
+                                    <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter mb-2">
+                                        {new Date().toLocaleDateString("en-US", {
+                                            weekday: "long",
+                                            month: "short",
+                                            day: "numeric",
+                                        })}
+                                    </p>
+                                    <p className="font-playfair text-[20px] font-semibold text-foreground tracking-tight leading-snug">
+                                        What can I<br />help you with?
+                                    </p>
                                 </div>
                             )}
+
+                            {messages?.map((msg) => (
+                                <div key={msg.id} className="flex flex-col">
+                                    <MessageBubble
+                                        role={msg.role}
+                                        content={msg.content}
+                                        timestamp={msg.created_at}
+                                    />
+                                </div>
+                            ))}
+
+                            {/* Three-dot typing indicator — never a spinner */}
+                            {(isSending || isCreating) && (
+                                <div className="flex justify-start">
+                                    <div className="bg-white border border-border rounded-2xl rounded-bl-[4px] px-4 py-3.5 flex items-center gap-1.5"
+                                        style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.07)" }}>
+                                        <span className="teeks-dot" style={{ animationDelay: "0ms" }} />
+                                        <span className="teeks-dot" style={{ animationDelay: "200ms" }} />
+                                        <span className="teeks-dot" style={{ animationDelay: "400ms" }} />
+                                    </div>
+                                </div>
+                            )}
+
+                            <div ref={scrollRef} />
                         </div>
-                        <DonnaButton
-                            type="submit"
-                            size="icon"
-                            variant="secondary"
-                            className="shrink-0"
-                            disabled={!inputValue.trim() || isSending || isCreating}
-                        >
-                            {isSending || isCreating ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-                        </DonnaButton>
-                    </form>
-                </div>
-            </DialogContent>
-        </Dialog>
+                    </ScrollArea>
+
+                    {/* ── Input area ── */}
+                    <div className="px-4 pb-4 pt-2 flex-shrink-0 border-t border-border/50">
+
+                        {currentSessionId && pendingActions?.length > 0 && (
+                            <div className="mb-3">
+                                <ApprovalGateComposer
+                                    pendingActions={pendingActions}
+                                    disabled={isSending || isCreating}
+                                    onSendDecision={async (command) => {
+                                        await sendMessage({
+                                            session_id: currentSessionId,
+                                            content: command,
+                                            mode: "action",
+                                            mentions: [],
+                                        })
+                                        trackUIEvent("chat_approval_sent", {
+                                            source: "overlay",
+                                            pending_count: pendingActions.length,
+                                        })
+                                    }}
+                                />
+                            </div>
+                        )}
+
+                        {selectedInlineMentions.length > 0 && (
+                            <div className="mb-2 flex flex-wrap gap-1.5">
+                                {selectedInlineMentions.map((mention) => (
+                                    <span
+                                        key={`${mention.kind}:${mention.ref}`}
+                                        className={cn(
+                                            "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium font-inter",
+                                            mentionToneClass(mention.kind)
+                                        )}
+                                    >
+                                        {mention.kind === "memory" ? "/" : "@"}{mention.label}
+                                        <button
+                                            type="button"
+                                            className="opacity-70 hover:opacity-100"
+                                            onClick={() => removeInlineMention(mention.kind, mention.label)}
+                                            aria-label={`Remove ${mention.label}`}
+                                        >
+                                            <X size={11} />
+                                        </button>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+
+                        <form className="flex gap-2 items-center" onSubmit={handleSubmit}>
+                            <div className="relative flex-1">
+                                <Input
+                                    ref={inputRef}
+                                    aria-label="Chat message input"
+                                    role="combobox"
+                                    aria-autocomplete="list"
+                                    aria-expanded={Boolean(mentionContext || loadingSuggestions)}
+                                    aria-controls={listboxId}
+                                    aria-activedescendant={
+                                        mentionSuggestions[activeSuggestionIndex]
+                                            ? `${listboxId}-option-${activeSuggestionIndex}`
+                                            : undefined
+                                    }
+                                    placeholder="Ask Teeks?"
+                                    value={inputValue}
+                                    onChange={(e) => {
+                                        const value = e.target.value
+                                        const cursor = e.target.selectionStart ?? value.length
+                                        onInputChange(value, cursor)
+                                    }}
+                                    onKeyDown={onInputKeyDown}
+                                    disabled={isSending || isCreating}
+                                    className="h-10 text-[13px] bg-background/80 border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 font-inter"
+                                />
+
+                                {/* Mention suggestions */}
+                                {(mentionContext || loadingSuggestions) && (
+                                    <div
+                                        id={listboxId}
+                                        role="listbox"
+                                        className="absolute left-0 right-0 bottom-full z-50 mb-1 rounded-[10px] border border-border bg-white shadow-md max-h-48 overflow-y-auto overscroll-contain"
+                                    >
+                                        {loadingSuggestions ? (
+                                            <div className="px-3 py-2 text-xs text-muted-foreground font-inter" aria-live="polite">
+                                                Loading…
+                                            </div>
+                                        ) : mentionSuggestions.length > 0 ? (
+                                            mentionSuggestions.map((suggestion, index) => (
+                                                <button
+                                                    key={suggestion.key}
+                                                    id={`${listboxId}-option-${index}`}
+                                                    type="button"
+                                                    role="option"
+                                                    aria-selected={index === activeSuggestionIndex}
+                                                    className={cn(
+                                                        "w-full px-3 py-2 text-left text-xs font-inter hover:bg-muted/40 transition-colors",
+                                                        index === activeSuggestionIndex && "bg-muted/40 ring-1 ring-inset ring-primary/20"
+                                                    )}
+                                                    onMouseDown={(e) => { e.preventDefault(); applySuggestion(suggestion) }}
+                                                >
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="font-medium text-foreground">{suggestion.display}</span>
+                                                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border/60 rounded-full px-1.5 py-0.5">
+                                                            {suggestion.kind}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            ))
+                                        ) : (
+                                            <div className="px-3 py-2 text-xs text-muted-foreground font-inter" aria-live="polite">
+                                                No matches
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Send — Peony, always */}
+                            <button
+                                type="submit"
+                                aria-label="Send message"
+                                disabled={!inputValue.trim() || isSending || isCreating}
+                                className="h-10 w-10 rounded-full bg-primary text-white flex items-center justify-center shrink-0 disabled:opacity-30 hover:bg-primary/90 active:scale-[0.94] transition-all shadow-sm"
+                            >
+                                <ArrowUp size={17} strokeWidth={2.5} />
+                            </button>
+                        </form>
+                    </div>
+                </DialogPrimitive.Content>
+            </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
     )
 }

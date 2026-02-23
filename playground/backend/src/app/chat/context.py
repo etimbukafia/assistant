@@ -9,20 +9,7 @@ from datetime import datetime, timezone, timedelta
 import logging
 from sqlalchemy.orm import Session
 
-from app.data.models import (
-    ChatSession, ChatMessage, Message, Task, CalendarEvent,
-    UserSettings, PrincipalMemory
-)
-from app.intelligence.context_builder import ContextBuilder
-from app.services.vault_context import VaultContextService
-from app.security.prompt_sanitizer import (
-    sanitize_for_prompt,
-    wrap_user_content,
-    detect_injection_attempt,
-    sanitize_email_content,
-    sanitize_task_content
-)
-from app.security.security_logger import log_injection_attempt
+from app.data.models import ChatSession, ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +36,7 @@ class ConversationState:
 
     pending_options: List[Dict] = field(default_factory=list)
     pending_confirmation: Optional[Dict] = None
+    deferred_actions: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -69,7 +57,8 @@ class ConversationState:
             workflow_data=data.get("workflow_data", {}),
             awaiting_input=data.get("awaiting_input"),
             pending_options=data.get("pending_options", []),
-            pending_confirmation=data.get("pending_confirmation")
+            pending_confirmation=data.get("pending_confirmation"),
+            deferred_actions=data.get("deferred_actions", []),
         )
 
 
@@ -83,8 +72,6 @@ class ChatContextManager:
     def __init__(self, db: Session, user_id: str):
         self.db = db
         self.user_id = user_id
-        self.context_builder = ContextBuilder(db, user_id)
-        self.vault_context_service = VaultContextService(db, user_id)
 
     def get_session_state(self, session: ChatSession) -> ConversationState:
         return ConversationState.from_dict(session.state or {})
@@ -94,8 +81,15 @@ class ChatContextManager:
         session.last_activity_at = datetime.now(timezone.utc)
 
     def get_recent_messages(self, session_id: str, limit: int = None) -> List[Dict[str, Any]]:
-        _ = (session_id, limit)
-        return []
+        rows = (
+            self.db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session_id)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(limit or self.MAX_HISTORY_MESSAGES)
+            .all()
+        )
+        rows = list(reversed(rows))
+        return [{"role": row.role, "content": row.content} for row in rows]
 
     def get_work_context(self, state: ConversationState) -> Dict[str, Any]:
         _ = state

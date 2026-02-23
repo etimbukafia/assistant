@@ -24,6 +24,7 @@ from app.routes.warm_cache import router as warm_cache_router  # noqa: E402
 from app.routes.inbox import router as inbox_router  # noqa: E402
 from app.routes.calendar import router as calendar_router  # noqa: E402
 from app.routes.action_tools import router as action_tools_router  # noqa: E402
+from app.routes.v1.chat import router as v1_chat_router  # noqa: E402
 
 
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -60,3 +61,4 @@ app.include_router(warm_cache_router, prefix="/api")
 app.include_router(inbox_router, prefix="/api")
 app.include_router(calendar_router, prefix="/api")
 app.include_router(action_tools_router, prefix="/api")
+app.include_router(v1_chat_router, prefix="/v1")

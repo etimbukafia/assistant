@@ -208,7 +208,7 @@ export const chatService = {
         limit = 8,
         sessionId = "default",
         offset = 0,
-        memoryType?: "decision" | "commitment" | "preferences" | "relationships" | "insight"
+        memoryType?: "decision" | "commitment" | "preferences" | "relationships" | "risks"
     ): Promise<MentionSuggestion[]> {
         const response = await api.get<MentionSuggestion[]>("/chat/slash-suggestions", {
             params: { q: query || undefined, limit, offset, memory_type: memoryType, session_id: sessionId },

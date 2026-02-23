@@ -39,7 +39,7 @@ def build_profile_snapshot(db: Session, user_id: str) -> Dict[str, Any]:
         db.query(ContextEntry)
         .filter(
             ContextEntry.user_id == user_id,
-            ContextEntry.entity_type.in_(["assistant", "executive"]),
+            ContextEntry.entity_type == "global",
         )
         .order_by(ContextEntry.created_at.desc())
         .limit(MAX_SOURCE_ROWS)

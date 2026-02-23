@@ -1,126 +1,116 @@
-# Donna: Product Flow & User Journey
+# Teeks: Product Flow & User Journey
 
-This document outlines the end-to-end experience for an **Executive Assistant (EA)** using Donna to manage their Executive's life with effortless precision.
-
----
-
-## 1. The Onboarding Flow (The Handover)
-
-The goal is to transition the EA from "managing mail" to "having a high-performance partner."
-
-1. **The Entry**: EA lands on a minimalist, premium Linen Stationery page.
-2. **The Handover**: EA connects the Executive's Gmail. Donna explains what she looks for: *Context, Commitments, and Chaos.*
-3. **The Initial Ingestion**: While syncing, Donna calculates the Executive's current landscape.
-4. **The First Brief**: The EA enters the **Inbox** tab and sees their first **Executive Summary**. "I've analyzed 45 unread emails for [Executive Name]. 3 are urgent, 8 are FYI, and I've prepared responses for you to review."
+This document defines the end-to-end experience for an Executive Assistant using Teeks. Every flow is designed around a single constraint: **the EA is always short on time and long on judgment**.  Teeks handles the former to free the latter.
 
 ---
 
-## 2. A "Day in the Life" (The Anticipatory Loop)
+## 1. Onboarding — The First 90 Seconds
 
-### 08:00 AM — The Morning Briefing
-*   **Trigger**: EA opens the app for the first time.
-*   **Donna’s Action**: Presents a unified feed of **Cards** representing the Executive's needs.
-*   **User Experience**: High-priority items stay on top. Each card has a "Boutique Insight" tag: *"The Executive's contact is usually slow on Fridays; I've suggested we push the deadline to Monday."*
+The onboarding does one job: get the EA from "account created" to "first useful thing seen" in under 90 seconds. That is it. No tutorial. No feature tour. No celebration screen.
 
-### 11:30 AM — The Micro-Intervention
-*   **Trigger**: An urgent email arrives from a Board Member.
-*   **Donna’s Action**: The Orchestrator detects high-confidence intent.
-*   **User Experience**: Notification: *"Board meeting request. I've found a 30min gap at 2 PM that doesn't conflict with your deep work. Drafted a confirmation—send?"*
-*   **User Action**: Single-tap [Send]. Donna handles the rest.
+| Step | Screen | What happens |
+| :--- | :--- | :--- |
+| 1 | **Landing** | Single CTA: "Connect your Gmail" — Ivory background, Playfair headline, Peony button |
+| 2 | **OAuth** | Gmail permission screen — standard browser flow, no custom UI |
+| 3 | **Sync** | Brass progress line at top. Copy: *"Syncing your inbox."* No percentage, no spinner. |
+| 4 | **Today Feed** | First card appears. The product is already working. |
 
-### 02:00 PM — The Context Shift
-*   **Trigger**: The Executive enters a meeting.
-*   **Donna’s Action**: Pulls relevant historical context for the EA to pass along or use in briefings.
-*   **User Experience**: EA taps the meeting card. Sees the "Boutique Summary":
-    *   *Context: Budget was approved at $50k last month.*
-    *   *Warning: Attendee Sarah hasn't submitted her report to the Executive yet.*
-
-### 05:30 PM — The Evening Handover
-*   **Trigger**: End of business hours.
-*   **Donna’s Action**: Synthesizes the day's wins for the EA's final report.
-*   **User Experience**: *"7 tasks handled for the Executive. 2 replies drafted and sent via your approval. You're clear for the evening."*
+**No onboarding carousel.** If the product needs a slideshow to explain itself, the product is wrong.
 
 ---
 
-## 3. Visual Product Flow (Mermaid)
+## 2. The Daily Loop
 
-```mermaid
-graph TD
-    A[User Connects Gmail] --> B{Initial Sync}
-    B -->|Ingestion| C[The Morning Briefing]
-    
-    subgraph Daily Loop
-        C --> D[Unified Feed: Cards]
-        D -->|New Event| E{Orchestrator Decision}
-        E -->|High Confidence| F[Proactive Draft/Action]
-        E -->|Low Confidence| G[Notify User for Input]
-        F -->|User Approval| H[Execution: Send/Schedule]
-    end
-    
-    H --> I[Activity Log: Transparency]
-    G --> I
-    I --> D
-    
-    D --> J[Evening Recap]
-    J --> K[Standby Mode]
+### 08:00 — Morning orientation
+EA opens Teeks. The Today feed shows cards ordered by urgency — Carmine-bordered items first, then chronological. The EA sees what needs attention, not a raw inbox.
+
+### Mid-morning — The micro-intervention
+An email arrives requiring action. Teeks has already prepared a draft. The EA sees an action card with a "Send" button — one tap. No composition. No formatting. Just approve or edit.
+
+### Meeting time — Context ready
+The EA taps a calendar event. Teeks surfaces relevant context: last interaction with attendees, outstanding items, anything that belongs in a briefing. The EA walks in informed.
+
+### End of day — Reflection
+The EA starts a Reflection session. Teeks switches to the Sage-accented mode. The tone changes. This is not a task mode — it is a thinking space. The input placeholder says: *"What's on your mind?"*
+
+---
+
+## 3. Core Interaction Flows
+
+### Flow A: Draft Email Approval
+
+```
+[Action Card appears in chat]
+      ↓
+[EA reads draft — 3 lines, no more]
+      ↓
+    ┌──────────────────────────────┐
+    │  [Send]        [Edit]        │
+    │   Peony         Ghost        │
+    └──────────────────────────────┘
+         ↓                ↓
+  [Sent. Thread        [Draft View
+   archived.]           opens for
+   Toast + archive.     inline edit]
 ```
 
+**Design rules:**
+- The draft is shown in full — not a preview. The EA must see exactly what will be sent.
+- "Send" is Peony. Full width. No ambiguity about which button is primary.
+- "Edit" is ghost text — it is an escape hatch, not a competing action.
+- After send: toast message (*"Sent. Thread archived."*), not a modal.
+
+### Flow B: Calendar Block Creation
+
+```
+[EA types: "Block my calendar Thursday 6am–10am, Vienna flight"]
+      ↓
+[Teeks creates action card]
+      ↓
+┌────────────────────────────────────┐
+│  ✈ Vienna Flight                   │
+│  Thursday, Feb 27 · 6:00–10:00 AM  │
+│  Blocked — no notifications         │
+│                                    │
+│  [Confirm]          [Cancel]        │
+└────────────────────────────────────┘
+      ↓
+[Event created. Calendar updated.]
+```
+
+**Design rule**: The action card shows the exact event that will be created — not "I'll create an event for you." The EA approves facts, not intentions.
+
+### Flow C: Reflection Session
+
+```
+[EA taps new chat → Mode: Reflection]
+      ↓
+[Screen accent shifts: Brass → Sage]
+[Placeholder: "What's on your mind?"]
+      ↓
+[Ephemeral session — no history kept after close]
+[Bottom: "This conversation stays private."]
+```
+
+**Design rule**: Reflection sessions carry no action cards. No "approve" buttons. No tasks created. It is a thinking space. The design must communicate that difference visually — the Sage colour scheme does this work.
+
 ---
 
-## 4. Core Action Flows
+## 4. Interaction Pillars
 
-### Flow A: Task Management (Approval to Action)
-*   **Action**: High-confidence task extracted from an email.
-*   **Entry State**: A card in the feed with a `[Navy Border]` and an `[Approve]` button.
-*   **Steps**:
-    1.  User reviews the `Source Snippet` on the card.
-    2.  User taps `[Approve]`.
-    3.  Donna transitions the card state: The button changes to `[Done]` or `[Reply]`.
-    4.  The task is added to the **Task Hub** (`Task` record created in DB).
-*   **Exit State**: The card is moved to the "Approved" section of the feed or the **Task Hub**.
+### I. One tap to resolve
+Every Teeks-generated action presents a single primary button. The EA should never need to think "what do I do with this?" — Teeks has already decided what the right action is and surfaced it.
 
-### Flow B: The "One-Tap" Communication
-*   **Action**: An email requires a response.
-*   **Entry State**: A card with a red `Needs Reply` indicator and a pre-generated `[Draft Suggestion]`.
-*   **Steps**:
-    1.  User taps the `[Draft Suggestion]` to enter **Draft View**.
-    2.  User reviews the AI text (which incorporates **Principal Memory** tone).
-    3.  User either:
-        -   Taps `[Send]` (High-speed exit).
-        -   Taps the text to **Edit** (Triggers **Memory Engine** to observe changes).
-    4.  Donna sends via `CommunicationModule`.
-*   **Exit State**: Confirmation toast: *"Sent. I've archived the thread for you."* Back to Dashboard.
+### II. Prepare, not prompt
+Teeks shows prepared work for approval, not open-ended questions. "Here's a draft" not "Would you like me to draft a reply?" The preparation happened before the EA opened the card.
 
-### Flow C: Scheduling Coordination
-*   **Action**: Request for a meeting.
-*   **Entry State**: Card showing conflicting events and a `[Suggest Times]` button.
-*   **Steps**:
-    1.  User taps `[Suggest Times]`.
-    2.  Donna opens a **Scheduling Panel** with three "Executive Navy" slots that fit the user's `Preferred Meeting Times`.
-    3.  User selects one or all slots.
-    4.  User taps `[Send Options]`.
-*   **Exit State**: Card status changes to `Waiting for Confirmation`.
+### III. Transparent by default
+Every action Teeks prepared is visible to the EA before execution. There are no background actions, no auto-sends, no autonomous behaviours. The EA's final tap is the authorisation.
 
----
-
-## 5. Interaction Pillars
-
-### I. The "One-Tap" Resolution
-Every Donna card must lead to a resolution in 1 tap.
-*   **Pattern**: [AI Drafted Action] + [Confirm/Edit]
-
-### II. The Boutique Filter
-Donna never shows "Pending" work. She shows "**Ready**" work that needs a nod.
-*   **Concept**: If Donna extracts a task, she shouldn't just list it; she should prepare the draft or calendar invite for a single-tap approval.
-
-### III. Radical Transparency
-Despite being anticipatory, Donna is never a "black box" and never acts on your behalf without your review.
-*   **The "Shadow" Feed**: A subtle log of what Donna has **prepared** while you were away. *"Drafted 12 newsletters, proposed 'Done' on 3 FYIs."*
-
-### V. The Pattern Tracker
-Donna observes repetitions (The "Miranda Effect"). If she sees the user always dismisses emails from a specific sender, she suggests a **Decision Pattern**: *"I've noticed you always archive these. Should I do it for you next time?"*
+### IV. The pattern is yours
+If Teeks notices the EA consistently handles the same type of email the same way, it surfaces the pattern: *"You archive emails from this sender every time. Want me to do that automatically?"* — with a clearly reversible yes/no. The EA is always in control of what Teeks learns.
 
 ---
 
 > [!IMPORTANT]
-> **Product Goal**: Donna should feel like she is always 15 minutes ahead of the EA, who is 15 minutes ahead of the Executive.
+> **The product goal**: Teeks should feel like it is always 15 minutes ahead of the EA, who is 15 minutes ahead of the Executive. If either gap is missing, a feature is failing.

@@ -101,6 +101,7 @@ export interface ThreadMessageDetail {
     body: string;
     summary?: string;
     received_at: string;
+    status: 'inbox' | 'done' | 'archived';
     scheduling_intent: boolean;
     scheduling_intent_type?: string;
 }
@@ -146,7 +147,9 @@ export async function fetchMessages(params?: {
  * Update message status (inbox, done, archived)
  */
 export async function updateMessageStatus(messageId: number, status: 'inbox' | 'done' | 'archived'): Promise<Message> {
-    const response = await api.patch<Message>(`/messages/${messageId}/status`, { status });
+    const response = await api.patch<Message>(`/messages/${messageId}/status`, null, {
+        params: { status },
+    });
     return response.data;
 }
 
@@ -164,6 +167,13 @@ export async function markMessageDone(messageId: number): Promise<Message> {
 export async function archiveMessage(messageId: number): Promise<Message> {
     const response = await api.post<Message>(`/messages/${messageId}/archive`);
     return response.data;
+}
+
+/**
+ * Restore an archived message back to inbox
+ */
+export async function restoreMessage(messageId: number): Promise<Message> {
+    return updateMessageStatus(messageId, 'inbox');
 }
 
 /**

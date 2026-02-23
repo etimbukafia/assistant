@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchMessages, markMessageDone, archiveMessage, deleteMessage, type Message, type MessagesResponse } from "@/services/messages";
+import { fetchMessages, markMessageDone, archiveMessage, restoreMessage, deleteMessage, type Message, type MessagesResponse } from "@/services/messages";
 import { tasksKeys } from "./useTasks";
+import { toast } from "sonner";
 
 export const messagesKeys = {
     all: ["messages"] as const,
@@ -94,6 +95,22 @@ export function useMessageMutations() {
         onSettled: invalidateAll,
     });
 
+    const restore = useMutation({
+        mutationFn: restoreMessage,
+        onMutate: async (messageId) => {
+            const previous = await snapshotMessages();
+            queryClient.setQueriesData({ queryKey: messagesKeys.lists() }, (old: unknown) =>
+                updateMessageInPages(old, messageId, (msg) => ({ ...msg, status: "inbox" as const }))
+            );
+            return { previous };
+        },
+        onSuccess: () => {
+            toast.success("Message restored to Inbox");
+        },
+        onError: (_err, _id, ctx) => restoreAndInvalidate(ctx?.previous),
+        onSettled: invalidateAll,
+    });
+
     const remove = useMutation({
         mutationFn: deleteMessage,
         onMutate: async (messageId) => {
@@ -108,5 +125,5 @@ export function useMessageMutations() {
         onSettled: invalidateAll,
     });
 
-    return { markDone, archive, remove };
+    return { markDone, archive, restore, remove };
 }

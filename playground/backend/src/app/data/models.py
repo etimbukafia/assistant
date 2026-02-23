@@ -1,9 +1,21 @@
-"""Playground models for diary, inbox, and calendar resources."""
+"""Playground models for diary, inbox, calendar, and chat resources."""
 
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Integer, String, UniqueConstraint, Index, text
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    Integer,
+    String,
+    UniqueConstraint,
+    Index,
+    text,
+    Text,
+    JSON,
+    ForeignKey,
+)
+from sqlalchemy.orm import declarative_base, relationship
 
 
 Base = declarative_base()
@@ -20,6 +32,7 @@ class ContextEntry(Base):
     entity_id = Column(String, nullable=True)
     created_by = Column(String, nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     importance_level = Column(String, nullable=False, default="normal")
     status = Column(String, nullable=False, default="active")
     expires_at = Column(DateTime, nullable=True)
@@ -193,3 +206,58 @@ class CalendarEvent(Base):
             "CalendarEvent(id={0.id}, user_id={0.user_id}, event_id={0.event_id}, "
             "subject={0.subject})"
         ).format(self)
+
+
+# =============================================================================
+# Chat
+# =============================================================================
+
+
+class ChatSession(Base):
+    """
+    Chat session container for command/reflection conversations.
+    Mirrors production session shape for architecture parity.
+    """
+    __tablename__ = "chat_sessions"
+
+    id = Column(String, primary_key=True)  # UUID
+    user_id = Column(String, nullable=False, index=True)
+    session_type = Column(String, nullable=False, default="command")  # command | reflection
+    title = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_activity_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    state = Column(JSON, nullable=False, default=dict)
+
+    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
+    pending_actions = relationship("ChatPendingAction", back_populates="session", cascade="all, delete-orphan")
+
+
+class ChatMessage(Base):
+    """Message record within a chat session."""
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id = Column(String, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String, nullable=False)  # user | assistant | system
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    message_metadata = Column(JSON, nullable=True, default=dict)
+
+    session = relationship("ChatSession", back_populates="messages")
+    pending_actions = relationship("ChatPendingAction", back_populates="message")
+
+
+class ChatPendingAction(Base):
+    """Approval-gated action proposed by chat."""
+    __tablename__ = "chat_pending_actions"
+
+    id = Column(String, primary_key=True)  # UUID
+    session_id = Column(String, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    message_id = Column(Integer, ForeignKey("chat_messages.id", ondelete="CASCADE"), nullable=True, index=True)
+    action_type = Column(String, nullable=False)
+    action_data = Column(JSON, nullable=False)
+    status = Column(String, nullable=False, default="pending")  # pending | approved | rejected | expired
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    session = relationship("ChatSession", back_populates="pending_actions")
+    message = relationship("ChatMessage", back_populates="pending_actions")

@@ -2,8 +2,6 @@
 
 import { Task } from "@/services/tasks";
 import { useTaskMutations } from "@/hooks/useTasks";
-import { DonnaButton } from "@/components/ui/DonnaButton";
-import { DonnaText } from "@/components/ui/DonnaText";
 import { Check, X, Loader2, Calendar } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -15,7 +13,7 @@ interface TaskItemProps {
 export function TaskItem({ task }: TaskItemProps) {
     const { approve, dismiss } = useTaskMutations();
 
-    const isPending = approve.isPending || dismiss.isPending;
+    const isPending  = approve.isPending || dismiss.isPending;
     const isApproved = task.status === "approved" || task.status === "in_progress" || task.status === "completed";
     const isDismissed = task.status === "dismissed";
 
@@ -29,7 +27,7 @@ export function TaskItem({ task }: TaskItemProps) {
         dismiss.mutate(task.id);
     };
 
-    if (isDismissed) return null; // Don't show dismissed tasks in the card
+    if (isDismissed) return null;
 
     return (
         <div className={cn(
@@ -40,49 +38,53 @@ export function TaskItem({ task }: TaskItemProps) {
         )}>
             <div className="space-y-1 flex-1 min-w-0 mr-4">
                 <div className="flex items-center gap-2">
-                    {isApproved && <Check size={14} className="text-sage" />}
-                    <DonnaText variant="h4" className={cn("text-sm font-medium truncate", isApproved && "text-sage line-through")}>
+                    {isApproved && <Check size={14} className="text-sage shrink-0" />}
+                    <p className={cn(
+                        "text-sm font-medium font-inter truncate",
+                        isApproved && "text-sage line-through"
+                    )}>
                         {task.title}
-                    </DonnaText>
+                    </p>
                 </div>
 
                 {task.deadline_at && (
                     <div className="flex items-center gap-1 text-muted-foreground">
                         <Calendar size={12} />
-                        <DonnaText variant="caption">
+                        <span className="text-xs font-inter">
                             Due {formatDistanceToNow(parseISO(task.deadline_at), { addSuffix: true })}
-                        </DonnaText>
+                        </span>
                     </div>
                 )}
             </div>
 
             {!isApproved && (
                 <div className="flex items-center gap-2 shrink-0">
-                    <DonnaButton
-                        size="sm"
-                        variant="ghost"
-                        className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    <button
+                        type="button"
+                        className="h-8 w-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40"
                         onClick={handleDismiss}
                         disabled={isPending}
                         title="Dismiss"
                     >
                         {dismiss.isPending ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />}
-                    </DonnaButton>
+                    </button>
 
-                    <DonnaButton
-                        size="sm"
-                        className="h-8 px-3 bg-auburn hover:bg-auburn/90 text-white gap-2"
+                    <button
+                        type="button"
+                        className="h-8 px-3 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-medium font-inter flex items-center gap-1.5 transition-colors disabled:opacity-40"
                         onClick={handleApprove}
                         disabled={isPending}
                         title="Approve"
                     >
-                        {approve.isPending ? <Loader2 size={14} className="animate-spin" /> : (
+                        {approve.isPending ? (
+                            <Loader2 size={14} className="animate-spin" />
+                        ) : (
                             <>
                                 <Check size={14} />
-                                <span className="text-xs">Approve</span>
+                                Approve
                             </>
                         )}
-                    </DonnaButton>
+                    </button>
                 </div>
             )}
         </div>

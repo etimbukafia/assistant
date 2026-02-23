@@ -45,8 +45,8 @@ class MeetingBriefService:
 
         decisions = [entry.content for entry in entries if entry.type == "decision"][:5]
         commitments = [entry.content for entry in entries if entry.type == "commitment"][:5]
-        risks = [entry.content for entry in entries if entry.type in {"insight", "relationships"}][:5]
-        open_items = [entry.content for entry in entries if entry.type in {"commitment", "insight"}][:6]
+        risks = [entry.content for entry in entries if entry.type in {"risks", "relationships"}][:5]
+        open_items = [entry.content for entry in entries if entry.type in {"commitment", "risks"}][:6]
         agenda = self._derive_agenda(event.title, decisions, commitments, risks)
         participants = self._participants(event.participants, participant_ids or [])
 
@@ -162,7 +162,7 @@ class MeetingBriefService:
             self.db.query(ContextEntry)
             .filter(
                 ContextEntry.user_id == self.user_id,
-                ContextEntry.entity_type.in_(["assistant", "executive"]),
+                ContextEntry.entity_type == "global",
                 ContextEntry.created_at >= threshold,
             )
             .order_by(ContextEntry.created_at.desc())

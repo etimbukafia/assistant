@@ -132,6 +132,7 @@ export default function InboxPage() {
                     <ThreadDetailPanel
                         threadId={selectedThreadId}
                         onClose={handleClosePanel}
+                        statusContext={view}
                     />
                 )}
             </div>

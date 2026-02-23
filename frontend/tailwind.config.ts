@@ -17,20 +17,24 @@ const config: Config = {
     },
     extend: {
       colors: {
-        // Base - Boutique Stationery (Light Mode)
-        linen: '#F9F6F2', // bgBase
-        surface: '#FFFFFF', // bgSurface, bgElevated
+        // ── Canonical Design System Tokens (Permanent Ink Palette) ──────────
+        peony:   '#C2185B', // accent-peony  — The moment. Primary CTA, active state
+        brass:   '#A07850', // accent-brass  — Action mode, warm secondary
+        ivory:   '#F5F0E8', // bg-base       — Ivory Paper, desk surface
+        carmine: '#9B1C1C', // urgent        — Carmine. Errors, urgent only
+        stone:   '#71717A', // text-secondary — Metadata, labels
+        ink:     '#18181B', // text-primary  — Ink Black
 
-        // Accents
-        auburn: '#7E2E2E', // accentPrimary
-        copper: '#D97745', // accentSecondary
-        teal: '#1A5F7A', // accentPrecision
-        sage: '#8A9A5B', // accentMint, success
-        burgundy: '#800020', // urgent/priority
-
-        // Text
-        obsidian: '#050505', // textPrimary
-        faint: '#9CA3AF', // textMuted        
+        // ── Legacy tokens (preserved for page components) ─────────────────
+        linen:    '#F9F6F2',
+        surface:  '#FFFFFF',
+        auburn:   '#7E2E2E',
+        copper:   '#D97745',
+        teal:     '#1A5F7A',
+        sage:     '#8A9A5B',
+        burgundy: '#800020',
+        obsidian: '#050505',
+        faint:    '#9CA3AF',
 
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

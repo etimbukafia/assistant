@@ -480,6 +480,8 @@ class MentionContextService:
         for mention in resolved:
             snapshot = self._get_snapshot_for_mention(mention)
             entries = _extract_entries(snapshot, mention.kind)
+            if mention.kind == "thread" and not entries:
+                entries = self._build_thread_message_entries(mention.ref)
             scored = _score_entries(entries, mention.kind, mention.label)
             trimmed = scored[:max_items_per_entity]
             entities.append(
@@ -524,6 +526,40 @@ class MentionContextService:
                 "max_mentions_per_message": MAX_MENTIONS_PER_MESSAGE,
             },
         }
+
+    def _build_thread_message_entries(self, thread_ref: str, limit: int = 3) -> List[Dict[str, Any]]:
+        rows = (
+            self.db.query(Message)
+            .filter(
+                Message.user_id == self.user_id,
+                Message.thread_id == thread_ref,
+            )
+            .order_by(Message.received_at.desc(), Message.created_at.desc())
+            .limit(max(1, min(limit, 5)))
+            .all()
+        )
+        entries: List[Dict[str, Any]] = []
+        for row in rows:
+            preview = (row.summary or row.decrypted_body or "").strip()
+            if not preview:
+                preview = (row.subject or "").strip()
+            preview = _compact_search_text(preview, max_len=260)
+            sender = (row.sender or "").strip() or "Unknown sender"
+            created_at = row.received_at or row.updated_at or row.created_at
+            entries.append(
+                {
+                    "id": f"thread_msg:{row.id}",
+                    "type": "thread_excerpt",
+                    "content": f"{sender}: {preview}" if preview else sender,
+                    "entity_type": "thread",
+                    "entity_id": thread_ref,
+                    "created_by": "Teeks",
+                    "created_at": created_at.isoformat() if created_at else None,
+                    "importance_level": "normal",
+                    "status": row.status or "inbox",
+                }
+            )
+        return entries
 
     def _normalize_mentions(self, mentions: Iterable[Dict[str, str]]) -> List[Mention]:
         results: List[Mention] = []
@@ -770,7 +806,7 @@ class MentionContextService:
             },
             {
                 "id": f"task:{task.id}:status",
-                "type": "insight",
+                "type": "risks",
                 "content": f"Task status: {task.status}",
                 "entity_type": "task",
                 "entity_id": entity_id,
@@ -796,7 +832,7 @@ class MentionContextService:
             timeline.append(
                 {
                     "id": f"task:{task.id}:description",
-                    "type": "insight",
+                    "type": "risks",
                     "content": task.description,
                     "entity_type": "task",
                     "entity_id": entity_id,
@@ -806,7 +842,7 @@ class MentionContextService:
                 }
             )
 
-        by_type: Dict[str, List[Dict[str, Any]]] = {"commitment": [], "insight": []}
+        by_type: Dict[str, List[Dict[str, Any]]] = {"commitment": [], "risks": []}
         for item in timeline:
             by_type.setdefault(item["type"], []).append(item)
 
@@ -829,13 +865,13 @@ class MentionContextService:
 def _extract_entries(snapshot: Dict[str, Any], kind: str) -> List[Dict[str, Any]]:
     by_type = snapshot.get("by_type", {}) or {}
     order_map = {
-        "contact": ["relationships", "preferences", "insight", "decision", "commitment"],
-        "event": ["decision", "commitment", "insight", "relationships", "preferences"],
-        "message": ["commitment", "decision", "insight", "relationships", "preferences"],
-        "thread": ["decision", "commitment", "insight", "relationships", "preferences"],
-        "task": ["commitment", "insight", "decision", "relationships", "preferences"],
+        "contact": ["relationships", "preferences", "risks", "decision", "commitment"],
+        "event": ["decision", "commitment", "risks", "relationships", "preferences"],
+        "message": ["commitment", "decision", "risks", "relationships", "preferences"],
+        "thread": ["decision", "commitment", "risks", "relationships", "preferences"],
+        "task": ["commitment", "risks", "decision", "relationships", "preferences"],
     }
-    order = order_map.get(kind, ["insight"])
+    order = order_map.get(kind, ["risks"])
     results: List[Dict[str, Any]] = []
     seen = set()
     for type_name in order:
@@ -867,7 +903,7 @@ def _kind_bonus(kind: str, entry_type: Optional[str]) -> float:
         "event": {"decision": 1.5, "commitment": 1.25},
         "message": {"commitment": 1.5, "decision": 1.25},
         "thread": {"decision": 1.5, "commitment": 1.25},
-        "task": {"commitment": 1.5, "insight": 1.0},
+        "task": {"commitment": 1.5, "risks": 1.0},
     }
     return priorities.get(kind, {}).get(entry_type or "", 0.0)
 
@@ -928,7 +964,7 @@ def _memory_type_title(value: str) -> str:
         "commitment": "Commitment",
         "preferences": "Preference",
         "relationships": "Relationship",
-        "insight": "Watchout",
+        "risks": "Risk",
     }
     return mapping.get((value or "").strip().lower(), "Remember")
 
@@ -969,12 +1005,12 @@ def _normalize_memory_type_query(query: str) -> Optional[str]:
         "preferences": "preferences",
         "relationship": "relationships",
         "relationships": "relationships",
-        "watchout": "insight",
-        "watchouts": "insight",
-        "insight": "insight",
-        "insights": "insight",
-        "risk": "insight",
-        "risks": "insight",
+        "watchout": "risks",
+        "watchouts": "risks",
+        "risks": "risks",
+        "insights": "risks",
+        "risk": "risks",
+        "risks": "risks",
     }
     return aliases.get(token)
 

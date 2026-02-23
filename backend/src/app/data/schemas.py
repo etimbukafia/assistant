@@ -74,6 +74,7 @@ class ThreadMessageResponse(BaseModel):
     body: str
     summary: Optional[str] = None
     received_at: datetime
+    status: str = "inbox"
     scheduling_intent: bool = False
     scheduling_intent_type: Optional[str] = None
 
@@ -612,17 +613,17 @@ class ContextType(str, Enum):
     decision = "decision"
     commitment = "commitment"
     preferences = "preferences"
-    insight = "insight"
+    risks = "risks"
     relationships = "relationships"
 
 
 class ContextEntityType(str, Enum):
-    assistant = "assistant"
+    global_ = "global"
     contact = "contact"
     thread = "thread"
     message = "message"
     event = "event"
-    executive = "executive"
+    task = "task"
 
 
 class ContextCreatedBy(str, Enum):
@@ -647,8 +648,9 @@ class ContextEntryBase(BaseModel):
     user_id: str
     type: ContextType
     content: str
-    entity_type: ContextEntityType
+    entity_type: ContextEntityType = ContextEntityType.global_
     entity_id: Optional[str] = None
+    linked_to: Optional[str] = None
     created_by: ContextCreatedBy
     created_at: datetime
     importance_level: ContextImportanceLevel = ContextImportanceLevel.normal
@@ -667,8 +669,9 @@ class DiaryEntryLinkSchema(BaseModel):
 class ContextEntryCreate(BaseModel):
     type: ContextType
     content: str
-    entity_type: ContextEntityType = ContextEntityType.executive
+    entity_type: ContextEntityType = ContextEntityType.global_
     entity_id: Optional[str] = None
+    linked_to: Optional[str] = None
     created_by: ContextCreatedBy = ContextCreatedBy.you
     importance_level: ContextImportanceLevel = ContextImportanceLevel.normal
     status: ContextEntryStatus = ContextEntryStatus.active

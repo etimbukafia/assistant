@@ -21,8 +21,8 @@ export interface VaultNote {
   last_referenced_at?: string | null;
 }
 
-export type DiaryEntryType = "decision" | "commitment" | "preferences" | "insight" | "relationships";
-export type DiaryEntityType = "assistant" | "executive" | "contact" | "thread" | "event";
+export type DiaryEntryType = "decision" | "commitment" | "preferences" | "risks" | "relationships";
+export type DiaryEntityType = "global" | "contact" | "thread" | "event" | "message" | "task";
 export type DiaryImportance = "low" | "normal" | "high";
 export type DiaryStatus = "active" | "resolved" | "stale" | "archived";
 
@@ -39,6 +39,7 @@ export interface DiaryContextEntry {
   content: string;
   entity_type: DiaryEntityType;
   entity_id?: string | null;
+  linked_to?: string | null;
   created_by: "Teeks" | "You";
   importance_level: DiaryImportance;
   status: DiaryStatus;

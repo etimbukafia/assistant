@@ -22,3 +22,8 @@ def get_client() -> Optional[genai.Client]:
 
     _client = genai.Client(api_key=api_key)
     return _client
+
+
+def get_genai_client() -> Optional[genai.Client]:
+    """Compatibility alias with main backend imports."""
+    return get_client()

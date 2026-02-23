@@ -710,10 +710,11 @@ class ContextEntry(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False, index=True)
-    type = Column(String, nullable=False, index=True)  # decision|commitment|preferences|insight|relationships
+    type = Column(String, nullable=False, index=True)  # decision|commitment|preferences|risks|relationships
     content = Column(Text, nullable=False)
-    entity_type = Column(String, nullable=False, index=True)  # assistant|executive|contact|thread|message|event
-    entity_id = Column(String, nullable=True, index=True)
+    entity_type = Column(String, nullable=False, index=True)  # global|contact|thread|message|event|task
+    entity_id = Column(String, nullable=True, index=True)    # email for contacts, string ref for threads/events/messages/tasks
+    linked_to = Column(String, nullable=True, index=True)    # display name of the primary linked entity (e.g. "Sarah Chen", "Q4 Review")
     created_by = Column(String, nullable=False, default="You")  # Teeks|You
     importance_level = Column(String, nullable=False, default="normal", index=True)  # low|normal|high
     status = Column(String, nullable=False, default="active", index=True)  # active|resolved|stale|archived
@@ -723,11 +724,11 @@ class ContextEntry(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "type IN ('decision','commitment','preferences','insight','relationships')",
+            "type IN ('decision','commitment','preferences','risks','relationships')",
             name="ck_context_entries_type",
         ),
         CheckConstraint(
-            "entity_type IN ('assistant','contact','thread','message','event','executive')",
+            "entity_type IN ('global','contact','thread','message','event','task')",
             name="ck_context_entries_entity_type",
         ),
         CheckConstraint(

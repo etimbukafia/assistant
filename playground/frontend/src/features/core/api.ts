@@ -14,6 +14,7 @@ import type {
 } from "./types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_PLAYGROUND_API_BASE || "http://localhost:8010/api";
+export const API_V1_BASE = process.env.NEXT_PUBLIC_PLAYGROUND_API_V1_BASE || "http://localhost:8010/v1";
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -27,6 +28,26 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(detail || "Request failed");
   }
 
+  return response.json() as Promise<T>;
+}
+
+async function apiFetchV1<T>(path: string, userId: string, options?: RequestInit): Promise<T> {
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    "X-User-Id": userId,
+    ...(options?.headers || {}),
+  };
+
+  const response = await fetch(`${API_V1_BASE}${path}`, {
+    ...options,
+    headers,
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const detail = (data as { detail?: string })?.detail;
+    throw new Error(detail || "Request failed");
+  }
   return response.json() as Promise<T>;
 }
 
@@ -160,11 +181,152 @@ export async function generateMeetingBrief(userId: string, payload: {
 }
 
 export async function fetchMentionSuggestions(userId: string, query = "", limit = 8) {
-  const params = new URLSearchParams({ q: query.trim(), user_id: userId, limit: String(limit) });
-  return apiFetch<{ kind: string; ref: string; label: string; display_label?: string; subtitle?: string }[]>(
-    `/chat/mentions?${params.toString()}`,
-    { method: "GET" },
+  const params = new URLSearchParams({
+    q: query.trim(),
+    limit: String(limit),
+    session_id: "default",
+    user_id: userId,
+  });
+  const response = await fetch(`${API_V1_BASE}/chat/mentions?${params.toString()}`, {
+    method: "GET",
+    headers: { "X-User-Id": userId },
+  });
+  if (!response.ok) {
+    throw new Error("Failed to load mentions");
+  }
+  return response.json() as Promise<{
+    kind: string;
+    ref: string;
+    label: string;
+    display_label?: string;
+    subtitle?: string;
+  }[]>;
+}
+
+export async function createChatSession(userId: string, sessionType: "command" | "reflection" = "command") {
+  return apiFetchV1<{ id: string }>("/chat/sessions", userId, {
+    method: "POST",
+    body: JSON.stringify({ session_type: sessionType }),
+  });
+}
+
+export async function sendChatMessageV1(payload: {
+  user_id: string;
+  session_id: string;
+  content: string;
+  mentions?: Array<{ kind: string; ref: string; label?: string }>;
+}) {
+  return apiFetchV1<{ status: string; response?: string }>(
+    `/chat/sessions/${encodeURIComponent(payload.session_id)}/messages`,
+    payload.user_id,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        content: payload.content,
+        mentions: payload.mentions || [],
+      }),
+    },
   );
+}
+
+export async function streamChatMessage(payload: {
+  user_id: string;
+  session_id: string;
+  content: string;
+  mentions?: Array<{ kind: string; ref: string; label?: string }>;
+  onEvent: (event: {
+    event_id: string;
+    session_id: string;
+    message_id?: number | null;
+    type: string;
+    payload: Record<string, unknown>;
+    ts: string;
+  }) => void;
+}) {
+  const response = await fetch(
+    `${API_V1_BASE}/chat/sessions/${encodeURIComponent(payload.session_id)}/messages/stream`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-User-Id": payload.user_id,
+      },
+      body: JSON.stringify({
+        content: payload.content,
+        mentions: payload.mentions || [],
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const detail = (data as { detail?: string })?.detail;
+    throw new Error(detail || "Failed to send message");
+  }
+
+  if (!response.body) {
+    throw new Error("Streaming not supported in this browser");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let eventType = "message";
+  let dataBuffer = "";
+  const seen = new Set<string>();
+
+  const flushEvent = () => {
+    if (!dataBuffer.trim()) {
+      dataBuffer = "";
+      eventType = "message";
+      return;
+    }
+    try {
+      const parsed = JSON.parse(dataBuffer);
+      const key = String(parsed.event_id || "");
+      if (!key || seen.has(key)) {
+        dataBuffer = "";
+        eventType = "message";
+        return;
+      }
+      seen.add(key);
+      payload.onEvent({
+        ...parsed,
+        type: parsed.type || eventType,
+      });
+    } catch {
+      // ignore malformed chunk
+    } finally {
+      dataBuffer = "";
+      eventType = "message";
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      flushEvent();
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.trim()) {
+        flushEvent();
+        continue;
+      }
+      if (line.startsWith("event:")) {
+        eventType = line.slice(6).trim() || "message";
+        continue;
+      }
+      if (line.startsWith("data:")) {
+        const chunk = line.slice(5).trim();
+        dataBuffer = dataBuffer ? `${dataBuffer}\n${chunk}` : chunk;
+      }
+    }
+  }
 }
 
 export async function sendChatMessage(payload: {

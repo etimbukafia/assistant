@@ -232,7 +232,7 @@ def _select_structured_items(
         if len(results) >= limit:
             return results, reasons
 
-    order = ["preferences", "commitment", "decision", "relationships", "insight"]
+    order = ["preferences", "commitment", "decision", "relationships", "risks"]
     by_type = snapshot.get("by_type", {}) or {}
     for type_key in order:
         items = by_type.get(type_key, [])

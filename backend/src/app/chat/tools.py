@@ -698,6 +698,32 @@ class ChatToolRegistry:
             )
             entries = [self._serialize_context_entry(r) for r in rows]
 
+        if not entries:
+            thread_messages = (
+                self.db.query(Message)
+                .filter(
+                    Message.user_id == self.user_id,
+                    Message.thread_id == thread_ref,
+                )
+                .order_by(Message.received_at.desc(), Message.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            entries = [
+                {
+                    "id": f"thread_msg:{msg.id}",
+                    "type": "thread_excerpt",
+                    "content": f"{(msg.sender or '').strip() or 'Unknown sender'}: {((msg.summary or msg.decrypted_body or msg.subject or '').strip())[:260]}",
+                    "entity_type": "thread",
+                    "entity_id": thread_ref,
+                    "created_by": "Teeks",
+                    "created_at": msg.received_at.isoformat() if msg.received_at else None,
+                    "importance_level": "normal",
+                    "status": msg.status or "inbox",
+                }
+                for msg in thread_messages
+            ]
+
         self._merge_hot(entries)
         return ToolResult(success=True, data={"thread_id": thread_ref, "entries": entries})
 
@@ -725,7 +751,7 @@ class ChatToolRegistry:
             builder=lambda: build_event_snapshot(self.db, self.user_id, event_ref),
         )
         by_type = snapshot.get("by_type", {}) or {}
-        entries = (by_type.get("decision", []) + by_type.get("commitment", []) + by_type.get("insight", []))[:limit]
+        entries = (by_type.get("decision", []) + by_type.get("commitment", []) + by_type.get("risks", []))[:limit]
         if not entries:
             rows = (
                 self.db.query(ContextEntry)
@@ -752,7 +778,7 @@ class ChatToolRegistry:
             builder=lambda: build_message_snapshot(self.db, self.user_id, message_ref),
         )
         by_type = snapshot.get("by_type", {}) or {}
-        entries = (by_type.get("commitment", []) + by_type.get("decision", []) + by_type.get("insight", []))[:limit]
+        entries = (by_type.get("commitment", []) + by_type.get("decision", []) + by_type.get("risks", []))[:limit]
         if not entries:
             rows = (
                 self.db.query(ContextEntry)

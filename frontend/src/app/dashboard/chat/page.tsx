@@ -1,12 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { ArrowUp, Check, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowUp, Check, PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { ApprovalGateComposer } from "@/components/chat/ApprovalGateComposer";
 import { MessageBubble } from "@/components/chat/MessageBubble";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -38,7 +39,7 @@ type PaneFilter =
     | "commitment"
     | "preferences"
     | "relationships"
-    | "insight";
+    | "risks";
 type PaneSource = "entity" | "memory";
 
 type ReferencePaneItem = {
@@ -66,7 +67,7 @@ const PANE_FILTERS: Array<{ key: PaneFilter; label: string }> = [
     { key: "commitment", label: "/ Commitments" },
     { key: "preferences", label: "/ Preferences" },
     { key: "relationships", label: "/ Relationships" },
-    { key: "insight", label: "/ Watchouts" },
+    { key: "risks", label: "/ Risks" },
 ];
 
 function mentionToneClass(kind: ChatMention["kind"]): string {
@@ -82,13 +83,13 @@ function isEntityFilter(filter: PaneFilter): filter is "contact" | "thread" | "e
     return filter === "contact" || filter === "thread" || filter === "event" || filter === "task";
 }
 
-function isMemoryFilter(filter: PaneFilter): filter is "decision" | "commitment" | "preferences" | "relationships" | "insight" {
+function isMemoryFilter(filter: PaneFilter): filter is "decision" | "commitment" | "preferences" | "relationships" | "risks" {
     return (
         filter === "decision" ||
         filter === "commitment" ||
         filter === "preferences" ||
         filter === "relationships" ||
-        filter === "insight"
+        filter === "risks"
     );
 }
 
@@ -101,6 +102,13 @@ function formatMentionDate(value?: string): string {
     const dt = new Date(value);
     if (Number.isNaN(dt.getTime())) return "";
     return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function withEllipsis(value: string | undefined, maxChars: number): string {
+    const text = (value || "").trim();
+    if (!text) return "";
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
 }
 
 function normalizeKindLabel(kind: string): string {
@@ -143,6 +151,7 @@ function toReferencePaneItem(item: ApiMentionSuggestion, source: PaneSource): Re
 export default function ChatWorkspacePage() {
     const [inputValue, setInputValue] = React.useState("");
     const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null);
+    const [isSessionsOpen, setIsSessionsOpen] = React.useState(true);
     const [isPaneOpen, setIsPaneOpen] = React.useState(true);
     const [isMobileReferencesOpen, setIsMobileReferencesOpen] = React.useState(false);
     const [paneFilter, setPaneFilter] = React.useState<PaneFilter>("all");
@@ -156,6 +165,7 @@ export default function ChatWorkspacePage() {
     const [hasMoreEntities, setHasMoreEntities] = React.useState(true);
     const [hasMoreMemory, setHasMoreMemory] = React.useState(true);
     const [selectedPaneMentions, setSelectedPaneMentions] = React.useState<ChatMention[]>([]);
+    const [previewItem, setPreviewItem] = React.useState<ReferencePaneItem | null>(null);
 
     const inputRef = React.useRef<HTMLInputElement>(null);
     const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -537,17 +547,30 @@ export default function ChatWorkspacePage() {
 
     return (
         <div className={cn(
-            "grid grid-cols-1 gap-6 h-[calc(100vh-10rem)] overflow-hidden",
-            isPaneOpen ? "lg:grid-cols-[240px_1fr_320px]" : "lg:grid-cols-[240px_1fr]"
+            "grid grid-cols-1 gap-6 h-[calc(100vh-7.5rem)] lg:h-[calc(100vh-4rem)] overflow-hidden",
+            isSessionsOpen && isPaneOpen  ? "lg:grid-cols-[240px_1fr_320px]" :
+            isSessionsOpen && !isPaneOpen ? "lg:grid-cols-[240px_1fr]" :
+            !isSessionsOpen && isPaneOpen ? "lg:grid-cols-[1fr_320px]" :
+                                            "lg:grid-cols-[1fr]"
         )}>
+            {isSessionsOpen && (
             <aside
-                className="rounded-[14px] border border-border bg-white flex flex-col h-full overflow-hidden"
+                className="hidden lg:flex rounded-[14px] border border-border bg-white flex-col h-full overflow-hidden"
                 style={{ boxShadow: CARD_SHADOW }}
             >
-                <div className="px-4 pt-5 pb-3 border-b border-border">
+                <div className="px-4 pt-4 pb-3 border-b border-border flex items-center justify-between gap-2">
                     <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
                         {new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
                     </p>
+                    <button
+                        type="button"
+                        onClick={() => setIsSessionsOpen(false)}
+                        className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                        aria-label="Collapse sessions"
+                        title="Collapse sessions"
+                    >
+                        <PanelLeftClose size={15} strokeWidth={1.8} />
+                    </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto py-2 px-2 min-h-0">
@@ -612,37 +635,35 @@ export default function ChatWorkspacePage() {
                     </button>
                 </div>
             </aside>
+            )}
 
             <section
                 className="rounded-[14px] border border-border bg-white flex flex-col h-full overflow-hidden"
                 style={{ boxShadow: CARD_SHADOW }}
             >
-                {hasMessages && (
-                    <div className="px-6 py-3 border-b border-border flex items-center justify-between gap-3">
-                        <p className="text-sm font-medium text-foreground truncate font-inter">
-                            {activeSession?.title || "Chat"}
-                        </p>
+                <div className="px-4 py-3 border-b border-border hidden lg:flex items-center gap-2">
+                    {!isSessionsOpen && (
                         <button
                             type="button"
-                            onClick={() => setIsPaneOpen((prev) => !prev)}
-                            className="hidden lg:inline-flex rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-linen font-inter"
+                            onClick={() => setIsSessionsOpen(true)}
+                            className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                            aria-label="Expand sessions"
+                            title="Expand sessions"
                         >
-                            {isPaneOpen ? "Hide references" : "Show references"}
+                            <PanelLeftOpen size={15} strokeWidth={1.8} />
                         </button>
-                    </div>
-                )}
-
-                {!hasMessages && !isPaneOpen && (
-                    <div className="px-6 pt-4 hidden lg:block">
-                        <button
-                            type="button"
-                            onClick={() => setIsPaneOpen(true)}
-                            className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-linen font-inter"
-                        >
-                            Show references
-                        </button>
-                    </div>
-                )}
+                    )}
+                    <p className="flex-1 text-sm font-medium text-foreground truncate font-inter">
+                        {hasMessages ? (activeSession?.title || "Chat") : ""}
+                    </p>
+                    <button
+                        type="button"
+                        onClick={() => setIsPaneOpen((prev) => !prev)}
+                        className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-linen font-inter"
+                    >
+                        {isPaneOpen ? "Hide references" : "Show references"}
+                    </button>
+                </div>
 
                 <ScrollArea className="flex-1 px-6 py-6">
                     <div className="flex flex-col gap-3 min-h-full">
@@ -908,10 +929,17 @@ export default function ChatWorkspacePage() {
                             paneItems.map((item) => {
                                 const selected = selectedPaneMentionKeys.has(mentionKey(item.mention));
                                 return (
-                                    <button
+                                    <div
                                         key={item.id}
-                                        type="button"
+                                        role="button"
+                                        tabIndex={0}
                                         onClick={() => togglePaneMention(item.mention)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                togglePaneMention(item.mention);
+                                            }
+                                        }}
                                         className={cn(
                                             "w-full rounded-[10px] border px-3 py-2.5 text-left transition font-inter",
                                             selected
@@ -923,34 +951,53 @@ export default function ChatWorkspacePage() {
                                             <div className="min-w-0">
                                                 <p className="text-[12px] font-medium text-foreground truncate">
                                                     {item.source === "memory" ? "/" : "@"}
-                                                    {item.title}
+                                                    {withEllipsis(item.title, 78)}
                                                 </p>
                                                 <p className="text-[10px] uppercase tracking-wide text-muted-foreground mt-0.5">
                                                     {item.kindLabel}{item.dateLabel ? ` - ${item.dateLabel}` : ""}
                                                 </p>
                                             </div>
-                                            <span className={cn(
-                                                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
-                                                selected
-                                                    ? "border-primary/30 text-primary bg-primary/[0.08]"
-                                                    : "border-border text-muted-foreground"
-                                            )}>
-                                                {selected ? (
-                                                    <>
-                                                        <Check size={10} />
-                                                        Added
-                                                    </>
-                                                ) : (
-                                                    "Add"
-                                                )}
-                                            </span>
+                                            <div className="flex flex-col items-end gap-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setPreviewItem(item);
+                                                    }}
+                                                    className="text-[10px] text-primary hover:underline underline-offset-2"
+                                                >
+                                                    View
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        togglePaneMention(item.mention);
+                                                    }}
+                                                    className={cn(
+                                                        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
+                                                        selected
+                                                            ? "border-primary/30 text-primary bg-primary/[0.08]"
+                                                            : "border-border text-muted-foreground"
+                                                    )}
+                                                >
+                                                    {selected ? (
+                                                        <>
+                                                            <Check size={10} />
+                                                            Added
+                                                        </>
+                                                    ) : (
+                                                        "Add"
+                                                    )}
+                                                </button>
+                                            </div>
                                         </div>
                                         {(item.searchText || item.subtitle) && (
-                                            <p className="mt-1 text-[11px] text-muted-foreground line-clamp-1">
-                                                {item.searchText || item.subtitle}
+                                            <p className="mt-1 text-[11px] text-muted-foreground truncate">
+                                                {withEllipsis(item.searchText || item.subtitle, 120)}
                                             </p>
                                         )}
-                                    </button>
+                                    </div>
                                 );
                             })
                         )}
@@ -1022,10 +1069,17 @@ export default function ChatWorkspacePage() {
                                     paneItems.map((item) => {
                                         const selected = selectedPaneMentionKeys.has(mentionKey(item.mention));
                                         return (
-                                            <button
+                                            <div
                                                 key={`mobile-${item.id}`}
-                                                type="button"
+                                                role="button"
+                                                tabIndex={0}
                                                 onClick={() => togglePaneMention(item.mention)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === "Enter" || e.key === " ") {
+                                                        e.preventDefault();
+                                                        togglePaneMention(item.mention);
+                                                    }
+                                                }}
                                                 className={cn(
                                                     "w-full rounded-[10px] border px-3 py-2.5 text-left transition font-inter",
                                                     selected
@@ -1037,27 +1091,46 @@ export default function ChatWorkspacePage() {
                                                     <div className="min-w-0">
                                                         <p className="text-[12px] font-medium text-foreground truncate">
                                                             {item.source === "memory" ? "/" : "@"}
-                                                            {item.title}
+                                                            {withEllipsis(item.title, 78)}
                                                         </p>
                                                         <p className="text-[10px] uppercase tracking-wide text-muted-foreground mt-0.5">
                                                             {item.kindLabel}{item.dateLabel ? ` - ${item.dateLabel}` : ""}
                                                         </p>
                                                     </div>
-                                                    <span className={cn(
-                                                        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
-                                                        selected
-                                                            ? "border-primary/30 text-primary bg-primary/[0.08]"
-                                                            : "border-border text-muted-foreground"
-                                                    )}>
-                                                        {selected ? "Added" : "Add"}
-                                                    </span>
+                                                    <div className="flex flex-col items-end gap-1">
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setPreviewItem(item);
+                                                            }}
+                                                            className="text-[10px] text-primary hover:underline underline-offset-2"
+                                                        >
+                                                            View
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                togglePaneMention(item.mention);
+                                                            }}
+                                                            className={cn(
+                                                                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
+                                                                selected
+                                                                    ? "border-primary/30 text-primary bg-primary/[0.08]"
+                                                                    : "border-border text-muted-foreground"
+                                                            )}
+                                                        >
+                                                            {selected ? "Added" : "Add"}
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 {(item.searchText || item.subtitle) && (
-                                                    <p className="mt-1 text-[11px] text-muted-foreground line-clamp-1">
-                                                        {item.searchText || item.subtitle}
+                                                    <p className="mt-1 text-[11px] text-muted-foreground truncate">
+                                                        {withEllipsis(item.searchText || item.subtitle, 120)}
                                                     </p>
                                                 )}
-                                            </button>
+                                            </div>
                                         );
                                     })
                                 )}
@@ -1076,6 +1149,39 @@ export default function ChatWorkspacePage() {
                     </div>
                 </SheetContent>
             </Sheet>
+
+            <Dialog open={Boolean(previewItem)} onOpenChange={(open) => !open && setPreviewItem(null)}>
+                <DialogContent className="max-w-[560px]">
+                    <DialogHeader>
+                        <DialogTitle className="text-base font-semibold font-inter">
+                            {previewItem ? `${previewItem.source === "memory" ? "/" : "@"}${previewItem.title}` : "Reference details"}
+                        </DialogTitle>
+                    </DialogHeader>
+                    {previewItem && (
+                        <div className="space-y-3 font-inter">
+                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                                {previewItem.kindLabel}{previewItem.dateLabel ? ` - ${previewItem.dateLabel}` : ""}
+                            </p>
+                            {previewItem.subtitle && (
+                                <div className="rounded-[10px] border border-border bg-linen/40 p-3">
+                                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Summary</p>
+                                    <p className="text-sm text-foreground whitespace-pre-wrap break-words">{previewItem.subtitle}</p>
+                                </div>
+                            )}
+                            {previewItem.searchText && (
+                                <div className="rounded-[10px] border border-border bg-linen/40 p-3">
+                                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Details</p>
+                                    <p className="text-sm text-foreground whitespace-pre-wrap break-words">{previewItem.searchText}</p>
+                                </div>
+                            )}
+                            <div className="rounded-[10px] border border-border p-3">
+                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Reference ID</p>
+                                <p className="text-xs text-muted-foreground break-all">{previewItem.mention.ref}</p>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

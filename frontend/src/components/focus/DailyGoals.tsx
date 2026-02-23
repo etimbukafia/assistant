@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { DonnaText } from "@/components/ui/DonnaText";
 import type { GoalItem } from "@/services/focus";
 import { Check } from "lucide-react";
 
@@ -17,7 +16,6 @@ const PLACEHOLDERS = [
 ];
 
 export function DailyGoals({ goals, onUpdate }: DailyGoalsProps) {
-    // Ensure we always have 3 slots
     const [items, setItems] = useState<GoalItem[]>(() => {
         const base = [...goals];
         while (base.length < 3) base.push({ text: "", completed: false });
@@ -33,7 +31,6 @@ export function DailyGoals({ goals, onUpdate }: DailyGoalsProps) {
 
     const save = useCallback(
         (updated: GoalItem[]) => {
-            // Only save items with text
             const toSave = updated.filter((g) => g.text.trim());
             if (debounceRef.current) clearTimeout(debounceRef.current);
             debounceRef.current = setTimeout(() => onUpdate(toSave), 500);
@@ -53,16 +50,15 @@ export function DailyGoals({ goals, onUpdate }: DailyGoalsProps) {
         const updated = [...items];
         updated[index] = { ...updated[index], completed: !updated[index].completed };
         setItems(updated);
-        // Save immediately for check toggles
         const toSave = updated.filter((g) => g.text.trim());
         onUpdate(toSave);
     };
 
     return (
         <div className="space-y-2">
-            <DonnaText variant="label" className="px-1">
+            <p className="px-1 text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
                 Today&apos;s Goals
-            </DonnaText>
+            </p>
             <div className="space-y-2">
                 {items.map((item, i) => (
                     <div
@@ -74,13 +70,14 @@ export function DailyGoals({ goals, onUpdate }: DailyGoalsProps) {
                         }`}
                     >
                         <button
+                            type="button"
                             onClick={() => handleToggle(i)}
                             aria-label={`${item.completed ? "Uncheck" : "Check"} goal ${i + 1}${item.text ? `: ${item.text}` : ""}`}
-                            className={`shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-200 focus-visible:ring-2 focus-visible:ring-auburn/40 focus-visible:ring-offset-1 ${
+                            className={`shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-200 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-1 ${
                                 item.completed
                                     ? "bg-sage border-sage scale-110"
                                     : item.text.trim()
-                                    ? "border-auburn/40 hover:border-auburn"
+                                    ? "border-primary/40 hover:border-primary"
                                     : "border-border"
                             }`}
                             disabled={!item.text.trim()}
@@ -93,13 +90,13 @@ export function DailyGoals({ goals, onUpdate }: DailyGoalsProps) {
                             onChange={(e) => handleTextChange(i, e.target.value)}
                             placeholder={PLACEHOLDERS[i]}
                             aria-label={`Goal ${i + 1}`}
-                            className={`flex-1 bg-transparent font-inter text-sm outline-none focus-visible:ring-2 focus-visible:ring-auburn/40 rounded transition-all ${
+                            className={`flex-1 bg-transparent font-inter text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded transition-all ${
                                 item.completed
-                                    ? "text-faint line-through"
-                                    : "text-obsidian placeholder:text-faint/60"
+                                    ? "text-muted-foreground line-through"
+                                    : "text-foreground placeholder:text-muted-foreground/60"
                             }`}
                         />
-                        <span className="text-faint/40 font-inter text-xs font-medium">
+                        <span className="text-muted-foreground/40 font-inter text-xs font-medium">
                             {i + 1}
                         </span>
                     </div>

@@ -1,6 +1,7 @@
 """Playground database session utilities."""
 
 from pathlib import Path
+import time
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -21,6 +22,19 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, futu
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _migrate_contacts_schema()
+    _run_migration_with_retry(migrate_context_entries_entity_type)
+
+
+def _run_migration_with_retry(fn, retries: int = 3) -> None:
+    for attempt in range(1, retries + 1):
+        try:
+            fn()
+            return
+        except Exception as exc:
+            if "locked" in str(exc).lower() and attempt < retries:
+                time.sleep(0.25 * attempt)
+                continue
+            raise
 
 
 def _migrate_contacts_schema() -> None:
@@ -117,6 +131,7 @@ def migrate_context_entries_entity_type() -> None:
             or ("global" in types)
             or ("status" not in cols)
             or ("expires_at" not in cols)
+            or ("updated_at" not in cols)
         )
         if not needs_migration:
             return
@@ -132,6 +147,7 @@ def migrate_context_entries_entity_type() -> None:
               entity_id TEXT,
               created_by TEXT NOT NULL,
               created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
               importance_level TEXT NOT NULL,
               status TEXT NOT NULL,
               expires_at TEXT,
@@ -145,10 +161,11 @@ def migrate_context_entries_entity_type() -> None:
         )
         status_col = "status" if "status" in cols else "'active'"
         expires_col = "expires_at" if "expires_at" in cols else "NULL"
+        updated_col = "updated_at" if "updated_at" in cols else "created_at"
         cur.execute(
             f"""
             INSERT INTO context_entries_new (
-              id, user_id, type, content, entity_type, entity_id, created_by, created_at, importance_level, status, expires_at
+              id, user_id, type, content, entity_type, entity_id, created_by, created_at, updated_at, importance_level, status, expires_at
             )
             SELECT
               id,
@@ -159,6 +176,7 @@ def migrate_context_entries_entity_type() -> None:
               entity_id,
               created_by,
               created_at,
+              {updated_col},
               importance_level,
               {status_col},
               {expires_col}
