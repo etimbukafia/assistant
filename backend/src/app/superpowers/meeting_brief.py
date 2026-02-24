@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, or_
@@ -152,23 +152,15 @@ class MeetingBriefService:
             ContextEntry.user_id == self.user_id,
             ContextEntry.entity_type == "event",
             ContextEntry.entity_id == event_ref,
+            ContextEntry.status == "active",
             ((ContextEntry.expires_at.is_(None)) | (ContextEntry.expires_at >= now)),
         ).order_by(ContextEntry.importance_level.desc(), ContextEntry.created_at.desc()).limit(30)
         entries = query.all()
+        # Keep meeting briefs strictly event-scoped to avoid leaking unrelated global context.
+        # include_recent_context is kept for forward compatibility with richer scoped fallbacks.
         if entries or not include_recent_context:
             return entries
-        threshold = now - timedelta(days=1)
-        return (
-            self.db.query(ContextEntry)
-            .filter(
-                ContextEntry.user_id == self.user_id,
-                ContextEntry.entity_type == "global",
-                ContextEntry.created_at >= threshold,
-            )
-            .order_by(ContextEntry.created_at.desc())
-            .limit(12)
-            .all()
-        )
+        return []
 
     def _participants(self, participants_raw: Any, extra: List[str]) -> List[str]:
         participants: List[str] = []

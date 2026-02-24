@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 ALLOWED_KINDS = {"contact", "event", "thread", "task"}
 DEFAULT_PER_ENTITY_LIMIT = 5
 DEFAULT_TOTAL_LIMIT = 25
+RECENT_CHANGES_WINDOW_HOURS = 24
 MAX_MENTIONS_PER_MESSAGE = 8
 MENTIONS_INDEX_SCOPE = "mentions_index_v1"
 MENTIONS_INDEX_TTL_SECONDS = 180
@@ -463,6 +464,7 @@ class MentionContextService:
         mentions: List[Dict[str, str]],
         max_items_per_entity: int = DEFAULT_PER_ENTITY_LIMIT,
         max_items_total: int = DEFAULT_TOTAL_LIMIT,
+        since_ts: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         max_items_per_entity = max(1, min(max_items_per_entity, 10))
         max_items_total = max(1, min(max_items_total, 50))
@@ -480,6 +482,15 @@ class MentionContextService:
         for mention in resolved:
             snapshot = self._get_snapshot_for_mention(mention)
             entries = _extract_entries(snapshot, mention.kind)
+            recent_changes = self._recent_changes_for_mention(mention, since_ts=since_ts)
+            entity_payload: Dict[str, Any] = {}
+            if mention.kind == "event":
+                event_payload = self._build_event_payload(mention.ref)
+                if event_payload:
+                    entity_payload["event"] = event_payload
+                fact_entries = self._build_event_fact_entries(mention.ref)
+                if fact_entries:
+                    entries = fact_entries + entries
             if mention.kind == "thread" and not entries:
                 entries = self._build_thread_message_entries(mention.ref)
             scored = _score_entries(entries, mention.kind, mention.label)
@@ -492,7 +503,9 @@ class MentionContextService:
                     "scope": f"{mention.kind}:{mention.ref}",
                     "available_count": len(scored),
                     "selected_count": len(trimmed),
+                    "recent_changes": recent_changes,
                     "entries": [_to_context_entry_payload(item, mention, score) for item, score in trimmed],
+                    **entity_payload,
                 }
             )
 
@@ -526,6 +539,110 @@ class MentionContextService:
                 "max_mentions_per_message": MAX_MENTIONS_PER_MESSAGE,
             },
         }
+
+    def _recent_changes_for_mention(self, mention: Mention, since_ts: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        window_start = since_ts or (datetime.now(timezone.utc) - timedelta(hours=RECENT_CHANGES_WINDOW_HOURS))
+        q = (
+            self.db.query(ContextEntry)
+            .filter(
+                ContextEntry.user_id == self.user_id,
+                ContextEntry.entity_type == mention.kind,
+                ContextEntry.entity_id == mention.ref,
+                ContextEntry.status == "active",
+                or_(
+                    ContextEntry.updated_at >= window_start,
+                    ContextEntry.created_at >= window_start,
+                ),
+            )
+            .order_by(ContextEntry.updated_at.desc(), ContextEntry.created_at.desc())
+            .limit(20)
+        )
+        rows = q.all()
+        return [
+            {
+                "id": row.id,
+                "type": row.type,
+                "entity_type": row.entity_type,
+                "entity_id": row.entity_id,
+                "content": row.content,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "importance_level": row.importance_level,
+                "status": row.status,
+            }
+            for row in rows
+        ]
+
+    def _build_event_payload(self, event_ref: str) -> Dict[str, Any]:
+        event = None
+        if (event_ref or "").isdigit():
+            event = (
+                self.db.query(CalendarEvent)
+                .filter(
+                    CalendarEvent.user_id == self.user_id,
+                    CalendarEvent.id == int(event_ref),
+                )
+                .first()
+            )
+        if not event:
+            event = (
+                self.db.query(CalendarEvent)
+                .filter(
+                    CalendarEvent.user_id == self.user_id,
+                    CalendarEvent.external_event_id == event_ref,
+                )
+                .first()
+            )
+        if not event:
+            return {}
+        return {
+            "id": str(event.id),
+            "title": (event.title or "").strip(),
+            "start_time": event.start_time.isoformat() if event.start_time else None,
+            "end_time": event.end_time.isoformat() if event.end_time else None,
+            "location": (event.location or "").strip() or None,
+            "status": (event.status or "").strip() or None,
+            "participants": _normalize_participants(event.participants),
+        }
+
+    def _build_event_fact_entries(self, event_ref: str) -> List[Dict[str, Any]]:
+        payload = self._build_event_payload(event_ref)
+        if not payload:
+            return []
+
+        created_at = payload.get("start_time") or datetime.now(timezone.utc).isoformat()
+        title = payload.get("title") or f"Event {event_ref}"
+        participants = payload.get("participants") or []
+        participant_names = [p.get("name") or p.get("email") for p in participants if (p.get("name") or p.get("email"))]
+        time_bits = []
+        if payload.get("start_time"):
+            time_bits.append(f"starts {payload['start_time']}")
+        if payload.get("end_time"):
+            time_bits.append(f"ends {payload['end_time']}")
+        timing = ", ".join(time_bits)
+        location = payload.get("location")
+
+        summary_parts = [f"Event: {title}"]
+        if timing:
+            summary_parts.append(timing)
+        if location:
+            summary_parts.append(f"location: {location}")
+        if participant_names:
+            summary_parts.append("participants: " + ", ".join(participant_names[:8]))
+
+        return [
+            {
+                "id": f"event:{payload.get('id') or event_ref}:facts",
+                "type": "event_facts",
+                "content": " | ".join(summary_parts),
+                "entity_type": "event",
+                "entity_id": str(payload.get("id") or event_ref),
+                "created_by": "Teeks",
+                "created_at": created_at,
+                "importance_level": "high" if participant_names else "normal",
+                "status": payload.get("status") or "active",
+            }
+        ]
 
     def _build_thread_message_entries(self, thread_ref: str, limit: int = 3) -> List[Dict[str, Any]]:
         rows = (
@@ -566,8 +683,8 @@ class MentionContextService:
         seen = set()
         for raw in mentions or []:
             kind = (raw.get("kind") or "").strip().lower()
-            ref = (raw.get("ref") or "").strip()
-            label = (raw.get("label") or "").strip()
+            ref = _normalize_lookup_token(raw.get("ref"))
+            label = _normalize_lookup_token(raw.get("label"))
             if kind not in ALLOWED_KINDS or not ref:
                 continue
             normalized_ref = ref.lower() if kind == "contact" else ref
@@ -590,9 +707,14 @@ class MentionContextService:
                     .first()
                 )
                 if not contact:
+                    contact_lookup = mention.label or mention.ref
                     contact = (
                         self.db.query(Contact)
-                        .filter(Contact.user_id == self.user_id, func.lower(Contact.name) == mention.label.lower())
+                        .filter(
+                            Contact.user_id == self.user_id,
+                            (func.lower(Contact.name) == contact_lookup.lower())
+                            | Contact.name.ilike(f"%{contact_lookup}%"),
+                        )
                         .first()
                     )
                 if contact and contact.email:
@@ -610,12 +732,14 @@ class MentionContextService:
                     .first()
                 )
                 if not entity:
+                    entity_lookup = mention.label or mention.ref
                     entity = (
                         self.db.query(EntityReference)
                         .filter(
                             EntityReference.user_id == self.user_id,
                             EntityReference.entity_type == mention.kind,
-                            func.lower(EntityReference.display_name) == mention.label.lower(),
+                            (func.lower(EntityReference.display_name) == entity_lookup.lower())
+                            | EntityReference.display_name.ilike(f"%{entity_lookup}%"),
                         )
                         .first()
                 )
@@ -640,7 +764,8 @@ class MentionContextService:
                             self.db.query(Task)
                             .filter(
                                 Task.user_id == self.user_id,
-                                func.lower(Task.title) == lookup.lower(),
+                                (func.lower(Task.title) == lookup.lower())
+                                | Task.title.ilike(f"%{lookup}%"),
                             )
                             .order_by(Task.updated_at.desc())
                             .first()
@@ -666,11 +791,13 @@ class MentionContextService:
                         .first()
                     )
                     if not thread_message and mention.label:
+                        thread_lookup = mention.label or mention.ref
                         thread_message = (
                             self.db.query(Message)
                             .filter(
                                 Message.user_id == self.user_id,
-                                func.lower(Message.subject) == mention.label.lower(),
+                                (func.lower(Message.subject) == thread_lookup.lower())
+                                | Message.subject.ilike(f"%{thread_lookup}%"),
                             )
                             .order_by(Message.received_at.desc(), Message.created_at.desc())
                             .first()
@@ -956,6 +1083,40 @@ def _compact_search_text(value: str, max_len: int = 80) -> str:
     if len(text) <= max_len:
         return text
     return f"{text[: max_len - 1].rstrip()}..."
+
+
+def _normalize_participants(raw: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            email = " ".join(str(item.get("email") or "").split()).strip()
+            name = " ".join(str(item.get("name") or "").split()).strip()
+            response_status = " ".join(str(item.get("response_status") or item.get("responseStatus") or "").split()).strip()
+            if not (email or name):
+                continue
+            out.append(
+                {
+                    "email": email or None,
+                    "name": name or None,
+                    "response_status": response_status or None,
+                }
+            )
+        else:
+            value = " ".join(str(item).split()).strip()
+            if value:
+                out.append({"email": value, "name": None, "response_status": None})
+    return out
+
+
+def _normalize_lookup_token(value: Any) -> str:
+    text = " ".join(str(value or "").replace("\n", " ").split()).strip()
+    if not text:
+        return ""
+    text = text.lstrip("@/").strip()
+    text = text.strip(".,;:!?)]}\"'")
+    return text
 
 
 def _memory_type_title(value: str) -> str:

@@ -6,6 +6,7 @@ import { StickyNote, X, Check, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useDiaryMutations } from "@/hooks/useVault"
+import { useMentionComposer } from "@/hooks/useMentionComposer"
 import type { DiaryEntryType } from "@/services/vault"
 
 // Entry type config — mirrors vault/page.tsx TYPE_COLORS with token-safe classes
@@ -55,6 +56,26 @@ export function StickyNoteWidget() {
 
     const { createEntry } = useDiaryMutations()
 
+    const {
+        listboxId,
+        mentionContext,
+        mentionSuggestions,
+        activeSuggestionIndex,
+        loadingSuggestions,
+        parseMentions,
+        onInputChange,
+        onInputKeyDown,
+        applySuggestion,
+        clearMentionState,
+    } = useMentionComposer({
+        inputValue: content,
+        setInputValue: setContent,
+        inputRef: textareaRef,
+        sessionId: "sticky-note",
+    })
+
+    const showDropdown = Boolean(mentionContext || loadingSuggestions)
+
     // Close panel on outside click
     React.useEffect(() => {
         if (!isOpen) return
@@ -78,30 +99,41 @@ export function StickyNoteWidget() {
     const handleSave = React.useCallback(async () => {
         const trimmed = content.trim()
         if (!trimmed || createEntry.isPending) return
+
+        const links = parseMentions(trimmed).map((m) => ({
+            entity_type: m.kind,
+            entity_id: m.ref,
+            display_name: m.label,
+        }))
+
         try {
             await createEntry.mutateAsync({
                 type,
                 content: trimmed,
                 importance_level: "normal",
-                links: [],
+                links,
             })
             setContent("")
+            clearMentionState()
             setIsOpen(false)
             toast.success("Note pinned to Diary.")
         } catch {
             toast.error("That didn't save. Try again.")
         }
-    }, [content, type, createEntry])
+    }, [content, type, createEntry, parseMentions, clearMentionState])
 
     const handleKeyDown = React.useCallback(
         (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            // Let mention composer handle arrow/enter/escape navigation first
+            onInputKeyDown(e)
+            // Only trigger save if no suggestion list is open
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !mentionSuggestions.length) {
                 e.preventDefault()
                 handleSave()
             }
-            if (e.key === "Escape") setIsOpen(false)
+            if (e.key === "Escape" && !mentionSuggestions.length) setIsOpen(false)
         },
-        [handleSave],
+        [handleSave, onInputKeyDown, mentionSuggestions.length],
     )
 
     // Mirror OmniChatOverlay route exclusions
@@ -164,24 +196,79 @@ export function StickyNoteWidget() {
                         </button>
                     </div>
 
-                    {/* Content textarea — Ivory bg, Peony focus ring (standard input spec) */}
-                    <textarea
-                        ref={textareaRef}
-                        value={content}
-                        onChange={(e) => setContent(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder="Capture a thought, decision, or risk."
-                        rows={4}
-                        className={cn(
-                            "mx-3.5 mt-2 resize-none rounded-sm px-2 py-1.5",
-                            "text-[13px] leading-relaxed text-foreground font-inter",
-                            "bg-transparent border-none outline-none",
-                            "placeholder:text-stone/40",
-                            // Peony focus ring — this is the accessibility focus affordance,
-                            // not a decorative use; it applies to all inputs per design spec
-                            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50",
+                    {/* Content textarea + mention dropdown */}
+                    <div className="relative mx-3.5 mt-2">
+                        <textarea
+                            ref={textareaRef}
+                            id={listboxId + "-input"}
+                            role="combobox"
+                            aria-autocomplete="list"
+                            aria-expanded={showDropdown}
+                            aria-controls={listboxId}
+                            aria-activedescendant={
+                                mentionSuggestions[activeSuggestionIndex]
+                                    ? `${listboxId}-option-${activeSuggestionIndex}`
+                                    : undefined
+                            }
+                            value={content}
+                            onChange={(e) => {
+                                const value = e.target.value
+                                const cursor = e.target.selectionStart ?? value.length
+                                onInputChange(value, cursor)
+                            }}
+                            onKeyDown={handleKeyDown}
+                            placeholder="Capture a thought, decision, or risk."
+                            rows={4}
+                            className={cn(
+                                "w-full resize-none rounded-sm px-2 py-1.5",
+                                "text-[13px] leading-relaxed text-foreground font-inter",
+                                "bg-transparent border-none outline-none",
+                                "placeholder:text-stone/40",
+                                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50",
+                            )}
+                        />
+
+                        {/* Mention suggestions dropdown — opens below textarea */}
+                        {showDropdown && (
+                            <div
+                                id={listboxId}
+                                role="listbox"
+                                className="absolute top-full left-0 right-0 z-50 mt-0.5 rounded-[10px] border border-border bg-card shadow-md max-h-40 overflow-y-auto overscroll-contain"
+                            >
+                                {loadingSuggestions ? (
+                                    <div className="px-3 py-2 text-xs text-muted-foreground font-inter" aria-live="polite">
+                                        Loading…
+                                    </div>
+                                ) : mentionSuggestions.length > 0 ? (
+                                    mentionSuggestions.map((suggestion, index) => (
+                                        <button
+                                            key={suggestion.key}
+                                            id={`${listboxId}-option-${index}`}
+                                            type="button"
+                                            role="option"
+                                            aria-selected={index === activeSuggestionIndex}
+                                            className={cn(
+                                                "w-full px-3 py-2 text-left text-xs font-inter hover:bg-muted/40 transition-colors",
+                                                index === activeSuggestionIndex && "bg-muted/40 ring-1 ring-inset ring-primary/20",
+                                            )}
+                                            onMouseDown={(e) => { e.preventDefault(); applySuggestion(suggestion) }}
+                                        >
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="font-medium text-foreground">{suggestion.display}</span>
+                                                <span className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border/60 rounded-full px-1.5 py-0.5">
+                                                    {suggestion.kind}
+                                                </span>
+                                            </div>
+                                        </button>
+                                    ))
+                                ) : (
+                                    <div className="px-3 py-2 text-xs text-muted-foreground font-inter" aria-live="polite">
+                                        No matches
+                                    </div>
+                                )}
+                            </div>
                         )}
-                    />
+                    </div>
 
                     {/* Ruled lines — decorative, reinforces the paper metaphor */}
                     <div className="mx-3.5 mt-1 mb-3 flex flex-col gap-[9px] pointer-events-none" aria-hidden>
@@ -265,7 +352,7 @@ export function StickyNoteWidget() {
                     "border",
                     isOpen
                         ? "bg-secondary/15 text-secondary border-secondary/40 shadow-sm"
-                        : "bg-card text-muted-foreground border-border hover:text-foreground hover:bg-muted/60",
+                        : "bg-[#fef08a] text-amber-800 border-amber-300/60 hover:bg-[#fde047]",
                     "shadow-[0_2px_8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.06)]",
                 )}
             >

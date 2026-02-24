@@ -96,3 +96,15 @@ def test_parse_execution_plan_extracts_embedded_json():
 def test_parse_execution_plan_raises_on_invalid_payload():
     with pytest.raises(PlanParseError):
         parse_execution_plan("not-json and no object")
+
+
+def test_parse_execution_plan_repairs_missing_sub_requests_from_nodes():
+    payload = _valid_plan_dict()
+    payload["sub_requests"] = []
+    raw = f"```json\n{json.dumps(payload)}\n```"
+    plan = parse_execution_plan(raw)
+
+    assert isinstance(plan, ExecutionPlan)
+    assert len(plan.sub_requests) == 1
+    assert plan.sub_requests[0].id == "sr1"
+    assert plan.nodes[0].sub_request_id == "sr1"

@@ -31,7 +31,7 @@ class MeetingBriefRequest(BaseModel):
     event_id: Optional[str] = None
     meeting_subject: Optional[str] = None
     participant_ids: Optional[List[str]] = None
-    include_recent_context: bool = True
+    include_recent_context: bool = False
 
 
 @router.post("/email-draft")

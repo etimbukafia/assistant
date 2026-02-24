@@ -10,6 +10,7 @@ import { MessageBubble } from "@/components/chat/MessageBubble";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useChat, useChatActionChips, useChatMessages, useChatSessions } from "@/hooks/useChat";
 import { useMentionComposer } from "@/hooks/useMentionComposer";
@@ -167,7 +168,7 @@ export default function ChatWorkspacePage() {
     const [selectedPaneMentions, setSelectedPaneMentions] = React.useState<ChatMention[]>([]);
     const [previewItem, setPreviewItem] = React.useState<ReferencePaneItem | null>(null);
 
-    const inputRef = React.useRef<HTMLInputElement>(null);
+    const inputRef = React.useRef<HTMLTextAreaElement>(null);
     const scrollRef = React.useRef<HTMLDivElement>(null);
     const frozenActionChipsBySessionRef = React.useRef<Record<string, ActionChip[]>>({});
 
@@ -449,8 +450,7 @@ export default function ChatWorkspacePage() {
         setInputValue((prev) => prev.replace(token, "").replace(/\s{2,}/g, " ").trimStart());
     }, [removePaneMention, selectedPaneMentions]);
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const submitCurrentMessage = React.useCallback(async () => {
         if (!inputValue.trim() || isSending || isCreating) return;
 
         const content = inputValue.trim();
@@ -475,7 +475,31 @@ export default function ChatWorkspacePage() {
             toast.error("That didn't send. Try again.");
             setInputValue(content);
         }
-    };
+    }, [
+        clearMentionState,
+        compileMentionsForMessage,
+        createSession,
+        currentSessionId,
+        isCreating,
+        isSending,
+        sendMessage,
+        setSelectedPaneMentions,
+        inputValue,
+    ]);
+
+    const handleSubmit = React.useCallback(async (e: React.FormEvent) => {
+        e.preventDefault();
+        await submitCurrentMessage();
+    }, [submitCurrentMessage]);
+
+    const handleComposerKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        onInputKeyDown(e);
+        if (e.defaultPrevented) return;
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            void submitCurrentMessage();
+        }
+    }, [onInputKeyDown, submitCurrentMessage]);
 
     const insertPrompt = (prompt: string) => {
         trackUIEvent("chat_chip_clicked", { prompt });
@@ -761,7 +785,7 @@ export default function ChatWorkspacePage() {
                         </div>
                     )}
 
-                    <form className="flex gap-2.5 items-center" onSubmit={handleSubmit}>
+                    <form className="flex gap-2.5 items-end" onSubmit={handleSubmit}>
                         <button
                             type="button"
                             onClick={() => setIsMobileReferencesOpen(true)}
@@ -770,7 +794,7 @@ export default function ChatWorkspacePage() {
                             References
                         </button>
                         <div className="relative flex-1">
-                            <Input
+                            <Textarea
                                 ref={inputRef}
                                 aria-label="Chat message input"
                                 value={inputValue}
@@ -784,13 +808,14 @@ export default function ChatWorkspacePage() {
                                         : undefined
                                 }
                                 placeholder="Ask Teeks?"
-                                className="bg-linen border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 h-11 text-sm transition-colors font-inter"
+                                rows={1}
+                                className="bg-linen border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 min-h-[44px] max-h-36 text-sm leading-5 transition-colors font-inter resize-none overflow-y-auto"
                                 onChange={(e) => {
                                     const value = e.target.value;
                                     const cursor = e.target.selectionStart ?? value.length;
                                     onInputChange(value, cursor);
                                 }}
-                                onKeyDown={onInputKeyDown}
+                                onKeyDown={handleComposerKeyDown}
                                 disabled={isSending || isCreating}
                             />
 

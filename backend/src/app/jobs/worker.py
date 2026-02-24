@@ -23,6 +23,8 @@ from app.infra.config import get_settings
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+USER_TIMEOUT_MESSAGE = "I couldn't finish that in time. Please send it again."
+USER_RETRY_MESSAGE = "I hit a temporary issue handling that. Please try again."
 
 
 # =============================================================================
@@ -1391,7 +1393,7 @@ def _update_message_failed(db, message_id: int, error: str):
                 msg.session_id,
                 error,
             )
-            user_error = "I couldn't complete that right now. Please try again."
+            user_error = USER_RETRY_MESSAGE
             msg.content = user_error
             msg.message_metadata = {
                 **(msg.message_metadata or {}),
@@ -1445,11 +1447,12 @@ async def handle_cleanup_stuck_chat_messages(task_id: int, task_type: str, paylo
         for msg in assistant_messages:
             metadata = msg.message_metadata or {}
             if metadata.get("status") == "processing":
-                msg.content = "I apologize, my response timed out. Please try again."
+                msg.content = USER_TIMEOUT_MESSAGE
                 msg.message_metadata = {
                     **metadata,
                     "status": "timeout",
-                    "error": "Processing exceeded time limit (background cleanup)",
+                    "error": USER_TIMEOUT_MESSAGE,
+                    "internal_error": "Processing exceeded time limit (background cleanup)",
                     "timed_out_at": datetime.now(timezone.utc).isoformat()
                 }
                 expired_count += 1

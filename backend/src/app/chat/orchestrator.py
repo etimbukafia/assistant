@@ -176,7 +176,10 @@ def resolve_mode(
         )
 
     # Action / command mode
-    base_prompt = _load_prompt("chat_system").format(assistant_name=assistant_name)
+    base_prompt = _load_prompt("chat_system").format(
+        assistant_name=assistant_name,
+        user_name=user_name or "the user",
+    )
     tool_names = ", ".join(tool_registry._tools.keys())
     tools = tool_registry.get_tool_definitions()
     return ModeConfig(
@@ -627,6 +630,7 @@ class ChatOrchestrator:
             deferred_actions=deferred_remaining if has_action_activity else [],
         )
         assistant_message = self._sanitize_plain_artifact_text(assistant_message, replace_sender=False)
+        assistant_message = self._sanitize_user_facing_response(assistant_message)
 
         state.deferred_actions = list(deferred_remaining)[:MAX_DEFERRED_ACTIONS]
         logger.info(
@@ -1408,9 +1412,9 @@ class ChatOrchestrator:
     def _friendly_llm_error(self, message: str) -> str:
         lowered = (message or "").lower()
         if any(token in lowered for token in {"draft", "reply", "email"}):
-            return "I can't draft a reply right now."
+            return "I can't draft that reply right now."
         if any(token in lowered for token in {"meeting brief", "brief", "prep", "prepare"}):
-            return "I can't prepare a meeting brief right now."
+            return "I can't prepare that meeting brief right now."
         if any(token in lowered for token in {"recap", "summary", "decisions", "commitments"}):
             return "I can't summarize that right now."
         return "I can't complete that right now."
@@ -1533,6 +1537,22 @@ class ChatOrchestrator:
         out = re.sub(r"[ \t]{2,}", " ", out)
         out = re.sub(r"\n{3,}", "\n\n", out)
         return out.strip()
+
+    def _sanitize_user_facing_response(self, text: str) -> str:
+        """Remove internal/process wording that should never surface to users."""
+        out = (text or "").strip()
+        if not out:
+            return out
+        replacements = [
+            (r"\bi need to access the context for\b", "I don't have enough details yet for"),
+            (r"\bi need (more|additional) context\b", "I need one more detail"),
+            (r"\bcontext is not available to me right now\b", "I don't have those details yet"),
+            (r"\bi can'?t access context\b", "I can't verify those details yet"),
+            (r"\bi can access context\b", "I can verify those details"),
+        ]
+        for pattern, repl in replacements:
+            out = re.sub(pattern, repl, out, flags=re.IGNORECASE)
+        return out
 
     def _normalize_referenced_entities(self, mention_context: Dict[str, Any]) -> List[Dict[str, str]]:
         entities = mention_context.get("entities") or []
@@ -1748,6 +1768,10 @@ class ChatOrchestrator:
             nonlocal action_count
             tool_name = (node.tool or "").strip()
             tool_args = dict(node.args or {})
+
+            if tool_name == "draft_email":
+                # Ensure the raw user ask is available to the drafting tool for completeness.
+                tool_args.setdefault("user_request", user_message)
 
             if tool_name not in allowed_tool_names:
                 raise ValueError("tool_not_allowed_by_catalog")
@@ -1965,21 +1989,34 @@ class ChatOrchestrator:
                 elif "summary" in result.data:
                     parts.append(str(result.data.get("summary")))
         
-        return "\n".join(parts) if parts else "I couldn't complete that request right now."
+        if parts:
+            return "\n".join(parts)
+        # Avoid empty generic fallback when tools ran but returned no renderable payload.
+        return "I completed that step, but there wasn't any displayable output yet."
 
     def _humanize_tool_error(self, error: Optional[str]) -> str:
         text = " ".join(str(error or "").split()).strip().lower()
         if not text:
-            return "I couldn't complete that action right now."
+            return "I couldn't finish that action."
+        if "not found" in text and "thread" in text:
+            return "I couldn't find that thread. Please reselect it from references and try again."
+        if "not found" in text and "event" in text:
+            return "I couldn't find that event. Please reselect it from references and try again."
+        if "not found" in text and "task" in text:
+            return "I couldn't find that task. Please reselect it from references and try again."
+        if "missing required field" in text:
+            return "I need one more detail to complete that action."
+        if "invalid parameter" in text or "validation" in text:
+            return "I couldn't run that because one detail was invalid. Please adjust and resend."
         if "draft" in text or "email" in text or "reply" in text:
-            return "I couldn't draft that email right now."
+            return "I couldn't draft that email yet."
         if "meeting" in text or "brief" in text or "prep" in text:
-            return "I couldn't prepare that meeting brief right now."
+            return "I couldn't prepare that meeting brief yet."
         if "task" in text:
-            return "I couldn't complete that task action right now."
+            return "I couldn't complete that task action yet."
         if "calendar" in text or "event" in text:
-            return "I couldn't complete that calendar action right now."
-        return "I couldn't complete that action right now."
+            return "I couldn't complete that calendar action yet."
+        return "I couldn't complete that action yet."
 
     def _render_email_draft(self, payload: Dict[str, Any]) -> str:
         subject = " ".join(str(payload.get("subject") or "").split()).strip()

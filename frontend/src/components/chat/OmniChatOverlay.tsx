@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation"
 import { ArrowUp, MessageSquare, X } from "lucide-react"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { useChatContext } from "@/context/ChatContext"
 import { useChat, useChatMessages } from "@/hooks/useChat"
 import { trackUIEvent } from "@/services/telemetry"
@@ -32,7 +32,7 @@ export function OmniChatOverlay() {
 
     const [inputValue, setInputValue] = React.useState("")
     const scrollRef = React.useRef<HTMLDivElement>(null)
-    const inputRef  = React.useRef<HTMLInputElement>(null)
+    const inputRef  = React.useRef<HTMLTextAreaElement>(null)
     const pathname  = usePathname()
 
     const {
@@ -80,8 +80,7 @@ export function OmniChatOverlay() {
         setInputValue((prev) => prev.replace(token, "").replace(/\s{2,}/g, " ").trimStart())
     }, [])
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault()
+    const submitCurrentMessage = React.useCallback(async () => {
         if (!inputValue.trim() || isSending || isCreating) return
 
         const content = inputValue.trim()
@@ -105,7 +104,31 @@ export function OmniChatOverlay() {
             toast.error("That didn't send. Try again.")
             setInputValue(content)
         }
-    }
+    }, [
+        clearMentionState,
+        createSession,
+        currentSessionId,
+        inputValue,
+        isCreating,
+        isSending,
+        mode,
+        parseMentions,
+        sendMessage,
+    ])
+
+    const handleSubmit = React.useCallback(async (e: React.FormEvent) => {
+        e.preventDefault()
+        await submitCurrentMessage()
+    }, [submitCurrentMessage])
+
+    const handleComposerKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        onInputKeyDown(e)
+        if (e.defaultPrevented) return
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault()
+            void submitCurrentMessage()
+        }
+    }, [onInputKeyDown, submitCurrentMessage])
 
     if (
         pathname === "/chat" ||
@@ -300,9 +323,9 @@ export function OmniChatOverlay() {
                             </div>
                         )}
 
-                        <form className="flex gap-2 items-center" onSubmit={handleSubmit}>
+                        <form className="flex gap-2 items-end" onSubmit={handleSubmit}>
                             <div className="relative flex-1">
-                                <Input
+                                <Textarea
                                     ref={inputRef}
                                     aria-label="Chat message input"
                                     role="combobox"
@@ -316,14 +339,15 @@ export function OmniChatOverlay() {
                                     }
                                     placeholder="Ask Teeks?"
                                     value={inputValue}
+                                    rows={1}
                                     onChange={(e) => {
                                         const value = e.target.value
                                         const cursor = e.target.selectionStart ?? value.length
                                         onInputChange(value, cursor)
                                     }}
-                                    onKeyDown={onInputKeyDown}
+                                    onKeyDown={handleComposerKeyDown}
                                     disabled={isSending || isCreating}
-                                    className="h-10 text-[13px] bg-background/80 border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 font-inter"
+                                    className="min-h-[40px] max-h-32 text-[13px] leading-5 bg-background/80 border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 font-inter resize-none overflow-y-auto"
                                 />
 
                                 {/* Mention suggestions */}

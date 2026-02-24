@@ -270,7 +270,7 @@ export const chatService = {
                         onUpdate({
                             status: 'failed',
                             job_id: jobId,
-                            error: 'Response timed out. Please try again.',
+                            error: "I couldn't finish that in time. Please send it again.",
                         });
                     }
                 }
@@ -279,7 +279,7 @@ export const chatService = {
                 onUpdate({
                     status: 'failed',
                     job_id: jobId,
-                    error: 'Failed to check job status',
+                    error: "I couldn't confirm the status just now. Please retry.",
                 });
             }
         };

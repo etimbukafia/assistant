@@ -37,6 +37,7 @@ class EmailDraftingService:
         thread: Optional[str] = None,
         message: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
+        user_request: Optional[str] = None,
     ) -> Dict[str, Any]:
         thread_ref = self._resolve_thread_ref(thread_id or thread)
         message_ref = self._resolve_message_ref(message_id or message)
@@ -87,6 +88,7 @@ class EmailDraftingService:
             sender_name=sender_name,
             context_lines=context_lines,
             source_message=source_message,
+            user_request=user_request,
         )
         return {
             "subject": subject,
@@ -136,10 +138,11 @@ class EmailDraftingService:
         sender_name: Optional[str],
         context_lines: List[Dict[str, Any]],
         source_message: Optional[Message],
+        user_request: Optional[str] = None,
     ) -> str:
         client = get_genai_client()
         if client is None:
-            return self._fallback_body(subject, intent, recipient, context_lines)
+            return self._fallback_body(subject, intent, recipient, sender_name, context_lines)
 
         model_name = os.getenv("PLAYGROUND_EMAIL_DRAFT_MODEL", "gemini-2.5-flash-lite")
         prompt = self._build_llm_prompt(
@@ -149,6 +152,7 @@ class EmailDraftingService:
             sender_name=sender_name,
             context_lines=context_lines,
             source_message=source_message,
+            user_request=user_request,
         )
         try:
             response = client.models.generate_content(
@@ -165,8 +169,37 @@ class EmailDraftingService:
                 ),
             )
             text = self._sanitize_email_text((response.text or "").strip(), sender_name=sender_name)
-            if text:
+            if text and self._covers_request(user_request, text):
                 return text
+            if user_request:
+                retry_prompt = self._build_llm_prompt(
+                    subject=subject,
+                    intent=intent,
+                    recipient=recipient,
+                    sender_name=sender_name,
+                    context_lines=context_lines,
+                    source_message=source_message,
+                    user_request=user_request,
+                    missing_only=True,
+                )
+                retry = client.models.generate_content(
+                    model=model_name,
+                    contents=[genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=retry_prompt)])],
+                    config=genai_types.GenerateContentConfig(
+                        max_output_tokens=380,
+                        temperature=0.3,
+                        system_instruction=(
+                            "You draft concise executive-assistant emails. "
+                            "Return plain email body only. No markdown. No explanations. "
+                            "Never use placeholders like [Your Name]."
+                        ),
+                    ),
+                )
+                retry_text = self._sanitize_email_text((retry.text or "").strip(), sender_name=sender_name)
+                if retry_text and self._covers_request(user_request, retry_text):
+                    return retry_text
+                if retry_text:
+                    return retry_text
         except Exception:
             logger.exception("email_draft_generation_failed user=%s", self.user_id)
 
@@ -180,8 +213,11 @@ class EmailDraftingService:
         sender_name: Optional[str],
         context_lines: List[Dict[str, Any]],
         source_message: Optional[Message],
+        user_request: Optional[str] = None,
+        missing_only: bool = False,
     ) -> str:
         recipient_hint = recipient or "unknown recipient"
+        recipient_note = "" if recipient else "Recipient unresolved; keep greeting generic and avoid naming."
         source_block = "[none]"
         if source_message:
             source_block = (
@@ -200,9 +236,12 @@ class EmailDraftingService:
             }
             for entry in context_lines[:14]
         ]
+        required_points = self._extract_required_points(user_request)
+        missing_points = required_points if not missing_only else [p for p in required_points if p]
         return (
             "Draft an email reply.\n\n"
             f"Recipient: {recipient_hint}\n"
+            f"{recipient_note}\n"
             f"Sender name: {sender_name or '[none]'}\n"
             f"Subject: {subject}\n"
             f"Intent: {intent}\n\n"
@@ -216,7 +255,19 @@ class EmailDraftingService:
             "- Treat resolved/stale/archived items as historical context only.\n"
             "- Never output placeholders such as [Your Name].\n"
             "- If sender name is provided, use it in the sign-off.\n"
-            "- Return only the email body text."
+            "- Return only the email body text.\n"
+            + (
+                ""
+                if not required_points
+                else "- Explicitly cover these user-stated points:\n"
+                     + "\n".join(f"  • {p}" for p in required_points)
+            )
+            + (
+                ""
+                if not (missing_only and missing_points)
+                else "\n- Missing coverage in the previous draft; include these explicitly now:\n"
+                     + "\n".join(f"  • {p}" for p in missing_points)
+            )
         )
 
     def _resolve_thread_ref(self, identifier: Optional[str]) -> Optional[str]:
@@ -273,6 +324,33 @@ class EmailDraftingService:
         if by_name:
             return by_name.ref
         return query
+
+    # --- Request coverage helpers -------------------------------------------------
+
+    def _extract_required_points(self, user_request: Optional[str]) -> List[str]:
+        if not user_request:
+            return []
+        text = " ".join(user_request.split())
+        raw_parts: List[str] = []
+        for chunk in re.split(r"[.;]| and | AND ", text):
+            chunk = chunk.strip(" -,:")
+            if len(chunk) >= 8:
+                raw_parts.append(chunk)
+        parts = []
+        for part in raw_parts:
+            if len(parts) >= 6:
+                break
+            parts.append(part[:160])
+        return parts
+
+    def _covers_request(self, user_request: Optional[str], body: str) -> bool:
+        if not user_request:
+            return True
+        body_l = body.lower()
+        for phrase in self._extract_required_points(user_request):
+            if phrase.lower() not in body_l:
+                return False
+        return True
 
     def _resolve_recipient(self, recipient: Optional[str]) -> Optional[str]:
         value = (recipient or "").strip()

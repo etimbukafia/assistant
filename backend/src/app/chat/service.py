@@ -36,6 +36,7 @@ from app.data.models import (
     Message,
     VaultNote,
     Contact,
+    CalendarEvent,
     EntityReference,
     ContextEntry,
 )
@@ -55,6 +56,9 @@ SYNC_TIMEOUT_SECONDS = 30.0
 
 # Timeout for async messages stuck in "processing" state (TTL on read)
 PROCESSING_TIMEOUT_MINUTES = 2
+USER_TIMEOUT_MESSAGE = "I couldn't finish that in time. Please send it again."
+USER_RETRY_MESSAGE = "I hit a temporary issue handling that. Please try again."
+USER_JOB_NOT_FOUND_MESSAGE = "I couldn't find that request anymore. Please send it again."
 
 # Keep sync-first as default so common tool flows (e.g. draft with @mention)
 # do not depend on worker availability.
@@ -290,6 +294,16 @@ class ChatService:
         text = re.sub(r"\s+", " ", text).strip()
         return text[:max_len]
 
+    @staticmethod
+    def _normalize_mention_lookup(value: Optional[str], max_len: int = 220) -> str:
+        text = ChatService._sanitize_mention_text(value, max_len=max_len)
+        if not text:
+            return ""
+        text = text.lstrip("@/").strip()
+        # Trim punctuation often carried at end of typed mentions.
+        text = text.strip(".,;:!?)]}\"'")
+        return text
+
     def _resolve_mentions(self, mentions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Resolve structured mention tokens into canonical targets."""
         resolved_contacts = []
@@ -300,30 +314,53 @@ class ChatService:
 
         for mention in mentions or []:
             mtype = (mention.get("type") or mention.get("kind") or "").strip().lower()
-            ref_id = (mention.get("ref_id") or mention.get("ref") or "").strip()
+            ref_id = self._normalize_mention_lookup(mention.get("ref_id") or mention.get("ref"))
             label = mention.get("label")
+            label_lookup = self._normalize_mention_lookup(label)
 
             if mtype == "contact":
                 email = None
                 if "@" in ref_id:
                     email = self._sanitize_mention_text(ref_id.lower(), max_len=254)
                 else:
-                    contact = (
-                        self.db.query(Contact)
-                        .filter(
-                            Contact.user_id == self.user_id,
-                            (Contact.email == ref_id.lower()) | (Contact.name.ilike(ref_id)),
+                    contact = None
+                    if ref_id:
+                        contact = (
+                            self.db.query(Contact)
+                            .filter(
+                                Contact.user_id == self.user_id,
+                                (Contact.email == ref_id.lower())
+                                | (Contact.name.ilike(ref_id))
+                                | (Contact.name.ilike(f"%{ref_id}%")),
+                            )
+                            .first()
                         )
-                        .first()
-                    )
+                    if not contact and label_lookup:
+                        contact = (
+                            self.db.query(Contact)
+                            .filter(
+                                Contact.user_id == self.user_id,
+                                (Contact.name.ilike(label_lookup)) | (Contact.name.ilike(f"%{label_lookup}%")),
+                            )
+                            .first()
+                        )
                     if contact:
                         email = (contact.email or "").lower()
                     if not email:
-                        legacy_contact = self.db.query(ContactContext).filter(
-                            ContactContext.user_id == self.user_id,
-                            (ContactContext.contact_email == ref_id) |
-                            (ContactContext.contact_name.ilike(ref_id))
-                        ).first()
+                        legacy_contact = None
+                        if ref_id:
+                            legacy_contact = self.db.query(ContactContext).filter(
+                                ContactContext.user_id == self.user_id,
+                                (ContactContext.contact_email == ref_id) |
+                                (ContactContext.contact_name.ilike(ref_id)) |
+                                (ContactContext.contact_name.ilike(f"%{ref_id}%"))
+                            ).first()
+                        if not legacy_contact and label_lookup:
+                            legacy_contact = self.db.query(ContactContext).filter(
+                                ContactContext.user_id == self.user_id,
+                                (ContactContext.contact_name.ilike(label_lookup)) |
+                                (ContactContext.contact_name.ilike(f"%{label_lookup}%"))
+                            ).first()
                         if legacy_contact:
                             email = legacy_contact.contact_email
                 if email:
@@ -350,6 +387,11 @@ class ChatService:
                     msg = self.db.query(Message).filter(
                         Message.user_id == self.user_id,
                         Message.subject.ilike(f"%{safe_ref}%")
+                    ).order_by(Message.received_at.desc()).first()
+                if not msg and label_lookup:
+                    msg = self.db.query(Message).filter(
+                        Message.user_id == self.user_id,
+                        Message.subject.ilike(f"%{label_lookup}%")
                     ).order_by(Message.received_at.desc()).first()
                 if msg:
                     resolved_emails.append({
@@ -396,11 +438,11 @@ class ChatService:
                         Task.id == int(ref_id)
                     ).first()
                 if not task:
-                    lookup = self._sanitize_mention_text(label or ref_id, max_len=220)
+                    lookup = self._normalize_mention_lookup(label or ref_id, max_len=220)
                     if lookup:
                         task = self.db.query(Task).filter(
                             Task.user_id == self.user_id,
-                            Task.title.ilike(lookup)
+                            (Task.title.ilike(lookup)) | (Task.title.ilike(f"%{lookup}%"))
                         ).order_by(Task.updated_at.desc()).first()
                 if task:
                     task_label = self._sanitize_mention_text(task.title or f"Task {task.id}", max_len=220)
@@ -420,22 +462,100 @@ class ChatService:
                         }
                     )
             elif mtype in {"thread", "event"}:
-                entity = (
-                    self.db.query(EntityReference)
-                    .filter(
-                        EntityReference.user_id == self.user_id,
-                        EntityReference.entity_type == mtype,
-                        (EntityReference.ref == ref_id) | (EntityReference.display_name.ilike(ref_id))
+                if not ref_id and not label_lookup:
+                    continue
+                entity = None
+                if ref_id:
+                    entity = (
+                        self.db.query(EntityReference)
+                        .filter(
+                            EntityReference.user_id == self.user_id,
+                            EntityReference.entity_type == mtype,
+                            (EntityReference.ref == ref_id)
+                            | (EntityReference.display_name.ilike(ref_id))
+                            | (EntityReference.display_name.ilike(f"%{ref_id}%"))
+                        )
+                        .order_by(EntityReference.updated_at.desc())
+                        .first()
                     )
-                    .order_by(EntityReference.updated_at.desc())
-                    .first()
-                )
+                if not entity and label_lookup:
+                    entity = (
+                        self.db.query(EntityReference)
+                        .filter(
+                            EntityReference.user_id == self.user_id,
+                            EntityReference.entity_type == mtype,
+                            (EntityReference.display_name.ilike(label_lookup))
+                            | (EntityReference.display_name.ilike(f"%{label_lookup}%"))
+                        )
+                        .order_by(EntityReference.updated_at.desc())
+                        .first()
+                    )
+                if not entity and mtype == "thread":
+                    thread_query = self.db.query(Message).filter(
+                        Message.user_id == self.user_id,
+                    )
+                    if label_lookup:
+                        if ref_id:
+                            thread_query = thread_query.filter(
+                                (Message.thread_id == ref_id)
+                                | (Message.subject.ilike(f"%{ref_id}%"))
+                                | (Message.subject.ilike(f"%{label_lookup}%"))
+                            )
+                        else:
+                            thread_query = thread_query.filter(
+                                Message.subject.ilike(f"%{label_lookup}%")
+                            )
+                    else:
+                        thread_query = thread_query.filter(
+                            (Message.thread_id == ref_id)
+                            | (Message.subject.ilike(f"%{ref_id}%"))
+                        )
+                    thread_match = thread_query.order_by(
+                        Message.received_at.desc(), Message.created_at.desc()
+                    ).first()
+                    if thread_match and thread_match.thread_id:
+                        entity = EntityReference(
+                            user_id=self.user_id,
+                            entity_type="thread",
+                            ref=thread_match.thread_id,
+                            display_name=(thread_match.subject or "").strip() or thread_match.thread_id,
+                        )
+                if not entity and mtype == "event":
+                    event_match = None
+                    if ref_id.isdigit():
+                        event_match = (
+                            self.db.query(CalendarEvent)
+                            .filter(
+                                CalendarEvent.user_id == self.user_id,
+                                CalendarEvent.id == int(ref_id),
+                            )
+                            .first()
+                        )
+                    if not event_match:
+                        event_lookup = label_lookup or ref_id
+                        if event_lookup:
+                            event_match = (
+                                self.db.query(CalendarEvent)
+                                .filter(
+                                    CalendarEvent.user_id == self.user_id,
+                                    CalendarEvent.title.ilike(f"%{event_lookup}%"),
+                                )
+                                .order_by(CalendarEvent.updated_at.desc(), CalendarEvent.start_time.asc())
+                                .first()
+                            )
+                    if event_match:
+                        entity = EntityReference(
+                            user_id=self.user_id,
+                            entity_type="event",
+                            ref=str(event_match.id),
+                            display_name=(event_match.title or "").strip() or str(event_match.id),
+                        )
                 if entity:
                     resolved_entities.append(
                         {
                             "kind": mtype,
                             "ref": self._sanitize_mention_text(entity.ref, max_len=220),
-                            "label": self._sanitize_mention_text(label or entity.display_name, max_len=220),
+                            "label": self._sanitize_mention_text(label or entity.display_name or entity.ref, max_len=220),
                         }
                     )
                 elif ref_id:
@@ -481,6 +601,38 @@ class ChatService:
             "memory": resolved_memory,
             "entities": resolved_entities,
         }
+
+    def _parse_since_hint(self, content: str) -> Optional[datetime]:
+        """
+        Parse simple "since" hints in user text to drive recent_changes window.
+        Supports:
+          - "since YYYY-MM-DD"
+          - "since yesterday"
+          - "since today"
+          - "since last week" / "past week"
+          - "since last 7 days" / "past 7 days"
+        Returns None when not recognized.
+        """
+        text = " ".join((content or "").lower().split())
+        now = datetime.now(timezone.utc)
+
+        iso_match = re.search(r"since\\s+(\\d{4}-\\d{2}-\\d{2})", text)
+        if iso_match:
+            try:
+                return datetime.fromisoformat(iso_match.group(1)).replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+
+        if "since yesterday" in text:
+            return now - timedelta(days=1)
+        if "since today" in text:
+            return datetime.combine(now.date(), datetime.min.time(), tzinfo=timezone.utc)
+        if "since last week" in text or "past week" in text:
+            return now - timedelta(days=7)
+        if re.search(r"since (last|past)\\s+7\\s+days", text):
+            return now - timedelta(days=7)
+
+        return None
     
     def get_messages(
         self,
@@ -512,11 +664,12 @@ class ChatService:
             if (metadata.get("status") == "processing" and 
                 msg.created_at < timeout_cutoff):
                 # Expire this stuck message
-                msg.content = "I apologize, my response timed out. Please try again."
+                msg.content = USER_TIMEOUT_MESSAGE
                 msg.message_metadata = {
                     **metadata,
                     "status": "timeout",
-                    "error": "Processing exceeded time limit",
+                    "error": USER_TIMEOUT_MESSAGE,
+                    "internal_error": "Processing exceeded time limit",
                     "timed_out_at": datetime.now(timezone.utc).isoformat()
                 }
                 updated_any = True
@@ -923,6 +1076,7 @@ class ChatService:
         mention_entities = resolved_mentions.get("entities", [])
         if mention_entities:
             prefetch_started = time.perf_counter()
+            since_ts = self._parse_since_hint(content)
             mention_service = MentionContextService(
                 db=self.db,
                 warm_cache=get_warm_cache_service(),
@@ -938,10 +1092,12 @@ class ChatService:
                         "label": item.get("label"),
                     }
                     for item in mention_entities
-                ]
+                ],
+                since_ts=since_ts,
             )
             resolved_mentions["mention_prefetch"] = prefetch
             selected_entries = prefetch.get("selected_entries") or []
+            unresolved_mentions = prefetch.get("unresolved_mentions") or []
             if selected_entries:
                 get_hot_context_cache_service().merge_context_entries(
                     tenant_id="default",
@@ -956,6 +1112,14 @@ class ChatService:
                 len(selected_entries),
                 int((time.perf_counter() - prefetch_started) * 1000),
             )
+            if unresolved_mentions:
+                logger.warning(
+                    "chat_mentions_unresolved user=%s session=%s count=%s samples=%s",
+                    self.user_id,
+                    session_id,
+                    len(unresolved_mentions),
+                    unresolved_mentions[:3],
+                )
 
         # Save user message
         persist_started = time.perf_counter()
@@ -1171,7 +1335,7 @@ class ChatService:
             clauses.append(f"I've skipped {skipped}.")
         if failed_labels:
             failed = ", ".join([f"\"{item}\"" for item in failed_labels])
-            clauses.append(f"I couldn't finish {failed} right now.")
+            clauses.append(f"I couldn't finish {failed} yet.")
         if remaining_pending:
             remaining = ", ".join([f"\"{self._pending_action_label(item)}\"" for item in remaining_pending[:5]])
             clauses.append(f"I still have {remaining} pending. Tell me to proceed when ready.")
@@ -1375,7 +1539,7 @@ class ChatService:
             )
             return ChatResponse(
                 status=ProcessingStatus.FAILED,
-                error="I couldn't complete that right now. Please try again."
+                error=USER_RETRY_MESSAGE
             )
 
     def _enqueue_async(
@@ -1467,7 +1631,7 @@ class ChatService:
             )
             return ChatResponse(
                 status=ProcessingStatus.FAILED,
-                error="Job not found"
+                error=USER_JOB_NOT_FOUND_MESSAGE
             )
 
         metadata = message.message_metadata or {}
@@ -1478,11 +1642,12 @@ class ChatService:
             timeout_cutoff = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_TIMEOUT_MINUTES)
             if message.created_at < timeout_cutoff:
                 # Expire this stuck message
-                message.content = "I apologize, my response timed out. Please try again."
+                message.content = USER_TIMEOUT_MESSAGE
                 message.message_metadata = {
                     **metadata,
                     "status": "timeout",
-                    "error": "Processing exceeded time limit",
+                    "error": USER_TIMEOUT_MESSAGE,
+                    "internal_error": "Processing exceeded time limit",
                     "timed_out_at": datetime.now(timezone.utc).isoformat()
                 }
                 self.db.commit()
@@ -1498,7 +1663,7 @@ class ChatService:
                     status=ProcessingStatus.FAILED,
                     job_id=job_id,
                     message_id=message.id,
-                    error="Processing timed out. Please try again."
+                    error=USER_TIMEOUT_MESSAGE
                 )
             
             return ChatResponse(
@@ -1521,7 +1686,7 @@ class ChatService:
                 status=ProcessingStatus.FAILED,
                 job_id=job_id,
                 message_id=message.id,
-                error=metadata.get("error", "Processing timed out")
+                error=metadata.get("error", USER_TIMEOUT_MESSAGE)
             )
 
         # Check if failed
@@ -1538,7 +1703,7 @@ class ChatService:
             return ChatResponse(
                 status=ProcessingStatus.FAILED,
                 job_id=job_id,
-                error=metadata.get("error", "Processing failed")
+                error=metadata.get("error", USER_RETRY_MESSAGE)
             )
 
         # Complete - return the response

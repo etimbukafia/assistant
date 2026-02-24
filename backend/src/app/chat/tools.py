@@ -266,6 +266,7 @@ class ChatToolRegistry:
                         "thread": {"type": "string"},
                         "message": {"type": "string"},
                         "context": {"type": "object"},
+                        "user_request": {"type": "string", "description": "Raw user ask; ensure explicit points are covered."},
                     },
                 },
             ),
@@ -279,7 +280,7 @@ class ChatToolRegistry:
                         "event_id": {"type": "string"},
                         "meeting_subject": {"type": "string"},
                         "participant_ids": {"type": "array", "items": {"type": "string"}},
-                        "include_recent_context": {"type": "boolean", "default": True},
+                        "include_recent_context": {"type": "boolean", "default": False},
                     },
                 },
             ),
@@ -287,16 +288,20 @@ class ChatToolRegistry:
             # Approval-gated tools
             "draft_reply": ToolDefinition(
                 name="draft_reply",
-                description="Draft a reply to an email. User must approve before sending.",
+                description=(
+                    "Draft a reply to an email thread. User must approve before sending. "
+                    "Provide email_id (integer) if known, or thread_id (string) to resolve the latest email in that thread."
+                ),
                 tool_type=ToolType.APPROVAL_GATED,
                 parameters={
                     "type": "object",
                     "properties": {
-                        "email_id": {"type": "integer", "description": "ID of email to reply to"},
+                        "email_id": {"type": "integer", "description": "Integer ID of the specific email to reply to"},
+                        "thread_id": {"type": "string", "description": "Thread ID — used to find the latest email when email_id is unknown"},
                         "tone": {"type": "string", "description": "Desired tone (professional, friendly, formal)"},
                         "key_points": {"type": "array", "items": {"type": "string"}, "description": "Points to include"}
                     },
-                    "required": ["email_id"]
+                    "required": []
                 }
             ),
             "create_task": ToolDefinition(
@@ -765,6 +770,63 @@ class ChatToolRegistry:
                 .all()
             )
             entries = [self._serialize_context_entry(r) for r in rows]
+        if not entries:
+            event = None
+            if str(event_ref).isdigit():
+                event = (
+                    self.db.query(CalendarEvent)
+                    .filter(
+                        CalendarEvent.user_id == self.user_id,
+                        CalendarEvent.id == int(str(event_ref)),
+                    )
+                    .first()
+                )
+            if not event:
+                event = (
+                    self.db.query(CalendarEvent)
+                    .filter(
+                        CalendarEvent.user_id == self.user_id,
+                        CalendarEvent.external_event_id == str(event_ref),
+                    )
+                    .first()
+                )
+            if event:
+                participants_raw = event.participants if isinstance(event.participants, list) else []
+                participant_names: List[str] = []
+                for p in participants_raw:
+                    if isinstance(p, dict):
+                        name = " ".join(str(p.get("name") or "").split()).strip()
+                        email = " ".join(str(p.get("email") or "").split()).strip()
+                        if name or email:
+                            participant_names.append(name or email)
+                    else:
+                        value = " ".join(str(p).split()).strip()
+                        if value:
+                            participant_names.append(value)
+                bits = [f"Event: {(event.title or '').strip() or f'Event {event.id}'}"]
+                if event.start_time:
+                    bits.append(f"starts {event.start_time.isoformat()}")
+                if event.end_time:
+                    bits.append(f"ends {event.end_time.isoformat()}")
+                if (event.location or "").strip():
+                    bits.append(f"location: {event.location.strip()}")
+                if participant_names:
+                    bits.append("participants: " + ", ".join(participant_names[:8]))
+                entries = [
+                    {
+                        "id": f"event:{event.id}:facts",
+                        "type": "event_facts",
+                        "content": " | ".join(bits),
+                        "entity_type": "event",
+                        "entity_id": str(event.id),
+                        "created_by": "Teeks",
+                        "created_at": (event.updated_at or event.start_time or event.created_at).isoformat()
+                        if (event.updated_at or event.start_time or event.created_at)
+                        else None,
+                        "importance_level": "high" if participant_names else "normal",
+                        "status": event.status or "active",
+                    }
+                ]
         self._merge_hot(entries)
         return ToolResult(success=True, data={"event_id": event_ref, "entries": entries})
 
@@ -803,6 +865,14 @@ class ChatToolRegistry:
             or (params.get("intent") or "").strip()
             or "Follow-up"
         )
+        safe_log = {
+            "subject": subject,
+            "intent": (params.get("intent") or "").strip(),
+            "recipient": (params.get("recipient") or "").strip()[:200],
+            "thread_id": (params.get("thread_id") or "").strip()[:200],
+            "message_id": (params.get("message_id") or "").strip()[:200],
+        }
+        logger.info("draft_email_invoked %s", safe_log)
         draft = service.draft(
             subject=subject,
             intent=params.get("intent", ""),
@@ -813,6 +883,7 @@ class ChatToolRegistry:
             thread=params.get("thread"),
             message=params.get("message"),
             context=params.get("context"),
+            user_request=params.get("user_request"),
         )
         return ToolResult(success=True, data=draft)
 
@@ -830,7 +901,7 @@ class ChatToolRegistry:
             event_id=params.get("event_id"),
             meeting_subject=params.get("meeting_subject"),
             participant_ids=params.get("participant_ids"),
-            include_recent_context=bool(params.get("include_recent_context", True)),
+            include_recent_context=bool(params.get("include_recent_context", False)),
         )
         return ToolResult(success=True, data=brief)
 
@@ -886,7 +957,8 @@ class ChatToolRegistry:
         return None
 
     def _resolve_entity_ref(self, entity_type: str, identifier: Optional[str]) -> Optional[str]:
-        query = (identifier or "").strip()
+        query = " ".join(str(identifier or "").split()).strip().lstrip("@/")
+        query = query.strip(".,;:!?)]}\"'")
         if not query:
             return None
         exact = (
@@ -905,7 +977,8 @@ class ChatToolRegistry:
             .filter(
                 EntityReference.user_id == self.user_id,
                 EntityReference.entity_type == entity_type,
-                func.lower(EntityReference.display_name) == query.lower(),
+                (func.lower(EntityReference.display_name) == query.lower())
+                | EntityReference.display_name.ilike(f"%{query}%"),
             )
             .first()
         )
@@ -990,12 +1063,24 @@ class ChatToolRegistry:
     def _execute_draft_reply(self, params: Dict[str, Any]) -> ToolResult:
         """Prepare a draft reply for approval."""
         email_id = params.get("email_id")
-        
-        email = self.db.query(Message).filter(
-            Message.id == email_id,
-            Message.user_id == self.user_id
-        ).first()
-        
+        thread_id = params.get("thread_id")
+
+        if email_id is not None:
+            email = self.db.query(Message).filter(
+                Message.id == email_id,
+                Message.user_id == self.user_id,
+            ).first()
+        elif thread_id:
+            # Resolve to the most recent email in the referenced thread
+            email = (
+                self.db.query(Message)
+                .filter(Message.thread_id == thread_id, Message.user_id == self.user_id)
+                .order_by(Message.received_at.desc())
+                .first()
+            )
+        else:
+            return ToolResult(success=False, error="Provide email_id or thread_id to identify the email")
+
         if not email:
             return ToolResult(success=False, error="Email not found")
         
@@ -1007,7 +1092,7 @@ class ChatToolRegistry:
             pending_action={
                 "action_type": "draft_reply",
                 "action_data": {
-                    "email_id": email_id,
+                    "email_id": email.id,
                     "email_subject": email.subject,
                     "email_sender": email.sender,
                     "tone": params.get("tone", "professional"),

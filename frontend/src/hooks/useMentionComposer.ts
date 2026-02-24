@@ -27,7 +27,7 @@ export type MentionSuggestion = {
 type UseMentionComposerArgs = {
     inputValue: string;
     setInputValue: React.Dispatch<React.SetStateAction<string>>;
-    inputRef: React.RefObject<HTMLInputElement | null>;
+    inputRef: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>;
     sessionId?: string;
     onMentionSelected?: (mention: ChatMention) => void;
 };
@@ -222,7 +222,7 @@ export function useMentionComposer({
         setMentionContext(detectMentionContext(value, cursor));
     }, [setInputValue]);
 
-    const onInputKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    const onInputKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         if (!mentionSuggestions.length) return;
         if (e.key === "ArrowDown") {
             e.preventDefault();

@@ -185,7 +185,10 @@ def resolve_mode(
         )
 
     # Action / command mode
-    base_prompt = _load_prompt("chat_system").format(assistant_name=assistant_name)
+    base_prompt = _load_prompt("chat_system").format(
+        assistant_name=assistant_name,
+        user_name=user_name or "the user",
+    )
     tool_names = ", ".join(tool_registry._tools.keys())
     tools = tool_registry.get_tool_definitions()
     return ModeConfig(
@@ -1865,13 +1868,21 @@ class ChatOrchestrator:
 
         planner_system = (
             "You are a strict planning engine for Teeks chat. "
-            "Return ONLY a valid JSON object (no markdown, no prose) matching this contract: "
-            "{plan_id, sub_requests[], nodes[], clarification}. "
-            "Each node must include: id, sub_request_id, family, tool, args, depends_on[]. "
-            "Use only tools from the provided catalog. "
-            "Prefer minimal plans. "
-            "If the request is blocked, set clarification.needed=true with one concise question. "
-            "If not blocked, clarification.needed=false."
+            "Return ONLY a valid JSON object — no markdown fences, no prose — that matches this exact contract:\n"
+            "{\n"
+            '  "plan_id": "<uuid>",\n'
+            '  "sub_requests": [{"id": "sr_1", "intent": "<verb phrase>", "text": "<original fragment>", "blocking": false}],\n'
+            '  "nodes": [{"id": "node_1", "sub_request_id": "sr_1", "family": "<family>", "tool": "<name>", "args": {}, "depends_on": []}],\n'
+            '  "clarification": {"needed": false, "question": null}\n'
+            "}\n\n"
+            "RULES:\n"
+            "- sub_requests MUST contain at least 1 entry — never leave it empty.\n"
+            "- Every node's sub_request_id MUST match the id of one of the sub_requests — never null.\n"
+            "- family must be one of: read_context, generate_artifact, write_task, external_action.\n"
+            "- Use only tools listed in the provided catalog.\n"
+            "- Prefer minimal plans.\n"
+            "- If the request is blocked or ambiguous, set clarification.needed=true with one concise question; "
+            "otherwise clarification.needed=false and question=null."
         )
         planner_user = (
             f"User message: {user_message}\n"
@@ -1879,9 +1890,10 @@ class ChatOrchestrator:
             f"Tool catalog JSON: {json.dumps(catalog, ensure_ascii=True, separators=(',', ':'))}\n"
             "Constraints:\n"
             f"- Max {MAX_ACTION_TOOLS_PER_TURN} action nodes for this turn.\n"
-            "- For independent reads, keep dependencies empty so they can run in parallel.\n"
-            "- Keep args concrete and executable.\n"
-            "- Never include tools outside catalog."
+            "- For independent reads, set depends_on=[] so they run in parallel.\n"
+            "- Keep args concrete and executable — pull ids from the resolved mention context.\n"
+            "- Never include tools outside catalog.\n"
+            "- Output raw JSON only. No ```json``` fences."
         )
         return [
             {"role": "system", "content": planner_system},

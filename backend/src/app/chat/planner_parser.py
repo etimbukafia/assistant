@@ -42,6 +42,51 @@ def _extract_first_json_object(raw: str) -> Dict[str, Any]:
     raise PlanParseError("Could not find a valid JSON object in planner output")
 
 
+def _repair_plan_shape(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Tolerate minor planner contract misses by synthesizing sub_requests from nodes.
+    """
+    if not isinstance(data, dict):
+        return data
+
+    nodes = data.get("nodes")
+    sub_requests = data.get("sub_requests")
+    if isinstance(nodes, list) and nodes and (not isinstance(sub_requests, list) or not sub_requests):
+        synthesized: list[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for idx, node in enumerate(nodes, start=1):
+            if not isinstance(node, dict):
+                continue
+            srid = str(node.get("sub_request_id") or node.get("id") or f"sr_{idx}").strip()
+            if not srid or srid in seen:
+                continue
+            seen.add(srid)
+            # Backfill node sub_request_id if missing/blank
+            if not (node.get("sub_request_id") or "").strip():
+                node["sub_request_id"] = srid
+            tool_name = str(node.get("tool") or "action").strip() or "action"
+            args = node.get("args")
+            text_hint = ""
+            if isinstance(args, dict):
+                text_hint = (
+                    str(args.get("meeting_subject") or "")
+                    or str(args.get("subject") or "")
+                    or str(args.get("query") or "")
+                ).strip()
+            synthesized.append(
+                {
+                    "id": srid,
+                    "intent": tool_name,
+                    "text": text_hint or tool_name,
+                    "blocking": False,
+                    "metadata": {},
+                }
+            )
+        if synthesized:
+            data["sub_requests"] = synthesized
+    return data
+
+
 def parse_execution_plan(payload: Union[str, Dict[str, Any], ExecutionPlan]) -> ExecutionPlan:
     """
     Parse planner output and validate against ExecutionPlan contract.
@@ -65,6 +110,8 @@ def parse_execution_plan(payload: Union[str, Dict[str, Any], ExecutionPlan]) -> 
             data = _extract_first_json_object(raw)
     else:
         raise PlanParseError(f"Unsupported planner payload type: {type(payload).__name__}")
+
+    data = _repair_plan_shape(data)
 
     try:
         return ExecutionPlan.model_validate(data)

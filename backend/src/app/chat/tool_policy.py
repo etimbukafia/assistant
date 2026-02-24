@@ -43,6 +43,40 @@ ACTION_HINT_TOKENS = {
     "find",
 }
 
+"""
+# Multi-word phrases that signal a context-retrieval question about a mentioned entity.
+# Single-word tokens (e.g. "what", "how") are intentionally excluded to avoid false
+# positives like "@Alice what is the capital of France?".
+# These unlock READ_CONTEXT tools only — not artifact generation or writes.
+CONTEXT_QUERY_PHRASES = {
+    "what changed",
+    "what happened",
+    "what's new",
+    "whats new",
+    "any updates",
+    "any news",
+    "anything new",
+    "latest on",
+    "catch me up",
+    "fill me in",
+    "tell me about",
+    "update me on",
+    "status of",
+    "status on",
+    "how is",
+    "how has",
+    "what do you know",
+    "what do we know",
+    "what have",
+    "anything on",
+    "anything about",
+    "remind me about",
+    "what was decided",
+    "what did",
+    "what were",
+}
+"""
+
 TASK_WRITE_HINT_TOKENS = {
     "create task",
     "add task",
@@ -112,6 +146,7 @@ class ToolPolicyEngine:
         has_mentions = bool(entities)
         has_action_hint = any(token in text for token in ACTION_HINT_TOKENS)
         has_task_write_hint = any(token in text for token in TASK_WRITE_HINT_TOKENS)
+        #has_context_query = any(phrase in text for phrase in CONTEXT_QUERY_PHRASES)
 
         if text in NO_TOOL_MESSAGES:
             return ToolPolicyDecision(
@@ -126,8 +161,16 @@ class ToolPolicyEngine:
                 allowed_families=set(),
                 reason="requires_explicit_mentions",
             )
-
+        
+        # Context-query phrases (e.g. "what changed", "any updates") with a mention
+        # unlock read-only tools but not artifact generation or write tools.
         if not has_action_hint and not has_task_write_hint:
+            """if has_context_query:
+                return ToolPolicyDecision(
+                    tools_allowed=True,
+                    allowed_families={ToolFamily.READ_CONTEXT},
+                    reason="context_query_with_mention",
+                )"""
             return ToolPolicyDecision(
                 tools_allowed=False,
                 allowed_families=set(),

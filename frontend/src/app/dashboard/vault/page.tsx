@@ -231,7 +231,7 @@ export default function DiaryPage() {
     const { data: contacts = [], isLoading: contactsLoading } = useDiaryContacts(contactSearch || undefined);
     const { createEntry, updateEntry, deleteEntry, createContact, updateContact, deleteContact } = useDiaryMutations();
 
-    // @mention support — cast textarea ref to satisfy hook's HTMLInputElement type
+    // @mention support
     const {
         listboxId,
         mentionContext,
@@ -247,7 +247,7 @@ export default function DiaryPage() {
     } = useMentionComposer({
         inputValue: content,
         setInputValue: setContent,
-        inputRef: textareaRef as unknown as React.RefObject<HTMLInputElement | null>,
+        inputRef: textareaRef,
         sessionId: "diary",
     });
 
@@ -290,7 +290,7 @@ export default function DiaryPage() {
     }, [content, entryType, parseMentions, createEntry, clearMentionState, deadlineInput]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        onInputKeyDown(e as unknown as React.KeyboardEvent<HTMLInputElement>);
+        onInputKeyDown(e);
         if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !mentionSuggestions.length) {
             e.preventDefault();
             handleSubmit();
