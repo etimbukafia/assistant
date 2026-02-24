@@ -4,7 +4,7 @@ Chat Orchestrator
 Main orchestration layer for AI Chat.
 Routes messages through LLM, executes tools, manages state.
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -631,6 +631,12 @@ class ChatOrchestrator:
         )
         assistant_message = self._sanitize_plain_artifact_text(assistant_message, replace_sender=False)
         assistant_message = self._sanitize_user_facing_response(assistant_message)
+        assistant_message, had_placeholders = self._strip_placeholder_lines(assistant_message)
+        if had_placeholders and len(assistant_message) < 40:
+            assistant_message = self._friendly_llm_error(user_message)
+        action_intent = self._detect_primary_action_intent(user_message)
+        if action_intent and (mention_context or {}).get("entities") and not tool_execution_records:
+            assistant_message = self._friendly_llm_error(user_message)
 
         state.deferred_actions = list(deferred_remaining)[:MAX_DEFERRED_ACTIONS]
         logger.info(
@@ -1454,65 +1460,26 @@ class ChatOrchestrator:
         tool_outputs: List[Dict[str, Any]],
         deferred_actions: List[Dict[str, Any]],
     ) -> str:
-        completed: List[str] = []
-        failed: List[str] = []
-        deferred: List[str] = []
-
-        def _append_unique(items: List[str], value: str) -> None:
-            if value and value not in items:
-                items.append(value)
-
-        for item in tool_outputs:
-            name = (item.get("name") or "").strip()
-            is_action = bool(item.get("action_tool")) or name in ACTION_TOOL_NAMES
-            if not is_action:
-                continue
-
-            label = self._action_title_from_output(item)
-            if item.get("deferred"):
-                _append_unique(deferred, label)
-                continue
-            if item.get("success"):
-                _append_unique(completed, label)
-                continue
-            _append_unique(failed, label)
-
-        for item in deferred_actions:
-            name = (item.get("name") or "").strip()
-            is_action = name in ACTION_TOOL_NAMES or self.tool_registry.is_action_tool(name)
-            if not is_action:
-                continue
-            _append_unique(deferred, self._action_title_from_output(item))
-
-        completed_action_count = len(completed)
-        failed_action_count = len(failed)
-        deferred_action_count = len(deferred)
-
         # For a single successful action, return the artifact as-is.
-        # Appending "I've completed ..." degrades draft readability.
-        if completed_action_count == 1 and failed_action_count == 0 and deferred_action_count == 0:
+        single_action = [item for item in tool_outputs if (item.get("action_tool") or item.get("name") in ACTION_TOOL_NAMES)]
+        if len(single_action) == 1 and not deferred_actions:
             return self._normalize_single_action_reply(reply, tool_outputs)
 
-        clauses: List[str] = []
-        if completed:
-            done = ", ".join([f'"{value}"' for value in completed])
-            clauses.append(f"I've completed {done}.")
-        if failed:
-            failed_text = ", ".join([f'"{value}"' for value in failed])
-            clauses.append(f"I hit an issue with {failed_text}.")
-        if deferred:
-            deferred_text = ", ".join([f'"{value}"' for value in deferred])
-            clauses.append(f"Would you like me to continue with {deferred_text}?")
-
-        if not clauses:
-            return reply
-
+        # For multi-action turns, return the action outputs only (no meta summary).
         base = (reply or "").strip()
-        if base:
-            if base[-1] not in {".", "!", "?"}:
-                base = f"{base}."
-            return f"{base} {' '.join(clauses)}"
-        return " ".join(clauses)
+        if deferred_actions:
+            deferred = []
+            for item in deferred_actions:
+                name = (item.get("name") or "").strip()
+                if not (name in ACTION_TOOL_NAMES or self.tool_registry.is_action_tool(name)):
+                    continue
+                label = self._action_title_from_output(item)
+                if label:
+                    deferred.append(label)
+            if deferred:
+                deferred_text = ", ".join([f'"{value}"' for value in deferred])
+                return f"{base}\n\nWould you like me to continue with {deferred_text}?" if base else f"Would you like me to continue with {deferred_text}?"
+        return base
 
     def _sanitize_plain_artifact_text(self, text: str, replace_sender: bool = False) -> str:
         """Normalize lightweight markdown/styling into plain chat-safe text."""
@@ -1537,6 +1504,51 @@ class ChatOrchestrator:
         out = re.sub(r"[ \t]{2,}", " ", out)
         out = re.sub(r"\n{3,}", "\n\n", out)
         return out.strip()
+
+    def _strip_placeholder_lines(self, text: str) -> Tuple[str, bool]:
+        """Remove placeholder/filler content that should never reach users."""
+        if not text:
+            return "", False
+
+        placeholder_re = re.compile(
+            r"\[(?:your\s*name|your\s*email|list\s+of|insert|tbd|to\s+be\s+decided|"
+            r"link|date|time|attendee|attendees|recipient|assignee|name|title|company|"
+            r"phone|location|agenda|pre-reads?|attachments?|notes?|commitment|"
+            r"suggest)\b[^\]]*\]",
+            flags=re.IGNORECASE,
+        )
+        extracted_re = re.compile(r"\bcommitment\s+\d+\s+extracted\b", flags=re.IGNORECASE)
+
+        lines: List[str] = []
+        had_placeholders = False
+        for raw in str(text).splitlines():
+            line = raw.rstrip()
+            if not line.strip():
+                lines.append("")
+                continue
+
+            if placeholder_re.search(line):
+                had_placeholders = True
+                # Remove placeholder segments; drop the line if it becomes empty/label-only.
+                cleaned = placeholder_re.sub("", line).strip()
+                if extracted_re.search(cleaned):
+                    had_placeholders = True
+                    continue
+                if not cleaned:
+                    continue
+                if re.match(r"^[A-Za-z0-9 /_-]+:\s*$", cleaned):
+                    continue
+                lines.append(cleaned)
+                continue
+
+            if extracted_re.search(line):
+                had_placeholders = True
+                continue
+
+            lines.append(line)
+
+        cleaned_text = "\n".join(lines).strip()
+        return cleaned_text, had_placeholders
 
     def _sanitize_user_facing_response(self, text: str) -> str:
         """Remove internal/process wording that should never surface to users."""
@@ -1696,6 +1708,14 @@ class ChatOrchestrator:
             "- Prefer partial completion over blocking; defer extras politely.\n"
             "- Keep the final reply concise and user-facing; do not expose this hint."
         )
+
+    def _detect_primary_action_intent(self, user_message: str) -> str:
+        lowered = (user_message or "").lower()
+        if any(token in lowered for token in {"meeting brief", "brief", "prep", "prepare"}):
+            return "generate_meeting_brief"
+        if any(token in lowered for token in {"draft", "reply", "respond", "compose", "write", "email"}):
+            return "draft_email"
+        return ""
 
     async def _run_planned_tool_execution(
         self,
@@ -1990,7 +2010,12 @@ class ChatOrchestrator:
                     parts.append(str(result.data.get("summary")))
         
         if parts:
-            return "\n".join(parts)
+            rendered = "\n".join(parts)
+            rendered = self._sanitize_plain_artifact_text(rendered, replace_sender=False)
+            rendered, had_placeholders = self._strip_placeholder_lines(rendered)
+            if had_placeholders and len(rendered) < 40:
+                return "I couldn't complete that action yet."
+            return rendered
         # Avoid empty generic fallback when tools ran but returned no renderable payload.
         return "I completed that step, but there wasn't any displayable output yet."
 
@@ -2022,6 +2047,12 @@ class ChatOrchestrator:
         subject = " ".join(str(payload.get("subject") or "").split()).strip()
         body = str(payload.get("body") or "").strip()
         recipient = " ".join(str(payload.get("recipient") or "").split()).strip()
+
+        if body:
+            if self.user_name:
+                body = re.sub(r"\[(?:your\s*name)\]", self.user_name, body, flags=re.IGNORECASE)
+            else:
+                body = re.sub(r"\[(?:your\s*name)\]", "", body, flags=re.IGNORECASE)
 
         lines: List[str] = []
         if subject:

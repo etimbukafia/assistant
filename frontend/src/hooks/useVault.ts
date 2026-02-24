@@ -8,6 +8,7 @@ import {
   updateDiaryContextEntry,
   deleteDiaryContextEntry,
   fetchDiaryContacts,
+  fetchContactByEmail,
   createDiaryContact,
   updateDiaryContact,
   deleteDiaryContact,
@@ -27,6 +28,7 @@ export const vaultKeys = {
 export const diaryKeys = {
   entries: (params?: Record<string, unknown>) => ["diary", "entries", params] as const,
   contacts: (q?: string) => ["diary", "contacts", q] as const,
+  contactByEmail: (email: string) => ["diary", "contact-by-email", email] as const,
 };
 
 const ENTRIES_KEY = ["diary", "entries"] as const;
@@ -71,6 +73,15 @@ export function useDiaryContacts(q?: string) {
   return useQuery({
     queryKey: diaryKeys.contacts(q),
     queryFn: () => fetchDiaryContacts(q),
+  });
+}
+
+export function useContactByEmail(email: string | null) {
+  return useQuery({
+    queryKey: diaryKeys.contactByEmail(email || ""),
+    queryFn: () => fetchContactByEmail(email!),
+    enabled: !!email,
+    retry: false,
   });
 }
 
@@ -155,7 +166,7 @@ export function useDiaryMutations() {
   });
 
   const createContact = useMutation({
-    mutationFn: (payload: { name: string; email?: string | null; role?: string | null; organization?: string | null; notes?: string | null }) =>
+    mutationFn: (payload: { name: string; email?: string | null; role?: string | null; organization?: string | null; notes?: string | null; category?: string | null }) =>
       createDiaryContact(payload),
     onMutate: async (payload) => {
       await qc.cancelQueries({ queryKey: CONTACTS_KEY });
@@ -168,6 +179,7 @@ export function useDiaryMutations() {
         role: payload.role ?? null,
         organization: payload.organization ?? null,
         notes: payload.notes ?? null,
+        category: (payload.category as DiaryContact["category"]) ?? null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       } as DiaryContact;

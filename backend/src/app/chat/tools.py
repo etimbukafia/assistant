@@ -169,6 +169,7 @@ class ChatToolRegistry:
                         "email": {"type": "string"},
                         "name": {"type": "string"},
                         "limit": {"type": "integer", "default": 5},
+                        "include_non_active": {"type": "boolean", "default": False},
                     },
                 },
             ),
@@ -182,6 +183,7 @@ class ChatToolRegistry:
                         "thread_id": {"type": "string"},
                         "thread": {"type": "string"},
                         "limit": {"type": "integer", "default": 8},
+                        "include_non_active": {"type": "boolean", "default": False},
                     },
                 },
             ),
@@ -208,6 +210,7 @@ class ChatToolRegistry:
                         "event_id": {"type": "string"},
                         "event": {"type": "string"},
                         "limit": {"type": "integer", "default": 8},
+                        "include_non_active": {"type": "boolean", "default": False},
                     },
                 },
             ),
@@ -220,6 +223,20 @@ class ChatToolRegistry:
                     "properties": {
                         "message_id": {"type": "string"},
                         "message": {"type": "string"},
+                        "limit": {"type": "integer", "default": 8},
+                        "include_non_active": {"type": "boolean", "default": False},
+                    },
+                },
+            ),
+            "get_task_context": ToolDefinition(
+                name="get_task_context",
+                description="Get context for a task (pending_approval or approved).",
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string"},
+                        "task": {"type": "string"},
                         "limit": {"type": "integer", "default": 8},
                     },
                 },
@@ -654,20 +671,26 @@ class ChatToolRegistry:
         if not contact_email:
             return ToolResult(success=False, error="contact/email/name is required")
         limit = max(1, min(int(params.get("limit", 5)), 10))
+        include_non_active = bool(params.get("include_non_active", False))
 
         snapshot = self._get_scoped_snapshot(
             scope=f"contact:{contact_email}",
             builder=lambda: build_contact_snapshot(self.db, self.user_id, contact_email),
         )
         entries = list((snapshot.get("by_type", {}) or {}).get("relationships", []))[:limit]
+        entries = self._filter_context_entries(entries, include_non_active)
         if not entries:
+            now = datetime.now(timezone.utc)
+            query = self.db.query(ContextEntry).filter(
+                ContextEntry.user_id == self.user_id,
+                ContextEntry.entity_type == "contact",
+                ContextEntry.entity_id == contact_email,
+                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
+            )
+            if not include_non_active:
+                query = query.filter(ContextEntry.status == "active")
             rows = (
-                self.db.query(ContextEntry)
-                .filter(
-                    ContextEntry.user_id == self.user_id,
-                    ContextEntry.entity_type == "contact",
-                    ContextEntry.entity_id == contact_email,
-                )
+                query
                 .order_by(ContextEntry.created_at.desc())
                 .limit(limit)
                 .all()
@@ -682,21 +705,27 @@ class ChatToolRegistry:
         if not thread_ref:
             return ToolResult(success=False, error="thread_id/thread is required")
         limit = max(1, min(int(params.get("limit", 8)), 10))
+        include_non_active = bool(params.get("include_non_active", False))
 
         snapshot = self._get_scoped_snapshot(
             scope=f"thread:{thread_ref}",
             builder=lambda: build_thread_snapshot(self.db, self.user_id, thread_ref),
         )
         by_type = snapshot.get("by_type", {}) or {}
-        entries = (by_type.get("decision", []) + by_type.get("commitment", []))[:limit]
+        entries = (by_type.get("decision", []) + by_type.get("commitment", []))
+        entries = self._filter_context_entries(entries, include_non_active=include_non_active)[:limit]
         if not entries:
+            now = datetime.now(timezone.utc)
+            query = self.db.query(ContextEntry).filter(
+                ContextEntry.user_id == self.user_id,
+                ContextEntry.entity_type == "thread",
+                ContextEntry.entity_id == thread_ref,
+                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
+            )
+            if not include_non_active:
+                query = query.filter(ContextEntry.status == "active")
             rows = (
-                self.db.query(ContextEntry)
-                .filter(
-                    ContextEntry.user_id == self.user_id,
-                    ContextEntry.entity_type == "thread",
-                    ContextEntry.entity_id == thread_ref,
-                )
+                query
                 .order_by(ContextEntry.created_at.desc())
                 .limit(limit)
                 .all()
@@ -739,7 +768,7 @@ class ChatToolRegistry:
             scope="profile",
             builder=lambda: build_profile_snapshot(self.db, self.user_id),
         )
-        preferences = list((snapshot.get("by_type", {}) or {}).get("preferences", []))[:limit]
+        preferences = self._filter_context_entries(list((snapshot.get("by_type", {}) or {}).get("preferences", [])), include_non_active=False)[:limit]
         if category and category != "general":
             cat = str(category).lower().strip()
             preferences = [p for p in preferences if self._preference_matches_category(p, cat)]
@@ -751,20 +780,26 @@ class ChatToolRegistry:
         if not event_ref:
             return ToolResult(success=False, error="event_id/event is required")
         limit = max(1, min(int(params.get("limit", 8)), 10))
+        include_non_active = bool(params.get("include_non_active", False))
         snapshot = self._get_scoped_snapshot(
             scope=f"event:{event_ref}",
             builder=lambda: build_event_snapshot(self.db, self.user_id, event_ref),
         )
         by_type = snapshot.get("by_type", {}) or {}
-        entries = (by_type.get("decision", []) + by_type.get("commitment", []) + by_type.get("risks", []))[:limit]
+        entries = (by_type.get("decision", []) + by_type.get("commitment", []) + by_type.get("risks", []))
+        entries = self._filter_context_entries(entries, include_non_active=include_non_active)[:limit]
         if not entries:
+            now = datetime.now(timezone.utc)
+            query = self.db.query(ContextEntry).filter(
+                ContextEntry.user_id == self.user_id,
+                ContextEntry.entity_type == "event",
+                ContextEntry.entity_id == event_ref,
+                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
+            )
+            if not include_non_active:
+                query = query.filter(ContextEntry.status == "active")
             rows = (
-                self.db.query(ContextEntry)
-                .filter(
-                    ContextEntry.user_id == self.user_id,
-                    ContextEntry.entity_type == "event",
-                    ContextEntry.entity_id == event_ref,
-                )
+                query
                 .order_by(ContextEntry.created_at.desc())
                 .limit(limit)
                 .all()
@@ -835,20 +870,26 @@ class ChatToolRegistry:
         if not message_ref:
             return ToolResult(success=False, error="message_id/message is required")
         limit = max(1, min(int(params.get("limit", 8)), 10))
+        include_non_active = bool(params.get("include_non_active", False))
         snapshot = self._get_scoped_snapshot(
             scope=f"message:{message_ref}",
             builder=lambda: build_message_snapshot(self.db, self.user_id, message_ref),
         )
         by_type = snapshot.get("by_type", {}) or {}
         entries = (by_type.get("commitment", []) + by_type.get("decision", []) + by_type.get("risks", []))[:limit]
+        entries = self._filter_context_entries(entries, include_non_active=include_non_active)
         if not entries:
+            now = datetime.now(timezone.utc)
+            query = self.db.query(ContextEntry).filter(
+                ContextEntry.user_id == self.user_id,
+                ContextEntry.entity_type == "message",
+                ContextEntry.entity_id == message_ref,
+                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
+            )
+            if not include_non_active:
+                query = query.filter(ContextEntry.status == "active")
             rows = (
-                self.db.query(ContextEntry)
-                .filter(
-                    ContextEntry.user_id == self.user_id,
-                    ContextEntry.entity_type == "message",
-                    ContextEntry.entity_id == message_ref,
-                )
+                query
                 .order_by(ContextEntry.created_at.desc())
                 .limit(limit)
                 .all()
@@ -856,6 +897,90 @@ class ChatToolRegistry:
             entries = [self._serialize_context_entry(r) for r in rows]
         self._merge_hot(entries)
         return ToolResult(success=True, data={"message_id": message_ref, "entries": entries})
+
+    def _execute_get_task_context(self, params: Dict[str, Any]) -> ToolResult:
+        task_identifier = (params.get("task_id") or params.get("task") or "").strip()
+        if not task_identifier:
+            return ToolResult(success=False, error="task_id/task is required")
+        limit = max(1, min(int(params.get("limit", 8)), 10))
+        allowed_statuses = {"pending_approval", "approved"}
+
+        task = None
+        if task_identifier.isdigit():
+            task = (
+                self.db.query(Task)
+                .filter(
+                    Task.user_id == self.user_id,
+                    Task.id == int(task_identifier),
+                    Task.status.in_(sorted(allowed_statuses)),
+                )
+                .first()
+            )
+
+        if task is None:
+            task_ref = self._resolve_entity_ref("task", task_identifier)
+            if task_ref and str(task_ref).isdigit():
+                task = (
+                    self.db.query(Task)
+                    .filter(
+                        Task.user_id == self.user_id,
+                        Task.id == int(task_ref),
+                        Task.status.in_(sorted(allowed_statuses)),
+                    )
+                    .first()
+                )
+
+        if task is None:
+            safe_query = escape_like(task_identifier)
+            task = (
+                self.db.query(Task)
+                .filter(
+                    Task.user_id == self.user_id,
+                    Task.status.in_(sorted(allowed_statuses)),
+                    (
+                        (func.lower(Task.title) == task_identifier.lower())
+                        | Task.title.ilike(f"%{safe_query}%", escape="\\")
+                    ),
+                )
+                .order_by(Task.updated_at.desc(), Task.created_at.desc())
+                .first()
+            )
+
+        if task is None:
+            return ToolResult(success=False, error="Task not found")
+
+        now = datetime.now(timezone.utc)
+        rows = (
+            self.db.query(ContextEntry)
+            .filter(
+                ContextEntry.user_id == self.user_id,
+                ContextEntry.entity_type == "task",
+                ContextEntry.entity_id == str(task.id),
+                ContextEntry.status == "active",
+                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
+            )
+            .order_by(ContextEntry.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        entries = [self._serialize_context_entry(r) for r in rows]
+        self._merge_hot(entries)
+        return ToolResult(
+            success=True,
+            data={
+                "task": {
+                    "id": task.id,
+                    "title": task.title,
+                    "status": task.status,
+                    "priority": task.priority,
+                    "description": task.description,
+                    "deadline": task.deadline.isoformat() if task.deadline else None,
+                    "created_at": task.created_at.isoformat() if task.created_at else None,
+                    "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                },
+                "entries": entries,
+            },
+        )
 
     def _execute_draft_email(self, params: Dict[str, Any]) -> ToolResult:
         service = EmailDraftingService(db=self.db, user_id=self.user_id)
@@ -889,6 +1014,8 @@ class ChatToolRegistry:
 
     def _user_safe_validation_error(self, tool_name: str) -> str:
         name = (tool_name or "").strip().lower()
+        if name == "create_task":
+            return "I need a task title to create that."
         if name == "draft_email":
             return "I couldn't draft that email yet."
         if name == "generate_meeting_brief":
@@ -1000,6 +1127,26 @@ class ChatToolRegistry:
             "expires_at": row.expires_at.isoformat() if row.expires_at else None,
         }
 
+    def _filter_context_entries(self, entries: List[Dict[str, Any]], include_non_active: bool) -> List[Dict[str, Any]]:
+        """Filter out expired or non-active entries unless explicitly allowed."""
+        now = datetime.now(timezone.utc)
+        governed_statuses = {"active", "resolved", "stale", "archived"}
+        filtered: List[Dict[str, Any]] = []
+        for entry in entries or []:
+            status = (entry.get("status") or "active").lower()
+            expires_at = entry.get("expires_at")
+            if expires_at:
+                try:
+                    if datetime.fromisoformat(expires_at) < now:
+                        continue
+                except Exception:
+                    pass
+            if status not in governed_statuses:
+                filtered.append(entry)
+            elif status == "active" or include_non_active:
+                filtered.append(entry)
+        return filtered
+
     def _preference_matches_category(self, item: Dict[str, Any], category: str) -> bool:
         content = (item.get("content") or "").lower()
         if category == "general":
@@ -1018,6 +1165,7 @@ class ChatToolRegistry:
         limit = min(params.get("limit", 5), 20)
         service = VaultService(self.db, self.user_id)
         notes = service.search_notes(query=query, note_type=note_type, limit=limit)
+        notes = [n for n in notes if (n.status or "active") == "active"]
         return ToolResult(
             success=True,
             data={

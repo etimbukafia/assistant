@@ -8,8 +8,9 @@ import { ReplyComposer } from "./ReplyComposer";
 import {
     AlertCircle, X,
     Mail, Clock, Users, Calendar,
-    CheckCircle2, ArrowRight, Zap, Archive, RotateCcw,
+    CheckCircle2, ArrowRight, Zap, Archive, RotateCcw, UserPlus,
 } from "lucide-react";
+import { ContactDialog } from "./ContactDialog";
 import { formatDistanceToNow, parseISO, format } from "date-fns";
 import { cn } from "@/lib/utils";
 import React from "react";
@@ -307,6 +308,13 @@ function ActionPointsHero({
 
 // ─── MESSAGE BUBBLE ──────────────────────────────────────────────────────────
 
+function parseSender(sender: string): { name: string; email: string } {
+    const match = sender.match(/^(.+?)\s*<(.+?)>$/);
+    if (match) return { name: match[1].trim().replace(/"/g, ''), email: match[2].trim() };
+    if (sender.includes('@')) return { name: sender.split('@')[0], email: sender };
+    return { name: sender, email: sender };
+}
+
 function MessageBubble({
     message,
 }: {
@@ -314,7 +322,8 @@ function MessageBubble({
     expanded?: boolean;
     isLatest?: boolean;
 }) {
-    const senderName = message.sender.split('<')[0].trim().replace(/"/g, '');
+    const [contactOpen, setContactOpen] = React.useState(false);
+    const { name: senderName, email: senderEmail } = parseSender(message.sender);
     const initials = senderName.split(' ').filter(Boolean).map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 
     const colors = ["bg-primary", "bg-copper", "bg-sage", "bg-teal", "bg-obsidian/60", "bg-burgundy"];
@@ -331,7 +340,21 @@ function MessageBubble({
                 </div>
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold font-inter truncate">{senderName}</span>
+                        <button
+                            type="button"
+                            onClick={() => setContactOpen(true)}
+                            className="text-sm font-semibold font-inter truncate hover:underline decoration-primary/40 underline-offset-2 cursor-pointer text-left"
+                        >
+                            {senderName}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setContactOpen(true)}
+                            className="p-0.5 rounded text-muted-foreground/40 hover:text-primary/70 transition-colors shrink-0"
+                            aria-label="View contact"
+                        >
+                            <UserPlus size={12} />
+                        </button>
                         <span className="text-[11px] text-muted-foreground/50 font-inter shrink-0">
                             {formatDistanceToNow(parseISO(message.received_at), { addSuffix: true })}
                         </span>
@@ -343,6 +366,13 @@ function MessageBubble({
                     <FormattedEmailBody body={message.body} />
                 </div>
             </div>
+
+            <ContactDialog
+                open={contactOpen}
+                onOpenChange={setContactOpen}
+                senderEmail={senderEmail}
+                senderDisplayName={senderName}
+            />
         </div>
     );
 }

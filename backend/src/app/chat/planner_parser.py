@@ -84,6 +84,15 @@ def _repair_plan_shape(data: Dict[str, Any]) -> Dict[str, Any]:
             )
         if synthesized:
             data["sub_requests"] = synthesized
+    # Repair sub_requests shape if LLM used "description" instead of "text"
+    if isinstance(sub_requests, list):
+        for item in sub_requests:
+            if not isinstance(item, dict):
+                continue
+            if not item.get("text") and item.get("description"):
+                item["text"] = str(item.get("description") or "").strip()
+            if not item.get("intent"):
+                item["intent"] = str(item.get("tool") or item.get("type") or "request").strip()
     return data
 
 

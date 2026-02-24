@@ -43,6 +43,7 @@ from app.data.models import (
 from app.jobs.queue import queue_service
 from .orchestrator import ChatOrchestrator
 from .approval_intent import ApprovalIntentKind, PendingActionRef, parse_approval_intent
+from .tool_policy import CONTEXT_QUERY_PHRASES
 from app.services.hot_context_cache import get_hot_context_cache_service
 from app.services.mention_context import MentionContextService
 from app.services.warm_cache import get_warm_cache_service
@@ -633,6 +634,12 @@ class ChatService:
             return now - timedelta(days=7)
 
         return None
+
+    def _should_include_recent_changes(self, content: str) -> bool:
+        text = " ".join((content or "").lower().split())
+        if any(phrase in text for phrase in CONTEXT_QUERY_PHRASES):
+            return True
+        return bool(self._parse_since_hint(content))
     
     def get_messages(
         self,
@@ -1077,6 +1084,7 @@ class ChatService:
         if mention_entities:
             prefetch_started = time.perf_counter()
             since_ts = self._parse_since_hint(content)
+            include_recent_changes = self._should_include_recent_changes(content)
             mention_service = MentionContextService(
                 db=self.db,
                 warm_cache=get_warm_cache_service(),
@@ -1094,6 +1102,7 @@ class ChatService:
                     for item in mention_entities
                 ],
                 since_ts=since_ts,
+                include_recent_changes=include_recent_changes,
             )
             resolved_mentions["mention_prefetch"] = prefetch
             selected_entries = prefetch.get("selected_entries") or []

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -26,6 +26,7 @@ ALLOWED_KINDS = {"contact", "event", "thread", "task"}
 DEFAULT_PER_ENTITY_LIMIT = 5
 DEFAULT_TOTAL_LIMIT = 25
 RECENT_CHANGES_WINDOW_HOURS = 24
+MAX_RECENT_WINDOW_DAYS = 90
 MAX_MENTIONS_PER_MESSAGE = 8
 MENTIONS_INDEX_SCOPE = "mentions_index_v1"
 MENTIONS_INDEX_TTL_SECONDS = 180
@@ -465,6 +466,7 @@ class MentionContextService:
         max_items_per_entity: int = DEFAULT_PER_ENTITY_LIMIT,
         max_items_total: int = DEFAULT_TOTAL_LIMIT,
         since_ts: Optional[datetime] = None,
+        include_recent_changes: bool = True,
     ) -> Dict[str, Any]:
         max_items_per_entity = max(1, min(max_items_per_entity, 10))
         max_items_total = max(1, min(max_items_total, 50))
@@ -482,7 +484,7 @@ class MentionContextService:
         for mention in resolved:
             snapshot = self._get_snapshot_for_mention(mention)
             entries = _extract_entries(snapshot, mention.kind)
-            recent_changes = self._recent_changes_for_mention(mention, since_ts=since_ts)
+            recent_changes = self._recent_changes_for_mention(mention, since_ts=since_ts) if include_recent_changes else []
             entity_payload: Dict[str, Any] = {}
             if mention.kind == "event":
                 event_payload = self._build_event_payload(mention.ref)
@@ -538,10 +540,17 @@ class MentionContextService:
                 "max_items_total": max_items_total,
                 "max_mentions_per_message": MAX_MENTIONS_PER_MESSAGE,
             },
+            "recent_window": {
+                "start": (since_ts.isoformat() if since_ts else None),
+                "default_hours": RECENT_CHANGES_WINDOW_HOURS,
+            },
         }
 
     def _recent_changes_for_mention(self, mention: Mention, since_ts: Optional[datetime] = None) -> List[Dict[str, Any]]:
         window_start = since_ts or (datetime.now(timezone.utc) - timedelta(hours=RECENT_CHANGES_WINDOW_HOURS))
+        max_window_start = datetime.now(timezone.utc) - timedelta(days=MAX_RECENT_WINDOW_DAYS)
+        if window_start < max_window_start:
+            window_start = max_window_start
         q = (
             self.db.query(ContextEntry)
             .filter(

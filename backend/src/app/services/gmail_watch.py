@@ -37,7 +37,11 @@ def setup_watch(gmail_client: GmailClient) -> Optional[dict]:
         logger.warning("GOOGLE_CLOUD_PROJECT_ID not set, skipping Gmail watch setup")
         return None
 
-    topic = f"projects/{settings.GOOGLE_CLOUD_PROJECT_ID}/topics/{settings.GMAIL_PUBSUB_TOPIC}"
+    raw_topic = (settings.GMAIL_PUBSUB_TOPIC or "").strip()
+    if raw_topic.startswith("projects/"):
+        topic = raw_topic
+    else:
+        topic = f"projects/{settings.GOOGLE_CLOUD_PROJECT_ID}/topics/{raw_topic}"
 
     if not gmail_client.service:
         if not gmail_client.load_credentials():
@@ -45,6 +49,7 @@ def setup_watch(gmail_client: GmailClient) -> Optional[dict]:
             return None
 
     try:
+        logger.info("Setting up Gmail watch: topic=%s labels=%s", topic, ["INBOX"])
         response = gmail_client.service.users().watch(
             userId='me',
             body={
@@ -61,7 +66,7 @@ def setup_watch(gmail_client: GmailClient) -> Optional[dict]:
         return response
 
     except Exception as e:
-        logger.error(f"Failed to setup Gmail watch: {e}")
+        logger.error("Failed to setup Gmail watch: %s", e, exc_info=True)
         return None
 
 

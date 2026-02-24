@@ -700,6 +700,7 @@ class ContactCreate(BaseModel):
     role: Optional[str] = None
     organization: Optional[str] = None
     notes: Optional[str] = None
+    category: Optional[str] = None  # vip, colleague, external, vendor
 
 
 class ContactUpdate(BaseModel):
@@ -708,6 +709,7 @@ class ContactUpdate(BaseModel):
     role: Optional[str] = None
     organization: Optional[str] = None
     notes: Optional[str] = None
+    category: Optional[str] = None  # vip, colleague, external, vendor
 
 
 class ContactResponse(BaseModel):
@@ -718,6 +720,7 @@ class ContactResponse(BaseModel):
     role: Optional[str] = None
     organization: Optional[str] = None
     notes: Optional[str] = None
+    category: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

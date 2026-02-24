@@ -6,7 +6,7 @@ Threads are state machines. Messages are state updates.
 """
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 
 from sqlalchemy.orm import Session
@@ -338,11 +338,11 @@ class ThreadStateService:
             try:
                 date_str = deadline_data.get("date")
                 if date_str:
-                    # Parse ISO format datetime string
-                    deadline = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                    deadline_source = deadline_data.get("source", "inferred")
-                    deadline_confidence = deadline_data.get("confidence", 0.7)
-                    logger.info(f"Extracted deadline '{date_str}' ({deadline_source}) for task '{task_data.get('title')}'")
+                    deadline = self._parse_deadline_date(date_str, message)
+                    if deadline:
+                        deadline_source = deadline_data.get("source", "inferred")
+                        deadline_confidence = deadline_data.get("confidence", 0.7)
+                        logger.info(f"Extracted deadline '{date_str}' ({deadline_source}) for task '{task_data.get('title')}'")
             except (ValueError, TypeError) as e:
                 logger.warning(f"Failed to parse deadline for task: {e}")
 
@@ -388,6 +388,50 @@ class ThreadStateService:
             },
             db=self.db
         )
+
+    def _parse_deadline_date(self, date_str: str, message: Message) -> Optional[datetime]:
+        """Parse deadline dates with relative weekday support (e.g., 'by Friday')."""
+        raw = " ".join(str(date_str or "").split()).strip()
+        if not raw:
+            return None
+
+        # Try ISO first.
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+        lowered = raw.lower()
+        lowered = lowered.replace("by ", "").replace("on ", "").replace("before ", "")
+        lowered = lowered.replace("next ", "").strip()
+
+        anchor = message.received_at or message.created_at or datetime.now(timezone.utc)
+        anchor = anchor if anchor.tzinfo else anchor.replace(tzinfo=timezone.utc)
+
+        if lowered in {"today"}:
+            return anchor.replace(hour=17, minute=0, second=0, microsecond=0)
+        if lowered in {"tomorrow"}:
+            return (anchor + timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
+
+        weekdays = {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }
+        if lowered in weekdays:
+            target = weekdays[lowered]
+            current = anchor.weekday()
+            delta = (target - current) % 7
+            if delta == 0:
+                delta = 7  # always prefer future
+            target_dt = anchor + timedelta(days=delta)
+            return target_dt.replace(hour=17, minute=0, second=0, microsecond=0)
+
+        return None
         
         logger.info(f"Created task '{task_data.get('title')}' (id={task.id}) for thread {thread_state.thread_id}")
 

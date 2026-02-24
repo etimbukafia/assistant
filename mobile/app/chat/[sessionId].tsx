@@ -409,8 +409,9 @@ export default function ChatSessionScreen() {
 
   const allSessions = sessionsData?.sessions || [];
 
-  // Sync server messages to local state
+  // Sync server messages to local state (skip while sending to preserve optimistic messages)
   useEffect(() => {
+    if (isSending) return;
     if (sessionData?.messages) {
       // Filter out system messages and ensure role type compatibility
       const displayMessages = sessionData.messages
@@ -423,7 +424,7 @@ export default function ChatSessionScreen() {
         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       setLocalMessages(displayMessages);
     }
-  }, [sessionData?.messages]);
+  }, [sessionData?.messages, isSending]);
 
   // Get pending action for a message
   const getPendingAction = useCallback(

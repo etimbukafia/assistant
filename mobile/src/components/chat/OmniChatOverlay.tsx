@@ -103,8 +103,9 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
     const currentSessionRef = useRef<string | null>(null);
     const pollingCleanupRef = useRef<(() => void) | null>(null);
 
-    // Sync server messages to local state
+    // Sync server messages to local state (skip while sending to preserve optimistic messages)
     useEffect(() => {
+        if (isSending) return;
         if (sessionData?.messages) {
             // Filter out system messages and ensure role type compatibility
             const displayMessages = sessionData.messages
@@ -118,7 +119,7 @@ export const OmniChatOverlay: React.FC<OmniChatOverlayProps> = ({
         } else if (!currentSessionId) {
             setLocalMessages([]);
         }
-    }, [sessionData?.messages, currentSessionId]);
+    }, [sessionData?.messages, currentSessionId, isSending]);
 
     // Update session ref for race condition checks
     useEffect(() => {

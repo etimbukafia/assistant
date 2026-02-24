@@ -192,6 +192,38 @@ def connect_gmail_with_provider_token(
         except Exception as watch_err:
             logger.warning(f"Calendar watch setup failed for user={user.user_id}: {watch_err}")
 
+        # Set up Gmail push notifications via Pub/Sub (non-fatal if it fails)
+        try:
+            from app.services.gmail_watch import setup_watch
+            from app.integrations.gmail import SCOPES
+            from google.oauth2.credentials import Credentials
+            from googleapiclient.discovery import build
+
+            gmail_client = GmailClient(db=db, user_id=user.user_id)
+            # Avoid extra DB round-trip/pool usage by using the fresh provider token.
+            creds = Credentials(
+                token=request.provider_token,
+                refresh_token=request.provider_refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=gmail_client._get_client_id(),
+                client_secret=gmail_client._get_client_secret(),
+                scopes=SCOPES,
+                expiry=token_expiry.replace(tzinfo=None) if token_expiry else None,
+            )
+            gmail_client.creds = creds
+            gmail_client.service = build('gmail', 'v1', credentials=creds)
+
+            gmail_watch = setup_watch(gmail_client)
+            if gmail_watch:
+                logger.info("Gmail watch setup for user=%s: %s", user.user_id, gmail_watch)
+                if not account.last_history_id:
+                    account.last_history_id = str(gmail_watch.get("historyId", ""))
+                    db.commit()
+            else:
+                logger.warning("Gmail watch setup did not return a response for %s", verified_email)
+        except Exception as watch_err:
+            logger.warning("Gmail watch setup failed for user=%s: %s", user.user_id, watch_err, exc_info=True)
+
         return {
             "status": "success",
             "message": "Google connected successfully",
@@ -237,6 +269,8 @@ def gmail_callback(
         # Set up Gmail push notifications via Pub/Sub
         from app.services.gmail_watch import setup_watch
         watch_result = setup_watch(gmail_client)
+        if not watch_result:
+            logger.warning("Gmail watch setup did not return a response for %s", email_address)
         if watch_result:
             # Store initial history ID for webhook processing
             from app.data.models import GmailAccount

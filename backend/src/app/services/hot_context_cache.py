@@ -153,7 +153,7 @@ class HotContextCacheService:
             for item in existing:
                 key = item.get("id") if item.get("id") is not None else f"anon:{item.get('type')}:{item.get('content')}"
                 by_key[str(key)] = item
-            for item in entries:
+            for item in _filter_active(entries):
                 key = item.get("id") if item.get("id") is not None else f"anon:{item.get('type')}:{item.get('content')}"
                 k = str(key)
                 if k in by_key:
@@ -218,6 +218,24 @@ class HotContextCacheService:
                     payload["context_entries"] = filtered
                     payload["updated_at"] = datetime.now(timezone.utc).isoformat()
                     self._touch_session_unlocked(session_key, user_key, payload)
+
+
+def _filter_active(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    governed_statuses = {"active", "resolved", "stale", "archived"}
+    filtered = []
+    for item in entries or []:
+        status = (item.get("status") or "active").lower()
+        expires_at = item.get("expires_at")
+        if expires_at:
+            try:
+                if datetime.fromisoformat(expires_at) < now:
+                    continue
+            except Exception:
+                pass
+        if status not in governed_statuses or status == "active":
+            filtered.append(item)
+    return filtered
 
 
 _hot_cache_singleton: Optional[HotContextCacheService] = None

@@ -775,6 +775,7 @@ class Contact(Base):
     role = Column(String, nullable=True)
     organization = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
+    category = Column(String, nullable=True)  # vip, colleague, external, vendor
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 

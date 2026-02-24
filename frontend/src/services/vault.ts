@@ -49,6 +49,8 @@ export interface DiaryContextEntry {
   links: DiaryEntryLink[];
 }
 
+export type ContactCategory = "vip" | "colleague" | "external" | "vendor";
+
 export interface DiaryContact {
   id: number;
   user_id: string;
@@ -57,6 +59,7 @@ export interface DiaryContact {
   role?: string | null;
   organization?: string | null;
   notes?: string | null;
+  category?: ContactCategory | null;
   created_at: string;
   updated_at: string;
 }
@@ -143,12 +146,18 @@ export async function fetchDiaryContacts(q?: string): Promise<DiaryContact[]> {
   return response.data;
 }
 
+export async function fetchContactByEmail(email: string): Promise<DiaryContact> {
+  const response = await api.get(`/vault/diary/contacts/by-email/${encodeURIComponent(email)}`);
+  return response.data;
+}
+
 export async function createDiaryContact(payload: {
   name: string;
   email?: string | null;
   role?: string | null;
   organization?: string | null;
   notes?: string | null;
+  category?: string | null;
 }): Promise<DiaryContact> {
   const response = await api.post("/vault/diary/contacts", payload);
   return response.data;
@@ -156,7 +165,7 @@ export async function createDiaryContact(payload: {
 
 export async function updateDiaryContact(
   id: number,
-  payload: Partial<Pick<DiaryContact, "name" | "email" | "role" | "organization" | "notes">>
+  payload: Partial<Pick<DiaryContact, "name" | "email" | "role" | "organization" | "notes" | "category">>
 ): Promise<DiaryContact> {
   const response = await api.put(`/vault/diary/contacts/${id}`, payload);
   return response.data;

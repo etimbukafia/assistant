@@ -582,6 +582,9 @@ def create_diary_contact(
             raise HTTPException(status_code=409, detail="A contact with this email already exists.")
 
     now = datetime.now(timezone.utc)
+    category = (payload.category or "").strip().lower() or None
+    if category and category not in ("vip", "colleague", "external", "vendor"):
+        raise HTTPException(status_code=400, detail="Invalid category. Must be one of: vip, colleague, external, vendor.")
     contact = Contact(
         user_id=user.user_id,
         name=name,
@@ -589,6 +592,7 @@ def create_diary_contact(
         role=(payload.role or "").strip() or None,
         organization=(payload.organization or "").strip() or None,
         notes=(payload.notes or "").strip() or None,
+        category=category,
         created_at=now,
         updated_at=now,
     )
@@ -661,6 +665,11 @@ def update_diary_contact(
         contact.organization = payload.organization.strip() or None
     if payload.notes is not None:
         contact.notes = payload.notes.strip() or None
+    if payload.category is not None:
+        cat = payload.category.strip().lower() or None
+        if cat and cat not in ("vip", "colleague", "external", "vendor"):
+            raise HTTPException(status_code=400, detail="Invalid category. Must be one of: vip, colleague, external, vendor.")
+        contact.category = cat
     now = datetime.now(timezone.utc)
     contact.updated_at = now
 
@@ -724,6 +733,22 @@ def update_diary_contact(
     if contact.email:
         cache_coordinator.invalidate_contact(tenant_id, user.user_id, contact.email)
     _prewarm_action_chips_cache(db, user)
+    return contact
+
+
+@router.get("/diary/contacts/by-email/{email}", response_model=ContactResponse)
+def get_diary_contact_by_email(
+    email: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    contact = (
+        db.query(Contact)
+        .filter(Contact.user_id == user.user_id, func.lower(Contact.email) == email.strip().lower())
+        .first()
+    )
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found.")
     return contact
 
 

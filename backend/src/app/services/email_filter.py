@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 
-from app.data.models import ContactContext
+from app.data.models import Contact, ContactContext
 
 
 class FilterAction(Enum):
@@ -527,7 +527,7 @@ class EmailFilterService:
         """
         Check if sender is in user's VIP list.
 
-        VIP is determined by ContactContext.category = 'vip'
+        VIP is determined by Contact.category = 'vip' (or legacy ContactContext.category).
         """
         # Extract email from "Name <email@example.com>" format
         email = self._extract_email(sender_email)
@@ -551,33 +551,45 @@ class EmailFilterService:
         """
         Get VIP emails and domains for this user (cached).
 
+        Checks both Contact.category (canonical) and ContactContext.category (legacy).
+
         Returns:
             tuple: (set of VIP emails, set of VIP domains)
         """
         if self._vip_cache is not None:
             return self._vip_cache
 
-        vip_contacts = self.db.query(ContactContext).filter(
-            ContactContext.user_id == self.user_id,
-            ContactContext.category == "vip"
-        ).all()
-
         vip_emails = set()
         vip_domains = set()
 
-        for contact in vip_contacts:
-            if not contact.contact_email:
+        # Canonical source: Contact model
+        diary_vips = self.db.query(Contact).filter(
+            Contact.user_id == self.user_id,
+            Contact.category == "vip",
+        ).all()
+        for c in diary_vips:
+            if not c.email:
                 continue
-
-            email = contact.contact_email.lower()
+            email = c.email.lower()
             vip_emails.add(email)
-
-            # Extract domain from email
-            if '@' in email:
-                domain = email.split('@', 1)[1]
-                vip_domains.add(domain)
+            if "@" in email:
+                vip_domains.add(email.split("@", 1)[1])
             else:
-                # Might be a domain-only entry (e.g., "important-client.com")
+                vip_domains.add(email)
+
+        # Legacy fallback: ContactContext model
+        ctx_vips = self.db.query(ContactContext).filter(
+            ContactContext.user_id == self.user_id,
+            ContactContext.category == "vip",
+        ).all()
+        for c in ctx_vips:
+            if not c.contact_email:
+                continue
+            email = c.contact_email.lower()
+            vip_emails.add(email)
+            if "@" in email:
+                vip_domains.add(email.split("@", 1)[1])
+            else:
                 vip_domains.add(email)
 
         self._vip_cache = (vip_emails, vip_domains)

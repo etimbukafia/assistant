@@ -40,6 +40,7 @@ def build_profile_snapshot(db: Session, user_id: str) -> Dict[str, Any]:
         .filter(
             ContextEntry.user_id == user_id,
             ContextEntry.entity_type == "global",
+            ContextEntry.status == "active",
         )
         .order_by(ContextEntry.created_at.desc())
         .limit(MAX_SOURCE_ROWS)
@@ -55,6 +56,7 @@ def build_contact_snapshot(db: Session, user_id: str, contact_email: str) -> Dic
             ContextEntry.user_id == user_id,
             ContextEntry.entity_type == "contact",
             ContextEntry.entity_id == email_norm,
+            ContextEntry.status == "active",
         )
         .order_by(ContextEntry.created_at.desc())
         .limit(MAX_SOURCE_ROWS)
@@ -70,6 +72,7 @@ def build_thread_snapshot(db: Session, user_id: str, thread_id: str) -> Dict[str
             ContextEntry.user_id == user_id,
             ContextEntry.entity_type == "thread",
             ContextEntry.entity_id == thread_norm,
+            ContextEntry.status == "active",
         )
         .order_by(ContextEntry.created_at.desc())
         .limit(MAX_SOURCE_ROWS)
@@ -85,6 +88,7 @@ def build_event_snapshot(db: Session, user_id: str, event_id: str) -> Dict[str, 
             ContextEntry.user_id == user_id,
             ContextEntry.entity_type == "event",
             ContextEntry.entity_id == event_norm,
+            ContextEntry.status == "active",
         )
         .order_by(ContextEntry.created_at.desc())
         .limit(MAX_SOURCE_ROWS)
@@ -100,6 +104,7 @@ def build_message_snapshot(db: Session, user_id: str, message_id: str) -> Dict[s
             ContextEntry.user_id == user_id,
             ContextEntry.entity_type == "message",
             ContextEntry.entity_id == message_norm,
+            ContextEntry.status == "active",
         )
         .order_by(ContextEntry.created_at.desc())
         .limit(MAX_SOURCE_ROWS)
@@ -114,6 +119,12 @@ def _build_snapshot(
     scope_id: Optional[str] = None,
     entity_type: Optional[str] = None,
 ) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    rows = [
+        r for r in rows
+        if (r.status or "active") == "active"
+        and (r.expires_at is None or r.expires_at >= now)
+    ]
     by_type: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     by_entity: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     critical_items: List[Dict[str, Any]] = []
