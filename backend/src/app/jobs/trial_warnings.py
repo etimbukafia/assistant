@@ -4,9 +4,8 @@ Trial Expiration Warning Notifications
 Scheduled job that sends push notifications to users when their trial is about to expire.
 Runs daily and sends notifications at key milestones:
 - 3 days remaining
-- 1 day remaining  
-- Trial expired (grace period started)
-- Grace period ending (1 day left)
+- 1 day remaining
+- Trial ended
 
 Expected impact: +15-25% trial conversion (industry benchmark).
 """
@@ -18,31 +17,28 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from app.data.models import UserSettings
+from app.infra.config import get_settings
 from app.services.notification import NotificationService
 
 logger = logging.getLogger(__name__)
 
-# Grace period matches feature_gating.py
-GRACE_PERIOD_DAYS = 3
+# Trial has no grace period by policy.
+TRIAL_GRACE_DAYS = max(0, int(getattr(get_settings(), "TRIAL_GRACE_DAYS", 0)))
 
 
 # Notification content for each milestone
 NOTIFICATION_CONFIG = {
     "3_days": {
-        "title": "Your trial expires in 3 days",
-        "body": "Upgrade now to keep your AI assistant working for you. Tap to continue with Pro.",
+        "title": "Trial ends in 3 days",
+        "body": "If you want to keep using Teeks without interruption, you can move to Pro anytime.",
     },
     "1_day": {
-        "title": "Your trial expires tomorrow",
-        "body": "Don't lose access to email summaries, tasks, and smart reminders. Upgrade today!",
+        "title": "Trial ends tomorrow",
+        "body": "Your trial ends tomorrow. You can choose Pro whenever you're ready.",
     },
     "expired": {
-        "title": "Your trial has ended",
-        "body": "You have 3 days of grace period remaining. Upgrade to restore full access.",
-    },
-    "grace_ending": {
-        "title": "Last chance: Access ends tomorrow",
-        "body": "After tomorrow, you'll be limited to sandbox mode. Tap to upgrade now.",
+        "title": "Trial ended",
+        "body": "Your trial has ended. When you're ready, upgrade to Pro to continue.",
     },
 }
 
@@ -102,38 +98,23 @@ def _get_users_for_milestone(
             UserSettings.trial_ends_at.between(now, now + timedelta(days=1)),
             or_(
                 UserSettings.last_trial_warning_milestone.is_(None),
-                ~UserSettings.last_trial_warning_milestone.in_(["1_day", "expired", "grace_ending"])
+                ~UserSettings.last_trial_warning_milestone.in_(["1_day", "expired"])
             )
         ).all()
     
     elif milestone == "expired":
-        # Trial ended, but still in grace period (0 to 3 days ago)
+        # Trial ended in the last day (no trial grace period).
         return db.query(UserSettings).filter(
             *base_filters,
             UserSettings.trial_ends_at < now,
-            UserSettings.trial_ends_at > now - timedelta(days=GRACE_PERIOD_DAYS),
+            UserSettings.trial_ends_at > now - timedelta(days=max(1, TRIAL_GRACE_DAYS + 1)),
             UserSettings.subscription_status != "expired",
             or_(
                 UserSettings.last_trial_warning_milestone.is_(None),
-                ~UserSettings.last_trial_warning_milestone.in_(["expired", "grace_ending"])
+                UserSettings.last_trial_warning_milestone != "expired"
             )
         ).all()
-    
-    elif milestone == "grace_ending":
-        # Grace period ends in ~1 day (trial ended 2-3 days ago)
-        return db.query(UserSettings).filter(
-            *base_filters,
-            UserSettings.trial_ends_at.between(
-                now - timedelta(days=GRACE_PERIOD_DAYS),
-                now - timedelta(days=GRACE_PERIOD_DAYS - 1)
-            ),
-            UserSettings.subscription_status != "expired",
-            or_(
-                UserSettings.last_trial_warning_milestone.is_(None),
-                UserSettings.last_trial_warning_milestone != "grace_ending"
-            )
-        ).all()
-    
+
     return []
 
 
@@ -159,7 +140,7 @@ def _send_trial_warning(
             title=config["title"],
             body=config["body"],
             category="system",
-            priority="high",  # Ensures push notification is sent
+            priority="normal",
             target_type="settings",
             target_id="subscription",  # Deep links to subscription screen
             send_push=True,
@@ -206,7 +187,7 @@ async def handle_check_trial_expirations(
         milestone_counts = {}
         
         # Process each milestone in order (most urgent first for logging)
-        for milestone in ["grace_ending", "expired", "1_day", "3_days"]:
+        for milestone in ["expired", "1_day", "3_days"]:
             users = _get_users_for_milestone(db, milestone, now)
             sent_count = 0
             

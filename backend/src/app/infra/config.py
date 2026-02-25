@@ -27,6 +27,10 @@ class Settings:
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
 
+    # Microsoft APIs
+    MICROSOFT_CLIENT_ID: str = os.getenv("MICROSOFT_CLIENT_ID", "")
+    MICROSOFT_CLIENT_SECRET: str = os.getenv("MICROSOFT_CLIENT_SECRET", "")
+
     # Security
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")
     
@@ -39,10 +43,27 @@ class Settings:
         os.getenv("OAUTH_REDIRECT_URI", "http://localhost:8000/auth/gmail/callback")
     )
     
-    # Polar Billing
-    POLAR_ACCESS_TOKEN: str = os.getenv("POLAR_ACCESS_TOKEN", "")
+    # Billing provider
+    # dodo (default) | polar
+    BILLING_PROVIDER: str = os.getenv("BILLING_PROVIDER", "dodo").lower()
+
+    # Dodo Payments
+    DODO_PAYMENTS_API_KEY: str = os.getenv("DODO_PAYMENTS_API_KEY", os.getenv("DODO_API_KEY", ""))
+    DODO_WEBHOOK_SECRET: str = os.getenv("DODO_WEBHOOK_SECRET", "")
+    DODO_PRODUCT_ID: str = os.getenv("DODO_PRODUCT_ID", "")
+    DODO_PRODUCT_ID_MONTHLY: str = os.getenv("DODO_PRODUCT_ID_MONTHLY", "")
+    DODO_PRODUCT_ID_ANNUAL: str = os.getenv("DODO_PRODUCT_ID_ANNUAL", "")
+    DODO_CREDIT_TOPUP_PRODUCT_ID: str = os.getenv("DODO_CREDIT_TOPUP_PRODUCT_ID", "")
+    DODO_CREDIT_TOPUP_MIN_USD: int = int(os.getenv("DODO_CREDIT_TOPUP_MIN_USD", "5"))
+    DODO_CREDIT_TOPUP_MAX_USD: int = int(os.getenv("DODO_CREDIT_TOPUP_MAX_USD", "500"))
+    DODO_CREDIT_TOPUP_UNIT_USD: int = int(os.getenv("DODO_CREDIT_TOPUP_UNIT_USD", "1"))
+    DODO_MODE: str = os.getenv("DODO_MODE", "test_mode").lower()  # test_mode | live_mode
+    DODO_BASE_URL: str = os.getenv("DODO_BASE_URL", "")
+
+    # Polar Billing (legacy/optional fallback)
+    POLAR_ACCESS_TOKEN: str = os.getenv("POLAR_ACCESS_TOKEN", os.getenv("POLAR_API_KEY", ""))
     POLAR_WEBHOOK_SECRET: str = os.getenv("POLAR_WEBHOOK_SECRET", "")
-    POLAR_PRODUCT_ID: str = os.getenv("POLAR_PRODUCT_ID", "")
+    POLAR_PRODUCT_ID: str = os.getenv("POLAR_PRODUCT_ID", os.getenv("POLAR_PRO_PRODUCT_ID", ""))
     
     # Application
     ENV: str = os.getenv("ENV", "development")  # development | staging | production
@@ -70,6 +91,12 @@ class Settings:
     
     # Trial
     TRIAL_DURATION_DAYS: int = int(os.getenv("TRIAL_DURATION_DAYS", "7"))
+    TRIAL_GRACE_DAYS: int = int(os.getenv("TRIAL_GRACE_DAYS", "0"))
+    PRO_GRACE_DAYS: int = int(os.getenv("PRO_GRACE_DAYS", "4"))
+    # Dunning policy
+    DUNNING_WINDOW_DAYS: int = int(os.getenv("DUNNING_WINDOW_DAYS", "7"))
+    DUNNING_EXPECTED_RETRIES: int = int(os.getenv("DUNNING_EXPECTED_RETRIES", "3"))
+    DUNNING_MIDPOINT_DAY: int = int(os.getenv("DUNNING_MIDPOINT_DAY", "3"))
 
     # Vault proposals (human review queue) - currently unhooked by default
     PROPOSALS_ENABLED: bool = os.getenv("PROPOSALS_ENABLED", "false").lower() == "true"

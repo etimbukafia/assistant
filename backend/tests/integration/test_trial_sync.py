@@ -89,7 +89,7 @@ def test_activate_trial_idempotent(test_client, db_session, mock_auth, mock_sett
     assert response.json()["status"] == "active"
 
 def test_initial_sync_trigger(test_client, db_session, mock_auth, mock_settings, mock_gmail, mock_enqueue):
-    """Test triggering initial sync handles feature gating and queuing."""
+    """Test triggering initial sync handles subscription gating and queuing."""
     # 1. Activate trial (prerequisite for feature access)
     mock_settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=7)
     db_session.commit()

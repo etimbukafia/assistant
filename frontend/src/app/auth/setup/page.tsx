@@ -15,6 +15,8 @@ export default function SetupPage() {
         loading,
         gmailConnectError,
         signInWithGoogle,
+        microsoftConnectError,
+        signInWithMicrosoft,
         refreshProfile,
     } = useAuth();
     const [error, setError] = useState<string | null>(null);
@@ -22,7 +24,7 @@ export default function SetupPage() {
 
     useEffect(() => {
         if (loading) return;
-        if (gmailConnectError) return;
+        if (gmailConnectError || microsoftConnectError) return;
         if (initOnceRef.current) return;
         initOnceRef.current = true;
 
@@ -38,9 +40,12 @@ export default function SetupPage() {
             }
         };
         run();
-    }, [settings, loading, gmailConnectError, refreshProfile, router]);
+    }, [settings, loading, gmailConnectError, microsoftConnectError, refreshProfile, router]);
 
-    if (!gmailConnectError) {
+    const connectError = microsoftConnectError || gmailConnectError;
+    const providerLabel = microsoftConnectError ? "Microsoft" : "Gmail";
+
+    if (!connectError) {
         return null;
     }
 
@@ -49,7 +54,7 @@ export default function SetupPage() {
             <div className="max-w-lg mx-auto px-6 pt-16 pb-8 flex flex-col items-center text-center">
                 <Loader2 className="h-8 w-8 animate-spin text-auburn mb-4" />
                 <DonnaText variant="h2" className="font-playfair text-obsidian text-[24px] mb-2">
-                    We couldn't connect Gmail
+                    We couldn't connect {providerLabel}
                 </DonnaText>
                 <DonnaText variant="body" className="text-faint text-base leading-6">
                     Please reconnect to continue. We'll resume syncing right after.
@@ -57,11 +62,11 @@ export default function SetupPage() {
 
                 <div className="mt-6">
                     <DonnaButton
-                        onClick={() => signInWithGoogle()}
+                        onClick={() => microsoftConnectError ? signInWithMicrosoft() : signInWithGoogle()}
                         className="flex items-center gap-2 bg-auburn text-white"
                     >
                         <RefreshCw size={16} />
-                        Reconnect Gmail
+                        Reconnect {providerLabel}
                     </DonnaButton>
                 </div>
 

@@ -7,7 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 
 export default function InboxPage() {
-    const { user, settings, gmailConnectError } = useAuth();
+    const { user, settings, gmailConnectError, microsoftConnectError } = useAuth();
     const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
     const [threadIds, setThreadIds] = useState<string[]>([]);
     const [view, setView] = useState<"inbox" | "archived">("inbox");
@@ -97,7 +97,12 @@ export default function InboxPage() {
                         </button>
                     </div>
 
-                    {settings !== null && !settings.initial_sync_completed && settings.gmail_connected && !gmailConnectError && (
+                    {settings !== null && !settings.initial_sync_completed && (
+                        (settings.connected_provider === "microsoft"
+                            ? settings.outlook_connected && !microsoftConnectError
+                            : settings.gmail_connected && !gmailConnectError
+                        )
+                    ) && (
                         <div className="mb-6 rounded-[8px] border border-primary/20 bg-primary/[0.04] px-4 py-3">
                             <p className="text-sm font-inter text-foreground/80">
                                 We&apos;re syncing your emails from today.

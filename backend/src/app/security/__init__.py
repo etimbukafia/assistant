@@ -4,10 +4,7 @@ from .auth import (
     AuthenticatedUser
 )
 from .encryption import encrypt_token, decrypt_token
-from .feature_gating import (
-    Feature, is_feature_enabled, require_feature,
-    get_enabled_features, get_access_status
-)
+from .feature_gating import has_subscription_access, get_access_status
 
 __all__ = [
     # Auth
@@ -15,7 +12,6 @@ __all__ = [
     "require_active_subscription", "require_pro_tier", "require_admin_user", "AuthenticatedUser",
     # Encryption
     "encrypt_token", "decrypt_token",
-    # Feature gating
-    "Feature", "is_feature_enabled", "require_feature",
-    "get_enabled_features", "get_access_status",
+    # Subscription access helpers
+    "has_subscription_access", "get_access_status",
 ]

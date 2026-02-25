@@ -427,6 +427,18 @@ def require_active_subscription(
     Use for premium features.
     """
     if not settings.is_active:
+        if settings.dunning_suspended_at:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail={
+                    "error": "payment_update_required",
+                    "message": "Pro is paused until your payment method is updated.",
+                    "tier": settings.subscription_tier,
+                    "status": settings.subscription_status,
+                    "dunning_suspended_at": settings.dunning_suspended_at.isoformat(),
+                    "action": "update_payment_method",
+                }
+            )
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={

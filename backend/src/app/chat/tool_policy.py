@@ -99,6 +99,8 @@ TOOL_FAMILY_BY_NAME = {
     "get_event_context": ToolFamily.READ_CONTEXT,
     "get_message_context": ToolFamily.READ_CONTEXT,
     "get_task_context": ToolFamily.READ_CONTEXT,
+    "context_search": ToolFamily.READ_CONTEXT,
+    "entity_search": ToolFamily.READ_CONTEXT,
     "search_vault": ToolFamily.READ_CONTEXT,
     "get_vault_note": ToolFamily.READ_CONTEXT,
     # Artifact generation

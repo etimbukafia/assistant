@@ -128,16 +128,35 @@ class UserSettingsResponse(BaseModel):
     trial_ends_at: Optional[datetime] = None
     is_active: bool = False  # True if trial/pro is currently valid
     days_remaining: int = 0
+    dunning_active: bool = False
+    dunning_deadline_at: Optional[datetime] = None
+    dunning_days_remaining: int = 0
+    dunning_attempt_count: int = 0
+    dunning_suspended_at: Optional[datetime] = None
     
     # Personalization & Onboarding
     assistant_name: str = "Teeks"
     onboarding_completed: bool = False
+
+    # Personal profile
+    full_name: Optional[str] = None
+    preferred_name: Optional[str] = None
+    role: Optional[str] = None
+    personal_preferences: Optional[str] = None
+
+    # Executive profile
+    exec_full_name: Optional[str] = None
+    exec_preferred_name: Optional[str] = None
+    exec_role: Optional[str] = None
+    exec_preferences: Optional[str] = None
 
     # Integration status
     initial_sync_completed: bool = False
     initial_sync_failed: bool = False
     gmail_connected: bool = False
     calendar_connected: bool = False
+    outlook_connected: bool = False
+    connected_provider: Optional[str] = None
     default_calendar_id: Optional[str] = None
     auto_briefing_enabled: Optional[bool] = None
     briefing_hours_before: Optional[int] = None
@@ -158,6 +177,14 @@ class UserSettingsUpdateRequest(BaseModel):
     default_calendar_id: Optional[str] = None
     auto_briefing_enabled: Optional[bool] = None
     briefing_hours_before: Optional[int] = None
+    full_name: Optional[str] = None
+    preferred_name: Optional[str] = None
+    role: Optional[str] = None
+    personal_preferences: Optional[str] = None
+    exec_full_name: Optional[str] = None
+    exec_preferred_name: Optional[str] = None
+    exec_role: Optional[str] = None
+    exec_preferences: Optional[str] = None
 
 
 # ========================================

@@ -4,6 +4,8 @@ from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 import logging
 import httpx
+import base64
+import json
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.infra.config import get_settings, Settings
@@ -11,11 +13,30 @@ from app.security.auth import get_db_for_user, get_current_user, AuthenticatedUs
 from app.security.auth import get_settings as get_app_settings # Watch out for name collision with config.get_settings
 from app.integrations.gmail import GmailClient, get_gmail_client
 from app.security.encryption import encrypt_token
-from app.data.models import GmailAccount
+from app.data.models import GmailAccount, OutlookAccount, UserSettings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+def _infer_token_expiry(token: str) -> datetime | None:
+    """
+    Best-effort JWT exp extraction without validation.
+    Returns UTC datetime or None.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8"))
+        exp = data.get("exp")
+        if not exp:
+            return None
+        return datetime.fromtimestamp(int(exp), tz=timezone.utc)
+    except Exception:
+        return None
 
 # Required Google OAuth scopes for Teeks to function
 REQUIRED_SCOPES = [
@@ -33,6 +54,21 @@ SCOPE_DESCRIPTIONS = {
     "https://www.googleapis.com/auth/calendar.readonly": "Check your calendar availability",
     "https://www.googleapis.com/auth/calendar.events": "Create calendar events with your confirmation",
     "https://www.googleapis.com/auth/calendar.events.freebusy": "See busy/free time for scheduling",
+}
+
+# Required Microsoft OAuth scopes for Teeks to function
+MS_REQUIRED_SCOPES = [
+    "Mail.Read",
+    "Mail.Send",
+    "Calendars.Read",
+    "Calendars.ReadWrite",
+]
+
+MS_SCOPE_DESCRIPTIONS = {
+    "Mail.Read": "Read your emails to extract tasks and context",
+    "Mail.Send": "Send email replies with your approval",
+    "Calendars.Read": "Check your calendar availability",
+    "Calendars.ReadWrite": "Create and update calendar events with your confirmation",
 }
 
 
@@ -71,8 +107,42 @@ def verify_token_scopes(access_token: str) -> tuple[bool, List[str]]:
         return True, []
 
 
+def _get_or_create_settings(db: Session, user: AuthenticatedUser) -> UserSettings:
+    """Ensure UserSettings exists for this user (local helper to avoid extra deps)."""
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user.user_id).first()
+    if settings:
+        return settings
+    from app.security.auth import create_user_settings
+    settings = create_user_settings(user.user_id, user.email)
+    db.add(settings)
+    db.commit()
+    db.refresh(settings)
+    return settings
+
+
+def _enforce_single_provider(settings: UserSettings, provider: str):
+    """MVP: only one provider can be connected at a time."""
+    if settings.connected_provider and settings.connected_provider != "none":
+        if settings.connected_provider != provider:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "provider_conflict",
+                    "message": "Disconnect your current provider before connecting a new one.",
+                    "connected_provider": settings.connected_provider,
+                },
+            )
+
+
 class ConnectGmailRequest(BaseModel):
     """Request to connect Gmail using Supabase provider token"""
+    provider_token: str
+    provider_refresh_token: Optional[str] = None
+    email: str
+
+
+class ConnectMicrosoftRequest(BaseModel):
+    """Request to connect Microsoft using Supabase provider token"""
     provider_token: str
     provider_refresh_token: Optional[str] = None
     email: str
@@ -94,6 +164,8 @@ def connect_gmail_with_provider_token(
     """
     try:
         logger.info(f"Gmail connect request for user={user.user_id}, email={request.email}")
+        settings = _get_or_create_settings(db, user)
+        _enforce_single_provider(settings, "google")
 
         # Step 1: Verify all required scopes were granted
         all_scopes_granted, missing_scopes = verify_token_scopes(request.provider_token)
@@ -181,6 +253,8 @@ def connect_gmail_with_provider_token(
             db.add(account)
             logger.info(f"Creating new GmailAccount for {verified_email}")
 
+        # Mark provider as connected (MVP single-provider mode)
+        settings.connected_provider = "google"
         db.commit()
         logger.info(f"GmailAccount committed successfully for user={user.user_id}, email={verified_email}")
 
@@ -235,6 +309,105 @@ def connect_gmail_with_provider_token(
     except Exception as e:
         logger.error(f"Failed to connect Gmail for user={user.user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to connect Google: {str(e)}")
+
+
+@router.post("/microsoft/connect")
+def connect_microsoft_with_provider_token(
+    request: ConnectMicrosoftRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
+    """
+    Connect Microsoft using the provider token from Supabase OAuth.
+    Stores credentials for Outlook email + Calendar access.
+    """
+    try:
+        logger.info("Microsoft connect request for user=%s, email=%s", user.user_id, request.email)
+        settings = _get_or_create_settings(db, user)
+        _enforce_single_provider(settings, "microsoft")
+
+        # Verify the token works by calling Graph /me
+        headers = {"Authorization": f"Bearer {request.provider_token}"}
+        me_resp = httpx.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers=headers,
+            timeout=10.0,
+        )
+        if me_resp.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Microsoft token validation failed.",
+            )
+
+        me = me_resp.json()
+        verified_email = (me.get("mail") or me.get("userPrincipalName") or "").lower()
+        if not verified_email:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not retrieve email address from Microsoft Graph.",
+            )
+
+        if verified_email.lower() != request.email.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Email mismatch: token is for {verified_email}, not {request.email}",
+            )
+
+        # Store encrypted tokens
+        encrypted_access_token = encrypt_token(request.provider_token)
+        encrypted_refresh_token = encrypt_token(request.provider_refresh_token) if request.provider_refresh_token else None
+        token_expiry = _infer_token_expiry(request.provider_token) or (datetime.now(timezone.utc) + timedelta(hours=1))
+
+        account = db.query(OutlookAccount).filter(
+            OutlookAccount.user_id == user.user_id
+        ).first()
+
+        if not account:
+            account = db.query(OutlookAccount).filter(
+                OutlookAccount.email == verified_email
+            ).first()
+            if account:
+                logger.info("Re-linking orphaned OutlookAccount to %s", user.user_id)
+
+        if account:
+            account.user_id = user.user_id
+            account.email = verified_email
+            account.access_token = encrypted_access_token
+            account.refresh_token = encrypted_refresh_token
+            account.token_expiry = token_expiry
+            account.updated_at = datetime.now(timezone.utc)
+        else:
+            account = OutlookAccount(
+                email=verified_email,
+                user_id=user.user_id,
+                access_token=encrypted_access_token,
+                refresh_token=encrypted_refresh_token,
+                token_expiry=token_expiry,
+            )
+            db.add(account)
+
+        settings.connected_provider = "microsoft"
+        db.commit()
+
+        # Set up Outlook subscriptions (non-fatal)
+        try:
+            from app.services.outlook_watch import setup_subscriptions_for_user
+            setup_result = setup_subscriptions_for_user(db=db, user_id=user.user_id)
+            logger.info("Outlook subscriptions setup for user=%s: %s", user.user_id, setup_result)
+        except Exception as watch_err:
+            logger.warning("Outlook subscription setup failed for user=%s: %s", user.user_id, watch_err)
+
+        return {
+            "status": "success",
+            "message": "Microsoft connected successfully",
+            "email": verified_email,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to connect Microsoft for user=%s: %s", user.user_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to connect Microsoft: {str(e)}")
 
 @router.get("/gmail")
 def start_gmail_auth(gmail_client: GmailClient = Depends(get_gmail_client)):
@@ -334,6 +507,8 @@ def revoke_gmail_auth(
         CalendarEvent, AgentActivityLog, SchedulingSuggestion
     )
 
+    settings = _get_or_create_settings(db, user)
+
     # Gather scoped IDs for safe deletes when user_id isn't present
     message_ids_subq = db.query(Message.id).filter(Message.user_id == user.user_id).subquery()
     task_ids_subq = db.query(Task.id).filter(Task.user_id == user.user_id).subquery()
@@ -362,6 +537,71 @@ def revoke_gmail_auth(
         )
     ).delete(synchronize_session=False)
     
+    settings.connected_provider = "none"
+    settings.calendar_ids = []
+    settings.default_calendar_id = None
     db.commit()
     
     return {"status": "success", "message": "Gmail authorization revoked and data cleared"}
+
+
+class DisconnectProviderRequest(BaseModel):
+    provider: str | None = None  # google | microsoft
+
+
+@router.post("/provider/disconnect")
+def disconnect_provider(
+    request: DisconnectProviderRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user)
+):
+    """
+    Disconnect a provider without deleting user data.
+    MVP: only one provider can be connected, so this unhooks the active provider.
+    """
+    settings = _get_or_create_settings(db, user)
+    provider = (request.provider or settings.connected_provider or "").lower()
+    if provider not in ("google", "microsoft"):
+        raise HTTPException(status_code=400, detail="Unknown provider.")
+
+    if settings.connected_provider != provider:
+        return {
+            "status": "noop",
+            "message": "Provider already disconnected.",
+            "connected_provider": settings.connected_provider,
+        }
+
+    if provider == "google":
+        # Best-effort stop watches and clear Gmail credentials
+        try:
+            from app.services.gmail_watch import stop_watch
+            stop_watch(db=db, user_id=user.user_id)
+        except Exception as e:
+            logger.warning("Failed to stop Gmail watch: %s", e)
+
+        try:
+            from app.services.calendar_watch import stop_watches_for_user
+            stop_watches_for_user(db=db, user_id=user.user_id)
+        except Exception as e:
+            logger.warning("Failed to stop Calendar watches: %s", e)
+
+        db.query(GmailAccount).filter(GmailAccount.user_id == user.user_id).delete(synchronize_session=False)
+        # Clear calendar settings to avoid syncing after disconnect
+        settings.calendar_ids = []
+        settings.default_calendar_id = None
+
+    if provider == "microsoft":
+        try:
+            from app.services.outlook_watch import stop_subscriptions_for_user
+            stop_subscriptions_for_user(db=db, user_id=user.user_id)
+        except Exception as e:
+            logger.warning("Failed to stop Outlook subscriptions: %s", e)
+
+        db.query(OutlookAccount).filter(OutlookAccount.user_id == user.user_id).delete(synchronize_session=False)
+        settings.calendar_ids = []
+        settings.default_calendar_id = None
+
+    settings.connected_provider = "none"
+    db.commit()
+
+    return {"status": "success", "message": "Provider disconnected."}

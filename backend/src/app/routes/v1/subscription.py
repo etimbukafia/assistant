@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Body
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.infra.config import get_settings
 from app.security.auth import get_current_user, get_user_settings, get_db_for_user, AuthenticatedUser
 from app.data.models import UserSettings
 
@@ -25,6 +26,8 @@ def activate_trial(
     Called when user explicitly chooses to sync their real data.
     Uses get_user_settings which auto-creates the row for new users.
     """
+    app_settings = get_settings()
+    trial_days = max(1, int(getattr(app_settings, "TRIAL_DURATION_DAYS", 7)))
 
     # PRO users don't need trial activation
     if settings.subscription_tier == "pro":
@@ -49,13 +52,13 @@ def activate_trial(
             # Trial expired - guide user to upgrade instead of returning error
             return {
                 "status": "trial_expired",
-                "message": "Your trial has ended. Upgrade to Pro to continue.",
+                "message": "Your trial has ended. When you're ready, you can move to Pro.",
                 "action": "checkout",
                 "checkout_endpoint": "/billing/checkout"
             }
 
     # Activate trial
-    settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=7)
+    settings.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=trial_days)
     settings.subscription_status = "trialing"
     settings.onboarding_completed = True
 
@@ -75,7 +78,7 @@ def activate_trial(
     return {
         "status": "activated",
         "trial_ends_at": settings.trial_ends_at.isoformat(),
-        "days_remaining": 7,
+        "days_remaining": trial_days,
         "assistant_name": settings.assistant_name,
         "onboarding_completed": settings.onboarding_completed  # Return actual value
     }

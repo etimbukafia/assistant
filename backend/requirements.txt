@@ -31,6 +31,7 @@ numpy>=1.24.0
 
 # Payments
 polar-sdk>=0.28.0
+standardwebhooks>=1.0.0
 
 # HTTP Client
 httpx>=0.26.0

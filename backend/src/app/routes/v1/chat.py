@@ -29,6 +29,7 @@ from app.services.chat_metrics import summarize_chat_metrics
 from app.services.action_chips import get_cached_action_chips
 from app.services.warm_cache import get_warm_cache_service
 from app.services.mention_context import MentionContextService
+from app.chat.tools import ChatToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -447,14 +448,44 @@ async def suggest_mentions(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db_for_user),
 ):
-    service = MentionContextService(
-        db=db,
-        warm_cache=get_warm_cache_service(),
-        tenant_id="default",
-        user_id=user.user_id,
-        session_id=session_id or "default",
+    # Unified entity search (Jobs-style: single entry point, strict filters).
+    entity_types = []
+    kind_norm = (kind or "").strip().lower()
+    if kind_norm:
+        if kind_norm in {"contact", "thread", "event", "task"}:
+            entity_types = [kind_norm]
+    else:
+        entity_types = ["contact", "thread", "event", "task"]
+
+    registry = ChatToolRegistry(db, user.user_id)
+    result = registry.execute_tool(
+        "entity_search",
+        {
+            "query": q,
+            "entity_types": entity_types,
+            "limit": limit,
+            "offset": offset,
+            "recent_first": True,
+            "include_archived": False,
+        },
     )
-    return service.suggest_mentions(query=q, limit=limit, offset=offset, kind=kind)
+    if not result.success:
+        return []
+    items = result.data.get("items", []) if isinstance(result.data, dict) else []
+    response: List[MentionSuggestionResponse] = []
+    for item in items:
+        response.append(
+            MentionSuggestionResponse(
+                kind=str(item.get("kind") or ""),
+                ref=str(item.get("ref") or ""),
+                label=str(item.get("label") or ""),
+                display_label=str(item.get("label") or ""),
+                subtitle=str(item.get("sample") or "") or None,
+                updated_at=item.get("last_updated_at"),
+                search_text=str(item.get("search_text") or "") or None,
+            )
+        )
+    return response
 
 
 @router.get("/slash-suggestions", response_model=List[MentionSuggestionResponse])

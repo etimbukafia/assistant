@@ -46,6 +46,9 @@ class Message(Base):
     recipient = Column(String)
     body = Column(Text)
     received_at = Column(DateTime)
+    provider = Column(String, default="google", index=True)  # google | microsoft
+    external_message_id = Column(String, nullable=True, index=True)
+    external_thread_id = Column(String, nullable=True, index=True)
 
     # AI-generated fields
     summary = Column(Text, nullable=True)
@@ -119,6 +122,29 @@ class GmailAccount(Base):
     initial_sync_completed = Column(Boolean, default=False, index=True)
 
 
+class OutlookAccount(Base):
+    """Microsoft Outlook account OAuth credentials"""
+    __tablename__ = "outlook_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    user_id = Column(String, index=True, nullable=True)
+
+    # OAuth tokens (encrypted)
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=True)
+    token_expiry = Column(DateTime, nullable=True)
+
+    # Metadata
+    last_sync = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+
+    # Microsoft delta sync tracking
+    last_delta_token = Column(Text, nullable=True)
+    initial_sync_completed = Column(Boolean, default=False, index=True)
+
+
 class UserSettings(Base):
     """User preferences for task management, reminders, calendar, and billing"""
     __tablename__ = "user_settings"
@@ -164,6 +190,10 @@ class UserSettings(Base):
     auto_briefing_enabled = Column(Boolean, default=True)
     briefing_hours_before = Column(Integer, default=1)
 
+    # Connected provider (MVP single-provider mode)
+    # none | google | microsoft
+    connected_provider = Column(String, default="none", index=True)
+
     # Digest Preferences (JSON)
     digest_preferences = Column(JSON, default=lambda: {
         "enabled": False,
@@ -188,19 +218,41 @@ class UserSettings(Base):
 
     # Subscription fields (from migration 015)
     subscription_tier = Column(String, default="trial")  # trial | pro
-    subscription_status = Column(String, default="trialing")  # trialing | active | canceled | past_due | expired
+    subscription_status = Column(String, default="trialing")  # trialing | active | cancel_scheduled | canceled | past_due | expired
     trial_ends_at = Column(DateTime, nullable=True)
     subscription_expires_at = Column(DateTime, nullable=True)
+    dodo_customer_id = Column(String, index=True, nullable=True)
+    dodo_subscription_id = Column(String, index=True, nullable=True)
     polar_customer_id = Column(String, index=True, nullable=True)
     polar_subscription_id = Column(String, index=True, nullable=True)
+    # Dunning state (calm recovery window before pausing access)
+    dunning_active = Column(Boolean, default=False, index=True)
+    dunning_started_at = Column(DateTime, nullable=True)
+    dunning_deadline_at = Column(DateTime, nullable=True, index=True)
+    dunning_attempt_count = Column(Integer, default=0)
+    dunning_last_notified_stage = Column(String, nullable=True)  # initial | midpoint | final
+    dunning_last_payment_failed_at = Column(DateTime, nullable=True)
+    dunning_suspended_at = Column(DateTime, nullable=True, index=True)
 
     # Trial warning tracking (from migration 022)
     last_trial_warning_sent = Column(DateTime, nullable=True)  # When last warning was sent
-    last_trial_warning_milestone = Column(String, nullable=True)  # 3_days | 1_day | expired | grace_ending
+    last_trial_warning_milestone = Column(String, nullable=True)  # 3_days | 1_day | expired
 
     # Personalization & Onboarding (from migration 023)
     assistant_name = Column(String, default="Teeks")  # User's chosen name for AI assistant
     onboarding_completed = Column(Boolean, default=False)  # True after first-time setup
+
+    # Personal profile (from migration 054)
+    full_name = Column(Text, nullable=True)
+    preferred_name = Column(Text, nullable=True)
+    role = Column(Text, default="Executive Assistant")
+    personal_preferences = Column(Text, nullable=True)
+
+    # Executive profile (from migration 055)
+    exec_full_name = Column(Text, nullable=True)
+    exec_preferred_name = Column(Text, nullable=True)
+    exec_role = Column(Text, nullable=True)
+    exec_preferences = Column(Text, nullable=True)
 
     # Credit system (from migration 027)
     credits_used = Column(Float, default=0.0)  # USD spent on Gemini models this period
@@ -226,17 +278,28 @@ class UserSettings(Base):
     def is_active(self) -> bool:
         """Check if user has active subscription or valid trial"""
         now = datetime.now(timezone.utc)
+        settings = get_settings()
+
+        # Dunning suspension takes precedence over all active states.
+        if self.dunning_suspended_at:
+            return False
 
         if self.subscription_tier == "pro":
-            if self.subscription_status not in ["active", "trialing"]:
+            allowed_statuses = ["active", "trialing", "cancel_scheduled"]
+            if self.dunning_active and not self.dunning_suspended_at:
+                allowed_statuses.append("past_due")
+            # "cancel_scheduled" keeps access until period end (+ configured grace).
+            if self.subscription_status not in allowed_statuses:
                 return False
             # Also verify subscription hasn't expired (handles webhook delays)
             if self.subscription_expires_at:
-                return self.subscription_expires_at > (now - CLOCK_SKEW_TOLERANCE)
+                pro_grace_days = max(0, int(getattr(settings, "PRO_GRACE_DAYS", 4)))
+                grace_cutoff = self.subscription_expires_at + timedelta(days=pro_grace_days)
+                return grace_cutoff > (now - CLOCK_SKEW_TOLERANCE)
             # No expiry date set - trust status (edge case during initial setup)
             return True
 
-        # Trial user - add clock skew tolerance to prevent edge cases
+        # Trial user - no grace period by policy.
         if self.trial_ends_at and self.trial_ends_at > (now - CLOCK_SKEW_TOLERANCE):
             return True
 
@@ -246,10 +309,20 @@ class UserSettings(Base):
     def days_remaining(self) -> int:
         """Days remaining in trial or subscription"""
         now = datetime.now(timezone.utc)
+        settings = get_settings()
 
         if self.subscription_tier == "pro" and self.subscription_expires_at:
-            delta = self.subscription_expires_at - now
-            return max(0, delta.days)
+            hard_delta = self.subscription_expires_at - now
+            if hard_delta.days > 0:
+                return max(0, hard_delta.days)
+
+            # While inside pro grace, expose remaining days until access cutoff.
+            if self.subscription_status in ["active", "trialing", "cancel_scheduled"]:
+                pro_grace_days = max(0, int(getattr(settings, "PRO_GRACE_DAYS", 4)))
+                grace_end = self.subscription_expires_at + timedelta(days=pro_grace_days)
+                grace_delta = grace_end - now
+                return max(0, grace_delta.days)
+            return 0
 
         if self.trial_ends_at:
             delta = self.trial_ends_at - now
@@ -268,6 +341,14 @@ class UserSettings(Base):
     def credits_exhausted(self) -> bool:
         """Check if user has exhausted their AI credits"""
         return self.credits_remaining <= 0
+
+    @property
+    def dunning_days_remaining(self) -> int:
+        """Days remaining before dunning pause takes effect."""
+        if not self.dunning_active or not self.dunning_deadline_at:
+            return 0
+        now = datetime.now(timezone.utc)
+        return max(0, (self.dunning_deadline_at - now).days)
 
 
 class Task(Base):
@@ -1035,12 +1116,159 @@ class Notification(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
+class BillingPlan(Base):
+    """Billing plan catalog (provider plan/product mapping)."""
+    __tablename__ = "billing_plans"
+    __table_args__ = (
+        UniqueConstraint("provider", "plan_id", name="uq_billing_plans_provider_plan"),
+        CheckConstraint("billing_interval IN ('monthly','annual','one_time')", name="ck_billing_plans_interval"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String, nullable=False, index=True)  # dodo | polar
+    plan_id = Column(String, nullable=False, index=True)   # provider plan/product id
+    name = Column(String, nullable=True)
+    price_minor = Column(Integer, nullable=True)           # cents / minor unit
+    currency = Column(String, nullable=False, default="USD")
+    billing_interval = Column(String, nullable=False, default="monthly")
+    is_active = Column(Boolean, default=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+
+
+class BillingSubscription(Base):
+    """User subscription snapshot from provider events."""
+    __tablename__ = "billing_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_subscription_id", name="uq_billing_subscriptions_provider_sub"),
+        CheckConstraint(
+            "status IN ('active','trialing','cancel_scheduled','canceled','past_due','expired')",
+            name="ck_billing_subscriptions_status",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False, index=True)
+    provider_subscription_id = Column(String, nullable=True, index=True)
+    provider_customer_id = Column(String, nullable=True, index=True)
+    plan_id = Column(Integer, ForeignKey("billing_plans.id", ondelete="SET NULL"), nullable=True, index=True)
+    plan_external_id = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default="trialing", index=True)
+    current_period_start = Column(DateTime, nullable=True, index=True)
+    current_period_end = Column(DateTime, nullable=True, index=True)
+    cancel_at_period_end = Column(Boolean, default=False, index=True)
+    canceled_at = Column(DateTime, nullable=True, index=True)
+    provider_metadata = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+
+
+class BillingInvoice(Base):
+    """Invoices generated by billing provider."""
+    __tablename__ = "billing_invoices"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_invoice_id", name="uq_billing_invoices_provider_invoice"),
+        CheckConstraint("status IN ('draft','open','paid','void','uncollectible','failed')", name="ck_billing_invoices_status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False, index=True)
+    provider_invoice_id = Column(String, nullable=True, index=True)
+    subscription_id = Column(Integer, ForeignKey("billing_subscriptions.id", ondelete="SET NULL"), nullable=True, index=True)
+    provider_subscription_id = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default="open", index=True)
+    currency = Column(String, nullable=False, default="USD")
+    amount_due_minor = Column(Integer, nullable=True)
+    amount_paid_minor = Column(Integer, nullable=True)
+    amount_remaining_minor = Column(Integer, nullable=True)
+    invoice_pdf_url = Column(Text, nullable=True)
+    hosted_invoice_url = Column(Text, nullable=True)
+    period_start = Column(DateTime, nullable=True, index=True)
+    period_end = Column(DateTime, nullable=True, index=True)
+    due_at = Column(DateTime, nullable=True, index=True)
+    paid_at = Column(DateTime, nullable=True, index=True)
+    provider_metadata = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
+
+
+class BillingPaymentAttempt(Base):
+    """Payment attempts for invoices/subscription renewals."""
+    __tablename__ = "billing_payment_attempts"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_attempt_id", name="uq_billing_payment_attempts_provider_attempt"),
+        CheckConstraint(
+            "status IN ('pending','succeeded','failed','requires_action','canceled')",
+            name="ck_billing_payment_attempts_status",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False, index=True)
+    invoice_id = Column(Integer, ForeignKey("billing_invoices.id", ondelete="SET NULL"), nullable=True, index=True)
+    provider_attempt_id = Column(String, nullable=True, index=True)
+    provider_payment_id = Column(String, nullable=True, index=True)
+    provider_subscription_id = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default="pending", index=True)
+    currency = Column(String, nullable=False, default="USD")
+    amount_minor = Column(Integer, nullable=True)
+    failure_code = Column(String, nullable=True, index=True)
+    failure_message = Column(Text, nullable=True)
+    attempted_at = Column(DateTime, nullable=True, index=True)
+    provider_metadata = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class CreditTopup(Base):
+    """One-time purchased AI credit top-ups."""
+    __tablename__ = "credit_topups"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_payment_id", name="uq_credit_topups_provider_payment"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False, index=True)  # dodo | polar
+    provider_payment_id = Column(String, nullable=False, index=True)
+    amount_minor = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False, default="USD")
+    credits_added = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    provider_metadata = Column(JSON, default=dict)
+
+
+class BillingEvent(Base):
+    """Normalized billing event audit trail."""
+    __tablename__ = "billing_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "delivery_id", name="uq_billing_events_provider_delivery"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    provider = Column(String, nullable=False, index=True)
+    delivery_id = Column(String, nullable=True, index=True)
+    event_type = Column(String, nullable=False, index=True)
+    customer_id = Column(String, nullable=True, index=True)
+    customer_email = Column(String, nullable=True, index=True)
+    subscription_id = Column(String, nullable=True, index=True)
+    invoice_id = Column(String, nullable=True, index=True)
+    handled = Column(Boolean, default=False, index=True)
+    error = Column(Text, nullable=True)
+    payload = Column(JSON, default=dict)
+    received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    processed_at = Column(DateTime, nullable=True, index=True)
+
+
 class WebhookLog(Base):
     """Append-only log of incoming webhooks for health monitoring and audit."""
     __tablename__ = "webhook_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    source = Column(String, nullable=False, index=True)        # "polar" | "gmail"
+    source = Column(String, nullable=False, index=True)        # "dodo" | "polar" | "gmail" | "outlook"
     event_type = Column(String, nullable=False, index=True)    # e.g. "subscription.created", "gmail_push"
     processed = Column(Boolean, default=False)
     error = Column(Text, nullable=True)
@@ -1061,7 +1289,7 @@ class WebhookDelivery(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    source = Column(String, nullable=False, index=True)  # "gmail" | "polar"
+    source = Column(String, nullable=False, index=True)  # "gmail" | "outlook" | "dodo" | "polar"
     delivery_id = Column(String, nullable=False, index=True)
     event_type = Column(String, nullable=True, index=True)
     customer_id = Column(String, nullable=True, index=True)
@@ -1141,4 +1369,17 @@ class CalendarWatchChannel(Base):
     calendar_id = Column(String, nullable=False)              # Which calendar this channel watches
     expiration = Column(DateTime, nullable=False)             # When Google will stop sending notifications (UTC)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class OutlookWatchSubscription(Base):
+    """Microsoft Graph subscriptions for Outlook mail/calendar change notifications."""
+    __tablename__ = "outlook_watch_subscriptions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)
+    subscription_id = Column(String, nullable=False, unique=True)
+    resource = Column(String, nullable=False)
+    client_state = Column(String, nullable=False)
+    expiration = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)

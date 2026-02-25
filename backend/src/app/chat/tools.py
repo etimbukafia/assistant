@@ -40,6 +40,15 @@ from app.superpowers.meeting_brief import MeetingBriefService
 
 logger = logging.getLogger(__name__)
 
+HIDDEN_TOOLS = {
+    "get_contact_context",
+    "get_thread_history",
+    "get_user_preferences",
+    "get_event_context",
+    "get_message_context",
+    "get_task_context",
+}
+
 
 def escape_like(value: str) -> str:
     """Escape special LIKE characters to prevent SQL LIKE wildcard injection."""
@@ -160,7 +169,7 @@ class ChatToolRegistry:
             ),
             "get_contact_context": ToolDefinition(
                 name="get_contact_context",
-                description="Get relationship history and communication patterns for a contact.",
+                description="(Deprecated) Get relationship history and communication patterns for a contact. Prefer context_search.",
                 tool_type=ToolType.READ_ONLY,
                 parameters={
                     "type": "object",
@@ -175,7 +184,7 @@ class ChatToolRegistry:
             ),
             "get_thread_history": ToolDefinition(
                 name="get_thread_history",
-                description="Get thread-level decisions and commitments.",
+                description="(Deprecated) Get thread-level decisions and commitments. Prefer context_search.",
                 tool_type=ToolType.READ_ONLY,
                 parameters={
                     "type": "object",
@@ -189,7 +198,7 @@ class ChatToolRegistry:
             ),
             "get_user_preferences": ToolDefinition(
                 name="get_user_preferences",
-                description="Get preferences for tone/scheduling/working style.",
+                description="(Deprecated) Get preferences for tone/scheduling/working style. Prefer context_search.",
                 tool_type=ToolType.READ_ONLY,
                 parameters={
                     "type": "object",
@@ -202,7 +211,7 @@ class ChatToolRegistry:
             ),
             "get_event_context": ToolDefinition(
                 name="get_event_context",
-                description="Get decisions, commitments, and related notes for an event.",
+                description="(Deprecated) Get decisions, commitments, and related notes for an event. Prefer context_search.",
                 tool_type=ToolType.READ_ONLY,
                 parameters={
                     "type": "object",
@@ -216,7 +225,7 @@ class ChatToolRegistry:
             ),
             "get_message_context": ToolDefinition(
                 name="get_message_context",
-                description="Get context tied to a specific message.",
+                description="(Deprecated) Get context tied to a specific message. Prefer context_search.",
                 tool_type=ToolType.READ_ONLY,
                 parameters={
                     "type": "object",
@@ -230,7 +239,7 @@ class ChatToolRegistry:
             ),
             "get_task_context": ToolDefinition(
                 name="get_task_context",
-                description="Get context for a task (pending_approval or approved).",
+                description="(Deprecated) Get context for a task (pending_approval or approved). Prefer context_search.",
                 tool_type=ToolType.READ_ONLY,
                 parameters={
                     "type": "object",
@@ -239,6 +248,63 @@ class ChatToolRegistry:
                         "task": {"type": "string"},
                         "limit": {"type": "integer", "default": 8},
                     },
+                },
+            ),
+            "context_search": ToolDefinition(
+                name="context_search",
+                description=(
+                    "Unified search over context entries (decisions, commitments, preferences, relationships, risks) "
+                    "for memory retrieval. Use filters instead of raw SQL."
+                ),
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Keyword search across content/title"},
+                        "entity_type": {
+                            "type": "string",
+                            "enum": ["contact", "thread", "event", "message", "task", "global", "executive"],
+                        },
+                        "entity_id": {"type": "string", "description": "Entity reference id"},
+                        "types": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": ["decision", "commitment", "preferences", "relationships", "risks", "insight"],
+                            },
+                        },
+                        "status": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["active", "resolved", "dismissed", "archived", "stale"]},
+                        },
+                        "since": {"type": "string", "description": "ISO datetime; created after this"},
+                        "until": {"type": "string", "description": "ISO datetime; created before this"},
+                        "limit": {"type": "integer", "default": 10},
+                        "include_non_active": {"type": "boolean", "default": False},
+                    },
+                },
+            ),
+            "entity_search": ToolDefinition(
+                name="entity_search",
+                description=(
+                    "Unified entity search for contacts, threads, events, messages, and tasks. "
+                    "Requires explicit entity_types filter."
+                ),
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search string"},
+                        "entity_types": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["contact", "thread", "event", "message", "task"]},
+                        },
+                        "limit": {"type": "integer", "default": 20},
+                        "offset": {"type": "integer", "default": 0},
+                        "recent_first": {"type": "boolean", "default": True},
+                        "include_archived": {"type": "boolean", "default": False},
+                    },
+                    "required": ["entity_types"],
                 },
             ),
             "search_vault": ToolDefinition(
@@ -410,6 +476,7 @@ class ChatToolRegistry:
                 }
             }
             for tool in self._tools.values()
+            if tool.name not in HIDDEN_TOOLS
         ]
 
     def list_function_declarations(self) -> List[Dict[str, Any]]:
@@ -421,6 +488,7 @@ class ChatToolRegistry:
                 "parameters": tool.parameters,
             }
             for tool in self._tools.values()
+            if tool.name not in HIDDEN_TOOLS
         ]
 
     def is_action_tool(self, name: str) -> bool:
@@ -672,33 +740,15 @@ class ChatToolRegistry:
             return ToolResult(success=False, error="contact/email/name is required")
         limit = max(1, min(int(params.get("limit", 5)), 10))
         include_non_active = bool(params.get("include_non_active", False))
-
-        snapshot = self._get_scoped_snapshot(
-            scope=f"contact:{contact_email}",
-            builder=lambda: build_contact_snapshot(self.db, self.user_id, contact_email),
+        return self._execute_context_search(
+            {
+                "entity_type": "contact",
+                "entity_id": contact_email,
+                "types": ["relationships"],
+                "limit": limit,
+                "include_non_active": include_non_active,
+            }
         )
-        entries = list((snapshot.get("by_type", {}) or {}).get("relationships", []))[:limit]
-        entries = self._filter_context_entries(entries, include_non_active)
-        if not entries:
-            now = datetime.now(timezone.utc)
-            query = self.db.query(ContextEntry).filter(
-                ContextEntry.user_id == self.user_id,
-                ContextEntry.entity_type == "contact",
-                ContextEntry.entity_id == contact_email,
-                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
-            )
-            if not include_non_active:
-                query = query.filter(ContextEntry.status == "active")
-            rows = (
-                query
-                .order_by(ContextEntry.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-            entries = [self._serialize_context_entry(r) for r in rows]
-
-        self._merge_hot(entries)
-        return ToolResult(success=True, data={"contact": contact_email, "entries": entries})
 
     def _execute_get_thread_history(self, params: Dict[str, Any]) -> ToolResult:
         thread_ref = self._resolve_entity_ref("thread", params.get("thread_id") or params.get("thread"))
@@ -707,73 +757,65 @@ class ChatToolRegistry:
         limit = max(1, min(int(params.get("limit", 8)), 10))
         include_non_active = bool(params.get("include_non_active", False))
 
-        snapshot = self._get_scoped_snapshot(
-            scope=f"thread:{thread_ref}",
-            builder=lambda: build_thread_snapshot(self.db, self.user_id, thread_ref),
+        result = self._execute_context_search(
+            {
+                "entity_type": "thread",
+                "entity_id": thread_ref,
+                "types": ["decision", "commitment"],
+                "limit": limit,
+                "include_non_active": include_non_active,
+            }
         )
-        by_type = snapshot.get("by_type", {}) or {}
-        entries = (by_type.get("decision", []) + by_type.get("commitment", []))
-        entries = self._filter_context_entries(entries, include_non_active=include_non_active)[:limit]
-        if not entries:
-            now = datetime.now(timezone.utc)
-            query = self.db.query(ContextEntry).filter(
-                ContextEntry.user_id == self.user_id,
-                ContextEntry.entity_type == "thread",
-                ContextEntry.entity_id == thread_ref,
-                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
-            )
-            if not include_non_active:
-                query = query.filter(ContextEntry.status == "active")
-            rows = (
-                query
-                .order_by(ContextEntry.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-            entries = [self._serialize_context_entry(r) for r in rows]
+        if result.success and isinstance(result.data, dict) and result.data.get("entries"):
+            result.data["thread_id"] = thread_ref
+            return result
 
-        if not entries:
-            thread_messages = (
-                self.db.query(Message)
-                .filter(
-                    Message.user_id == self.user_id,
-                    Message.thread_id == thread_ref,
-                )
-                .order_by(Message.received_at.desc(), Message.created_at.desc())
-                .limit(limit)
-                .all()
+        thread_messages = (
+            self.db.query(Message)
+            .filter(
+                Message.user_id == self.user_id,
+                Message.thread_id == thread_ref,
             )
-            entries = [
-                {
-                    "id": f"thread_msg:{msg.id}",
-                    "type": "thread_excerpt",
-                    "content": f"{(msg.sender or '').strip() or 'Unknown sender'}: {((msg.summary or msg.decrypted_body or msg.subject or '').strip())[:260]}",
-                    "entity_type": "thread",
-                    "entity_id": thread_ref,
-                    "created_by": "Teeks",
-                    "created_at": msg.received_at.isoformat() if msg.received_at else None,
-                    "importance_level": "normal",
-                    "status": msg.status or "inbox",
-                }
-                for msg in thread_messages
-            ]
-
+            .order_by(Message.received_at.desc(), Message.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        entries = [
+            {
+                "id": f"thread_msg:{msg.id}",
+                "type": "thread_excerpt",
+                "content": f"{(msg.sender or '').strip() or 'Unknown sender'}: {((msg.summary or msg.decrypted_body or msg.subject or '').strip())[:260]}",
+                "entity_type": "thread",
+                "entity_id": thread_ref,
+                "created_by": "Teeks",
+                "created_at": msg.received_at.isoformat() if msg.received_at else None,
+                "importance_level": "normal",
+                "status": msg.status or "inbox",
+            }
+            for msg in thread_messages
+        ]
         self._merge_hot(entries)
         return ToolResult(success=True, data={"thread_id": thread_ref, "entries": entries})
 
     def _execute_get_user_preferences(self, params: Dict[str, Any]) -> ToolResult:
         category = params.get("category", "general")
         limit = max(1, min(int(params.get("limit", 5)), 10))
-        snapshot = self._get_scoped_snapshot(
-            scope="profile",
-            builder=lambda: build_profile_snapshot(self.db, self.user_id),
+        result = self._execute_context_search(
+            {
+                "entity_type": "executive",
+                "types": ["preferences"],
+                "limit": limit,
+                "include_non_active": False,
+            }
         )
-        preferences = self._filter_context_entries(list((snapshot.get("by_type", {}) or {}).get("preferences", [])), include_non_active=False)[:limit]
+        if not result.success or not isinstance(result.data, dict):
+            return result
         if category and category != "general":
             cat = str(category).lower().strip()
-            preferences = [p for p in preferences if self._preference_matches_category(p, cat)]
-        self._merge_hot(preferences)
-        return ToolResult(success=True, data={"category": category, "entries": preferences})
+            prefs = [p for p in result.data.get("entries", []) if self._preference_matches_category(p, cat)]
+            result.data["entries"] = prefs[:limit]
+        result.data["category"] = category
+        return result
 
     def _execute_get_event_context(self, params: Dict[str, Any]) -> ToolResult:
         event_ref = self._resolve_entity_ref("event", params.get("event_id") or params.get("event"))
@@ -781,87 +823,77 @@ class ChatToolRegistry:
             return ToolResult(success=False, error="event_id/event is required")
         limit = max(1, min(int(params.get("limit", 8)), 10))
         include_non_active = bool(params.get("include_non_active", False))
-        snapshot = self._get_scoped_snapshot(
-            scope=f"event:{event_ref}",
-            builder=lambda: build_event_snapshot(self.db, self.user_id, event_ref),
+
+        result = self._execute_context_search(
+            {
+                "entity_type": "event",
+                "entity_id": event_ref,
+                "types": ["decision", "commitment", "risks"],
+                "limit": limit,
+                "include_non_active": include_non_active,
+            }
         )
-        by_type = snapshot.get("by_type", {}) or {}
-        entries = (by_type.get("decision", []) + by_type.get("commitment", []) + by_type.get("risks", []))
-        entries = self._filter_context_entries(entries, include_non_active=include_non_active)[:limit]
-        if not entries:
-            now = datetime.now(timezone.utc)
-            query = self.db.query(ContextEntry).filter(
-                ContextEntry.user_id == self.user_id,
-                ContextEntry.entity_type == "event",
-                ContextEntry.entity_id == event_ref,
-                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
-            )
-            if not include_non_active:
-                query = query.filter(ContextEntry.status == "active")
-            rows = (
-                query
-                .order_by(ContextEntry.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-            entries = [self._serialize_context_entry(r) for r in rows]
-        if not entries:
-            event = None
-            if str(event_ref).isdigit():
-                event = (
-                    self.db.query(CalendarEvent)
-                    .filter(
-                        CalendarEvent.user_id == self.user_id,
-                        CalendarEvent.id == int(str(event_ref)),
-                    )
-                    .first()
+        if result.success and isinstance(result.data, dict) and result.data.get("entries"):
+            result.data["event_id"] = event_ref
+            return result
+
+        event = None
+        if str(event_ref).isdigit():
+            event = (
+                self.db.query(CalendarEvent)
+                .filter(
+                    CalendarEvent.user_id == self.user_id,
+                    CalendarEvent.id == int(str(event_ref)),
                 )
-            if not event:
-                event = (
-                    self.db.query(CalendarEvent)
-                    .filter(
-                        CalendarEvent.user_id == self.user_id,
-                        CalendarEvent.external_event_id == str(event_ref),
-                    )
-                    .first()
+                .first()
+            )
+        if not event:
+            event = (
+                self.db.query(CalendarEvent)
+                .filter(
+                    CalendarEvent.user_id == self.user_id,
+                    CalendarEvent.external_event_id == str(event_ref),
                 )
-            if event:
-                participants_raw = event.participants if isinstance(event.participants, list) else []
-                participant_names: List[str] = []
-                for p in participants_raw:
-                    if isinstance(p, dict):
-                        name = " ".join(str(p.get("name") or "").split()).strip()
-                        email = " ".join(str(p.get("email") or "").split()).strip()
-                        if name or email:
-                            participant_names.append(name or email)
-                    else:
-                        value = " ".join(str(p).split()).strip()
-                        if value:
-                            participant_names.append(value)
-                bits = [f"Event: {(event.title or '').strip() or f'Event {event.id}'}"]
-                if event.start_time:
-                    bits.append(f"starts {event.start_time.isoformat()}")
-                if event.end_time:
-                    bits.append(f"ends {event.end_time.isoformat()}")
-                if (event.location or "").strip():
-                    bits.append(f"location: {event.location.strip()}")
-                if participant_names:
-                    bits.append("participants: " + ", ".join(participant_names[:8]))
-                entries = [
-                    {
-                        "id": f"event:{event.id}:facts",
-                        "type": "event_facts",
-                        "content": " | ".join(bits),
-                        "entity_type": "event",
-                        "entity_id": str(event.id),
-                        "created_by": "Teeks",
-                        "created_at": (event.updated_at or event.start_time or event.created_at).isoformat()
-                        if (event.updated_at or event.start_time or event.created_at)
-                        else None,
-                        "importance_level": "high" if participant_names else "normal",
-                        "status": event.status or "active",
-                    }
-                ]
+                .first()
+            )
+        entries = []
+        if event:
+            participants_raw = event.participants if isinstance(event.participants, list) else []
+            participant_names: List[str] = []
+            for p in participants_raw:
+                if isinstance(p, dict):
+                    name = " ".join(str(p.get("name") or "").split()).strip()
+                    email = " ".join(str(p.get("email") or "").split()).strip()
+                    if name or email:
+                        participant_names.append(name or email)
+                else:
+                    value = " ".join(str(p).split()).strip()
+                    if value:
+                        participant_names.append(value)
+            bits = [f"Event: {(event.title or '').strip() or f'Event {event.id}'}"]
+            if event.start_time:
+                bits.append(f"starts {event.start_time.isoformat()}")
+            if event.end_time:
+                bits.append(f"ends {event.end_time.isoformat()}")
+            if (event.location or "").strip():
+                bits.append(f"location: {event.location.strip()}")
+            if participant_names:
+                bits.append("participants: " + ", ".join(participant_names[:8]))
+            entries = [
+                {
+                    "id": f"event:{event.id}:facts",
+                    "type": "event_facts",
+                    "content": " | ".join(bits),
+                    "entity_type": "event",
+                    "entity_id": str(event.id),
+                    "created_by": "Teeks",
+                    "created_at": (event.updated_at or event.start_time or event.created_at).isoformat()
+                    if (event.updated_at or event.start_time or event.created_at)
+                    else None,
+                    "importance_level": "high" if participant_names else "normal",
+                    "status": event.status or "active",
+                }
+            ]
         self._merge_hot(entries)
         return ToolResult(success=True, data={"event_id": event_ref, "entries": entries})
 
@@ -871,116 +903,341 @@ class ChatToolRegistry:
             return ToolResult(success=False, error="message_id/message is required")
         limit = max(1, min(int(params.get("limit", 8)), 10))
         include_non_active = bool(params.get("include_non_active", False))
-        snapshot = self._get_scoped_snapshot(
-            scope=f"message:{message_ref}",
-            builder=lambda: build_message_snapshot(self.db, self.user_id, message_ref),
+        result = self._execute_context_search(
+            {
+                "entity_type": "message",
+                "entity_id": message_ref,
+                "types": ["commitment", "decision", "risks"],
+                "limit": limit,
+                "include_non_active": include_non_active,
+            }
         )
-        by_type = snapshot.get("by_type", {}) or {}
-        entries = (by_type.get("commitment", []) + by_type.get("decision", []) + by_type.get("risks", []))[:limit]
-        entries = self._filter_context_entries(entries, include_non_active=include_non_active)
-        if not entries:
-            now = datetime.now(timezone.utc)
-            query = self.db.query(ContextEntry).filter(
-                ContextEntry.user_id == self.user_id,
-                ContextEntry.entity_type == "message",
-                ContextEntry.entity_id == message_ref,
-                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
-            )
-            if not include_non_active:
-                query = query.filter(ContextEntry.status == "active")
-            rows = (
-                query
-                .order_by(ContextEntry.created_at.desc())
-                .limit(limit)
-                .all()
-            )
-            entries = [self._serialize_context_entry(r) for r in rows]
-        self._merge_hot(entries)
-        return ToolResult(success=True, data={"message_id": message_ref, "entries": entries})
+        if result.success and isinstance(result.data, dict):
+            result.data["message_id"] = message_ref
+        return result
 
     def _execute_get_task_context(self, params: Dict[str, Any]) -> ToolResult:
         task_identifier = (params.get("task_id") or params.get("task") or "").strip()
         if not task_identifier:
             return ToolResult(success=False, error="task_id/task is required")
         limit = max(1, min(int(params.get("limit", 8)), 10))
-        allowed_statuses = {"pending_approval", "approved"}
 
-        task = None
-        if task_identifier.isdigit():
-            task = (
-                self.db.query(Task)
-                .filter(
-                    Task.user_id == self.user_id,
-                    Task.id == int(task_identifier),
-                    Task.status.in_(sorted(allowed_statuses)),
-                )
-                .first()
-            )
+        # Use entity_search for tasks; context_search no longer handles tasks.
+        result = self._execute_entity_search(
+            {
+                "query": task_identifier,
+                "entity_types": ["task"],
+                "limit": limit,
+                "offset": 0,
+                "recent_first": True,
+                "include_archived": False,
+            }
+        )
+        return result
 
-        if task is None:
-            task_ref = self._resolve_entity_ref("task", task_identifier)
-            if task_ref and str(task_ref).isdigit():
-                task = (
-                    self.db.query(Task)
-                    .filter(
-                        Task.user_id == self.user_id,
-                        Task.id == int(task_ref),
-                        Task.status.in_(sorted(allowed_statuses)),
-                    )
-                    .first()
-                )
+    def _execute_context_search(self, params: Dict[str, Any]) -> ToolResult:
+        query_text = " ".join(str(params.get("query") or "").split()).strip()
+        entity_type = (params.get("entity_type") or "").strip().lower()
+        entity_id = " ".join(str(params.get("entity_id") or "").split()).strip()
+        types = params.get("types") or []
+        status = params.get("status") or []
+        include_non_active = bool(params.get("include_non_active", False))
+        include_tasks = False
+        limit = max(1, min(int(params.get("limit", 10)), 25))
 
-        if task is None:
-            safe_query = escape_like(task_identifier)
-            task = (
-                self.db.query(Task)
-                .filter(
-                    Task.user_id == self.user_id,
-                    Task.status.in_(sorted(allowed_statuses)),
-                    (
-                        (func.lower(Task.title) == task_identifier.lower())
-                        | Task.title.ilike(f"%{safe_query}%", escape="\\")
-                    ),
-                )
-                .order_by(Task.updated_at.desc(), Task.created_at.desc())
-                .first()
-            )
+        allowed_entity_types = {"contact", "thread", "event", "message", "task", "global", "executive"}
+        if entity_type and entity_type not in allowed_entity_types:
+            return ToolResult(success=False, error="entity_type is invalid")
 
-        if task is None:
-            return ToolResult(success=False, error="Task not found")
+        allowed_types = {"decision", "commitment", "preferences", "relationships", "risks", "insight"}
+        types = [t for t in types if t in allowed_types]
+
+        allowed_status = {"active", "resolved", "dismissed", "archived", "stale"}
+        status = [s for s in status if s in allowed_status]
+
+        since_ts = self._parse_iso_timestamp(params.get("since"))
+        until_ts = self._parse_iso_timestamp(params.get("until"))
+
+        if entity_type and entity_id:
+            if entity_type in {"thread", "event", "message", "task"}:
+                resolved = self._resolve_entity_ref(entity_type, entity_id)
+                if resolved:
+                    entity_id = resolved
+            if entity_type == "contact":
+                resolved_contact = self._resolve_contact_email(contact=entity_id, email=entity_id, name=entity_id)
+                if resolved_contact:
+                    entity_id = resolved_contact
 
         now = datetime.now(timezone.utc)
+        query = self.db.query(ContextEntry).filter(ContextEntry.user_id == self.user_id)
+
+        if entity_type:
+            if entity_type in {"global", "executive"}:
+                query = query.filter(ContextEntry.entity_type == "global")
+            else:
+                query = query.filter(ContextEntry.entity_type == entity_type)
+        if entity_id:
+            query = query.filter(ContextEntry.entity_id == entity_id)
+        if types:
+            query = query.filter(ContextEntry.type.in_(sorted(types)))
+
+        if status:
+            query = query.filter(ContextEntry.status.in_(sorted(status)))
+        elif not include_non_active:
+            query = query.filter(ContextEntry.status == "active")
+
+        if since_ts:
+            query = query.filter(ContextEntry.created_at >= since_ts)
+        if until_ts:
+            query = query.filter(ContextEntry.created_at <= until_ts)
+
+        if not include_non_active:
+            query = query.filter(or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now))
+
+        if query_text:
+            safe_query = escape_like(query_text)
+            query = query.filter(ContextEntry.content.ilike(f"%{safe_query}%", escape="\\"))
+
         rows = (
-            self.db.query(ContextEntry)
-            .filter(
-                ContextEntry.user_id == self.user_id,
-                ContextEntry.entity_type == "task",
-                ContextEntry.entity_id == str(task.id),
-                ContextEntry.status == "active",
-                or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now),
-            )
-            .order_by(ContextEntry.created_at.desc())
+            query
+            .order_by(ContextEntry.importance_level.desc(), ContextEntry.created_at.desc())
             .limit(limit)
             .all()
         )
         entries = [self._serialize_context_entry(r) for r in rows]
+
+        tasks_payload: List[Dict[str, Any]] = []
+        if include_tasks or (entity_type == "task"):
+            return ToolResult(
+                success=False,
+                error="Task search is handled by entity_search. Remove include_tasks/entity_type=task.",
+            )
+
         self._merge_hot(entries)
         return ToolResult(
             success=True,
             data={
-                "task": {
-                    "id": task.id,
-                    "title": task.title,
-                    "status": task.status,
-                    "priority": task.priority,
-                    "description": task.description,
-                    "deadline": task.deadline.isoformat() if task.deadline else None,
-                    "created_at": task.created_at.isoformat() if task.created_at else None,
-                    "updated_at": task.updated_at.isoformat() if task.updated_at else None,
-                },
                 "entries": entries,
+                "tasks": tasks_payload,
+                "query": query_text,
+                "entity_type": entity_type or None,
+                "entity_id": entity_id or None,
             },
         )
+
+    def _execute_entity_search(self, params: Dict[str, Any]) -> ToolResult:
+        query_text = " ".join(str(params.get("query") or "").split()).strip()
+        entity_types = params.get("entity_types") or []
+        limit = max(1, min(int(params.get("limit", 20)), 50))
+        offset = max(0, int(params.get("offset", 0)))
+        recent_first = bool(params.get("recent_first", True))
+        include_archived = bool(params.get("include_archived", False))
+
+        allowed = {"contact", "thread", "event", "message", "task"}
+        entity_types = [t for t in entity_types if t in allowed]
+        if not entity_types:
+            return ToolResult(success=False, error="entity_types is required")
+
+        results: List[Dict[str, Any]] = []
+        safe_query = escape_like(query_text) if query_text else ""
+
+        if "contact" in entity_types:
+            q = self.db.query(Contact).filter(Contact.user_id == self.user_id)
+            if query_text:
+                q = q.filter(
+                    (func.lower(Contact.name).ilike(f"%{safe_query}%", escape="\\"))
+                    | (func.lower(Contact.email).ilike(f"%{safe_query}%", escape="\\"))
+                )
+            contacts = (
+                q.order_by(Contact.updated_at.desc(), Contact.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+                .all()
+            )
+            for c in contacts:
+                label = (c.name or c.email or "Contact").strip()
+                ref = (c.email or "").lower() if c.email else f"contact:{c.id}"
+                results.append(
+                    {
+                        "kind": "contact",
+                        "ref": ref,
+                        "label": label,
+                        "last_updated_at": (c.updated_at or c.created_at).isoformat() if (c.updated_at or c.created_at) else None,
+                        "search_text": " ".join(filter(None, [c.name, c.email])),
+                        "sample": (c.notes or "")[:140] if hasattr(c, "notes") else "",
+                    }
+                )
+
+        if "thread" in entity_types:
+            q = self.db.query(EntityReference).filter(
+                EntityReference.user_id == self.user_id,
+                EntityReference.entity_type == "thread",
+            )
+            if query_text:
+                q = q.filter(
+                    func.lower(EntityReference.display_name).ilike(f"%{safe_query}%", escape="\\")
+                    | func.lower(EntityReference.ref).ilike(f"%{safe_query}%", escape="\\")
+                )
+            refs = (
+                q.order_by(EntityReference.updated_at.desc(), EntityReference.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+                .all()
+            )
+            for r in refs:
+                results.append(
+                    {
+                        "kind": "thread",
+                        "ref": r.ref,
+                        "label": r.display_name or r.ref,
+                        "last_updated_at": (r.updated_at or r.created_at).isoformat() if (r.updated_at or r.created_at) else None,
+                        "search_text": " ".join(filter(None, [r.display_name, r.ref])),
+                        "sample": (r.notes or "")[:140] if hasattr(r, "notes") else "",
+                    }
+                )
+            # Fallback to recent threads from messages when no entity references exist.
+            if not refs:
+                mq = self.db.query(Message).filter(Message.user_id == self.user_id)
+                if query_text:
+                    mq = mq.filter(
+                        Message.subject.ilike(f"%{safe_query}%", escape="\\")
+                        | Message.thread_id.ilike(f"%{safe_query}%", escape="\\")
+                    )
+                msg_rows = (
+                    mq.order_by(Message.received_at.desc(), Message.created_at.desc())
+                    .limit(limit)
+                    .offset(offset)
+                    .all()
+                )
+                seen_thread_ids = set()
+                for msg in msg_rows:
+                    if not msg.thread_id or msg.thread_id in seen_thread_ids:
+                        continue
+                    seen_thread_ids.add(msg.thread_id)
+                    results.append(
+                        {
+                            "kind": "thread",
+                            "ref": msg.thread_id,
+                            "label": (msg.subject or msg.thread_id).strip(),
+                            "last_updated_at": (msg.received_at or msg.created_at).isoformat()
+                            if (msg.received_at or msg.created_at)
+                            else None,
+                            "search_text": " ".join(filter(None, [msg.subject, msg.thread_id])),
+                            "sample": ((msg.summary or msg.decrypted_body or "")[:140]),
+                        }
+                    )
+
+        if "event" in entity_types:
+            q = self.db.query(EntityReference).filter(
+                EntityReference.user_id == self.user_id,
+                EntityReference.entity_type == "event",
+            )
+            if query_text:
+                q = q.filter(
+                    func.lower(EntityReference.display_name).ilike(f"%{safe_query}%", escape="\\")
+                    | func.lower(EntityReference.ref).ilike(f"%{safe_query}%", escape="\\")
+                )
+            refs = (
+                q.order_by(EntityReference.updated_at.desc(), EntityReference.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+                .all()
+            )
+            for r in refs:
+                results.append(
+                    {
+                        "kind": "event",
+                        "ref": r.ref,
+                        "label": r.display_name or r.ref,
+                        "last_updated_at": (r.updated_at or r.created_at).isoformat() if (r.updated_at or r.created_at) else None,
+                        "search_text": " ".join(filter(None, [r.display_name, r.ref])),
+                        "sample": (r.notes or "")[:140] if hasattr(r, "notes") else "",
+                    }
+                )
+            # Fallback to calendar events when entity references are missing.
+            if not refs:
+                eq = self.db.query(CalendarEvent).filter(CalendarEvent.user_id == self.user_id)
+                if query_text:
+                    eq = eq.filter(CalendarEvent.title.ilike(f"%{safe_query}%", escape="\\"))
+                events = (
+                    eq.order_by(CalendarEvent.start_time.desc(), CalendarEvent.created_at.desc())
+                    .limit(limit)
+                    .offset(offset)
+                    .all()
+                )
+                for event in events:
+                    ref_value = (event.external_event_id or str(event.id)).strip()
+                    results.append(
+                        {
+                            "kind": "event",
+                            "ref": ref_value,
+                            "label": (event.title or ref_value).strip(),
+                            "last_updated_at": (event.updated_at or event.start_time or event.created_at).isoformat()
+                            if (event.updated_at or event.start_time or event.created_at)
+                            else None,
+                            "search_text": " ".join(filter(None, [event.title, ref_value])),
+                            "sample": (event.location or "")[:140],
+                        }
+                    )
+
+        if "message" in entity_types:
+            q = self.db.query(Message).filter(Message.user_id == self.user_id)
+            if not include_archived:
+                q = q.filter(Message.status == "inbox")
+            if query_text:
+                q = q.filter(
+                    Message.subject.ilike(f"%{safe_query}%", escape="\\")
+                    | Message.sender.ilike(f"%{safe_query}%", escape="\\")
+                )
+            messages = (
+                q.order_by(Message.received_at.desc(), Message.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+                .all()
+            )
+            for m in messages:
+                label = (m.subject or "Message").strip()
+                results.append(
+                    {
+                        "kind": "message",
+                        "ref": str(m.id),
+                        "label": label,
+                        "last_updated_at": (m.updated_at or m.received_at or m.created_at).isoformat()
+                        if (m.updated_at or m.received_at or m.created_at)
+                        else None,
+                        "search_text": " ".join(filter(None, [m.subject, m.sender])),
+                        "sample": ((m.summary or m.decrypted_body or "")[:140]),
+                    }
+                )
+
+        if "task" in entity_types:
+            q = self.db.query(Task).filter(Task.user_id == self.user_id)
+            if not include_archived:
+                q = q.filter(Task.status.in_(["pending_approval", "approved", "in_progress"]))
+            if query_text:
+                q = q.filter(Task.title.ilike(f"%{safe_query}%", escape="\\"))
+            tasks = (
+                q.order_by(Task.updated_at.desc(), Task.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+                .all()
+            )
+            for t in tasks:
+                results.append(
+                    {
+                        "kind": "task",
+                        "ref": str(t.id),
+                        "label": t.title,
+                        "last_updated_at": (t.updated_at or t.created_at).isoformat() if (t.updated_at or t.created_at) else None,
+                        "search_text": t.title,
+                        "sample": (t.description or "")[:140],
+                    }
+                )
+
+        if recent_first:
+            results.sort(key=lambda item: item.get("last_updated_at") or "", reverse=True)
+
+        return ToolResult(success=True, data={"items": results[:limit], "count": len(results[:limit])})
 
     def _execute_draft_email(self, params: Dict[str, Any]) -> ToolResult:
         service = EmailDraftingService(db=self.db, user_id=self.user_id)
@@ -1112,6 +1369,15 @@ class ChatToolRegistry:
         if by_name:
             return by_name.ref
         return query
+
+    def _parse_iso_timestamp(self, value: Optional[str]) -> Optional[datetime]:
+        raw = " ".join(str(value or "").split()).strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            return None
 
     def _serialize_context_entry(self, row: ContextEntry) -> Dict[str, Any]:
         return {

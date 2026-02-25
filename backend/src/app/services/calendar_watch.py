@@ -131,6 +131,35 @@ def setup_watches_for_user(db: Session, user_id: str) -> dict:
     return {"setup": setup_count, "failed": failed_count}
 
 
+def stop_watches_for_user(db: Session, user_id: str) -> dict:
+    """
+    Stop and remove Calendar watch channels for a user.
+    Used when disconnecting a provider.
+    """
+    try:
+        from app.services.calendar import CalendarService
+        cal_service = CalendarService(db=db, user_id=user_id)
+        service = cal_service._get_service()
+    except Exception as e:
+        logger.warning("Cannot build Calendar service for user %s: %s", user_id, e)
+        return {"stopped": 0, "failed": 1}
+
+    existing = db.query(CalendarWatchChannel).filter(
+        CalendarWatchChannel.user_id == user_id
+    ).all()
+    stopped = 0
+    failed = 0
+    for ch in existing:
+        if _stop_channel(service, ch.channel_id, ch.resource_id):
+            stopped += 1
+        else:
+            failed += 1
+        db.delete(ch)
+    if existing:
+        db.commit()
+    return {"stopped": stopped, "failed": failed}
+
+
 def renew_all_watches() -> dict:
     """
     Renew all active Calendar watch channels across all users.

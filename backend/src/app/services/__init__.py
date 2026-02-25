@@ -7,18 +7,30 @@ eagerly pull in the entire handler/processor/jobs chain.
 """
 
 __all__ = [
+    "BillingProvider",
+    "ensure_billing_plan",
+    "ensure_configured_plans",
+    "get_billing_provider",
     "BriefingService",
     "CalendarService",
+    "DodoService",
     "DigestService",
     "PolarService",
     "ThreadStateService",
+    "get_dodo_service",
     "get_polar_service",
 ]
 
 _lazy = {
+    "BillingProvider":  (".billing_provider", "BillingProvider"),
+    "ensure_billing_plan": (".billing_ledger", "ensure_billing_plan"),
+    "ensure_configured_plans": (".billing_ledger", "ensure_configured_plans"),
     "BriefingService":  (".briefing",      "BriefingService"),
     "CalendarService":  (".calendar",      "CalendarService"),
+    "DodoService":      (".dodo",          "DodoService"),
     "DigestService":    (".digest",        "DigestService"),
+    "get_billing_provider":(".billing_provider", "get_billing_provider"),
+    "get_dodo_service": (".dodo",          "get_dodo_service"),
     "PolarService":     (".polar",         "PolarService"),
     "get_polar_service":(".polar",         "get_polar_service"),
     "ThreadStateService":(".thread_state", "ThreadStateService"),

@@ -32,7 +32,6 @@ from app.routes.v1 import (
     telemetry,
     action_tools,
 )
-from app.handlers.webhook_handlers import router as billing_router
 from app.security.rate_limiter import RateLimitMiddleware
 
 app = FastAPI(
@@ -70,6 +69,7 @@ def startup_event():
     schedule_chat_cleanup_job_if_needed()
     schedule_gmail_watch_renewal_if_needed()
     schedule_calendar_watch_renewal_if_needed()
+    schedule_outlook_subscription_renewal_if_needed()
     preload_email_classifier()
 
 
@@ -211,6 +211,32 @@ def schedule_calendar_watch_renewal_if_needed():
         db.close()
 
 
+def schedule_outlook_subscription_renewal_if_needed():
+    """
+    Ensure the daily Outlook subscription renewal job is scheduled.
+    """
+    from datetime import datetime, timedelta
+
+    db = SessionLocal()
+    try:
+        existing = db.query(TaskQueue).filter(
+            TaskQueue.task_type == "renew_outlook_subscriptions",
+            TaskQueue.status == "pending"
+        ).first()
+
+        if not existing:
+            next_run = datetime.utcnow() + timedelta(days=1)
+            queue_service.enqueue(
+                task_type="renew_outlook_subscriptions",
+                payload={},
+                scheduled_for=next_run,
+                db=db
+            )
+            print(f"Scheduled Outlook subscription renewal for {next_run}")
+    finally:
+        db.close()
+
+
 # Include Routers under /v1 prefix
 app.include_router(auth.router, prefix="/v1")
 app.include_router(messages.router, prefix="/v1")
@@ -224,8 +250,7 @@ app.include_router(system.router, prefix="/v1")
 app.include_router(chat.router, prefix="/v1")
 app.include_router(subscription.router, prefix="/v1")
 app.include_router(billing.router, prefix="/v1")
-app.include_router(billing_router, prefix="/v1")  # Polar webhooks
-app.include_router(webhooks.router, prefix="/v1")  # Gmail Pub/Sub
+app.include_router(webhooks.router, prefix="/v1")  # Gmail/Calendar/Outlook/Billing webhooks
 app.include_router(notifications.router, prefix="/v1")
 app.include_router(onboarding.router, prefix="/v1")
 app.include_router(vault.router, prefix="/v1")

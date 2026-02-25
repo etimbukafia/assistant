@@ -7,7 +7,7 @@ from app.data.models import (
     Message, Task, TaskReminder, SchedulingSuggestion,
     CalendarEvent, AgentActivityLog,
     PrincipalMemory, DecisionPattern, ContactContext,
-    UserSettings, GmailAccount, TaskQueue, UITelemetryEvent
+    UserSettings, GmailAccount, OutlookAccount, TaskQueue, UITelemetryEvent
 )
 
 router = APIRouter(prefix="/user", tags=["User & GDPR"])
@@ -185,6 +185,14 @@ def export_user_data(db: Session = Depends(get_db_for_user)):
             "created_at": account.created_at.isoformat() if account.created_at else None,
         }
 
+    outlook = db.query(OutlookAccount).first()
+    if outlook:
+        export_data["outlook_account"] = {
+            "email": outlook.email,
+            "last_sync": outlook.last_sync.isoformat() if outlook.last_sync else None,
+            "created_at": outlook.created_at.isoformat() if outlook.created_at else None,
+        }
+
     return export_data
 
 
@@ -223,6 +231,7 @@ def delete_user_data(
         deletion_summary["contact_contexts"] = db.query(ContactContext).delete()
         deletion_summary["queue_tasks"] = db.query(TaskQueue).delete()
         deletion_summary["gmail_accounts"] = db.query(GmailAccount).delete()
+        deletion_summary["outlook_accounts"] = db.query(OutlookAccount).delete()
         deletion_summary["user_settings"] = db.query(UserSettings).delete()  # Includes settings
 
         db.commit()

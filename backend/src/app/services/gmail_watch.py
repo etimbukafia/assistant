@@ -114,3 +114,26 @@ def renew_all_watches():
 
     finally:
         db.close()
+
+
+def stop_watch(db: Session, user_id: str) -> bool:
+    """
+    Stop Gmail push notifications for a user.
+    Gmail supports users().stop() to turn off push notifications.
+    """
+    try:
+        account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
+        if not account:
+            return True
+
+        client = GmailClient(db=db, user_id=user_id)
+        if not client.load_credentials(email=account.email):
+            logger.warning("Cannot stop Gmail watch: credentials invalid for %s", account.email)
+            return False
+
+        client.service.users().stop(userId="me").execute()
+        logger.info("Stopped Gmail watch for user=%s", user_id)
+        return True
+    except Exception as e:
+        logger.warning("Failed to stop Gmail watch for user=%s: %s", user_id, e)
+        return False

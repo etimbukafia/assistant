@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.security.auth import get_db_for_user, get_user_settings, get_current_user, require_active_subscription, AuthenticatedUser
-from app.security.feature_gating import require_feature, Feature, is_feature_enabled
 from app.data.models import CalendarEvent, UserSettings
 from core.cache import calendar_cache
 from app.data.schemas import (
@@ -12,6 +11,7 @@ from app.data.schemas import (
     CalendarAvailabilityResponse, CalendarInfoResponse
 )
 from app.services.calendar import CalendarService
+from app.services.calendar_ms import MicrosoftCalendarService
 from app.services.briefing import generate_briefing_for_event, generate_follow_ups_for_event
 from app.agents.modules.scheduling import SchedulingModule
 from app.services.entity_cache_coordinator import EntityCacheCoordinator
@@ -30,6 +30,13 @@ def _prewarm_action_chips(db: Session, user_id: str) -> None:
         tenant_id=_tenant_id(),
         user_id=user_id,
     )
+
+
+def _get_calendar_service(settings: UserSettings, db: Session, user_id: str):
+    """Return provider-specific calendar service + provider name."""
+    if settings.connected_provider == "microsoft":
+        return MicrosoftCalendarService(db=db, user_id=user_id), "microsoft"
+    return CalendarService(db=db, user_id=user_id), "google"
 
 @router.post("/events", response_model=CalendarEventResponse)
 def create_calendar_event(
@@ -84,6 +91,7 @@ def create_manual_calendar_event(
     if all_day and end_time <= start_time:
         end_time = start_time + timedelta(days=1)
 
+    calendar_service, provider = _get_calendar_service(settings, db, user.user_id)
     calendar_event = CalendarEvent(
         user_id=user.user_id,
         title=request.title,
@@ -96,7 +104,7 @@ def create_manual_calendar_event(
         location=request.location,
         source="created",
         status="pending",
-        provider="google",
+        provider=provider,
         calendar_id=calendar_id,
         all_day=all_day,
     )
@@ -104,19 +112,29 @@ def create_manual_calendar_event(
     db.commit()
     db.refresh(calendar_event)
 
-    calendar_service = CalendarService(db, user_id=user.user_id)
     try:
-        result = calendar_service.run_create_event(
-            title=request.title,
-            start_time=start_time,
-            end_time=end_time,
-            description=request.description,
-            attendees=request.participants or [],
-            location=request.location,
-            timezone_str=timezone_str,
-            calendar_id=calendar_id,
-            all_day=all_day,
-        )
+        if provider == "google":
+            result = calendar_service.run_create_event(
+                title=request.title,
+                start_time=start_time,
+                end_time=end_time,
+                description=request.description,
+                attendees=request.participants or [],
+                location=request.location,
+                timezone_str=timezone_str,
+                calendar_id=calendar_id,
+                all_day=all_day,
+            )
+        else:
+            payload = {
+                "subject": request.title,
+                "body": {"contentType": "HTML", "content": request.description or ""},
+                "start": {"dateTime": start_time.isoformat(), "timeZone": timezone_str},
+                "end": {"dateTime": end_time.isoformat(), "timeZone": timezone_str},
+                "location": {"displayName": request.location or ""},
+                "attendees": [{"emailAddress": {"address": a}} for a in (request.participants or [])],
+            }
+            result = calendar_service.run_create_event(payload=payload, calendar_id=calendar_id)
     except Exception as e:
         calendar_event.status = "failed"
         calendar_event.error_message = str(e)
@@ -239,22 +257,33 @@ def update_calendar_event(
 
     calendar_id = update_data.get("calendar_id") or event.calendar_id or settings.default_calendar_id or "primary"
 
-    calendar_service = CalendarService(db, user_id=user.user_id)
+    calendar_service, provider = _get_calendar_service(settings, db, user.user_id)
     if event.external_event_id:
-        result = calendar_service.run_update_event(
-            event_id=event.external_event_id,
-            calendar_id=calendar_id,
-            title=event.title,
-            start_time=event.start_time,
-            end_time=event.end_time,
-            description=event.description,
-            attendees=event.participants,
-            location=event.location,
-            timezone_str=event.timezone,
-            all_day=event.all_day,
-        )
-        if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error", "Failed to update event"))
+        if provider == "google":
+            result = calendar_service.run_update_event(
+                event_id=event.external_event_id,
+                calendar_id=calendar_id,
+                title=event.title,
+                start_time=event.start_time,
+                end_time=event.end_time,
+                description=event.description,
+                attendees=event.participants,
+                location=event.location,
+                timezone_str=event.timezone,
+                all_day=event.all_day,
+            )
+            if not result.get("success"):
+                raise HTTPException(status_code=500, detail=result.get("error", "Failed to update event"))
+        else:
+            payload = {
+                "subject": event.title,
+                "body": {"contentType": "HTML", "content": event.description or ""},
+                "start": {"dateTime": event.start_time.isoformat(), "timeZone": event.timezone or "UTC"},
+                "end": {"dateTime": event.end_time.isoformat(), "timeZone": event.timezone or "UTC"},
+                "location": {"displayName": event.location or ""},
+                "attendees": [{"emailAddress": {"address": a}} for a in (event.participants or [])],
+            }
+            calendar_service.run_update_event(event_id=event.external_event_id, payload=payload)
 
     # Reschedule briefing if enabled and time changed
     if settings.auto_briefing_enabled:
@@ -293,13 +322,17 @@ def delete_calendar_event(
         raise HTTPException(status_code=404, detail="Event not found")
 
     if event.external_event_id:
-        calendar_service = CalendarService(db, user_id=user.user_id)
-        result = calendar_service.run_delete_event(
-            event_id=event.external_event_id,
-            calendar_id=event.calendar_id or "primary"
-        )
-        if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error", "Failed to delete event"))
+        settings = db.query(UserSettings).filter(UserSettings.user_id == user.user_id).first()
+        calendar_service, provider = _get_calendar_service(settings, db, user.user_id)
+        if provider == "google":
+            result = calendar_service.run_delete_event(
+                event_id=event.external_event_id,
+                calendar_id=event.calendar_id or "primary"
+            )
+            if not result.get("success"):
+                raise HTTPException(status_code=500, detail=result.get("error", "Failed to delete event"))
+        else:
+            calendar_service.run_delete_event(event_id=event.external_event_id)
 
     event.status = "cancelled"
     db.commit()
@@ -320,21 +353,27 @@ async def sync_calendar_events(
 ):
     """Sync upcoming events from Google Calendar to database"""
 
-    calendar_service = CalendarService(db, user_id=user.user_id)
+    calendar_service, provider = _get_calendar_service(settings, db, user.user_id)
  
     try:
-        enable_briefings = settings.auto_briefing_enabled and is_feature_enabled(Feature.MEETING_BRIEFINGS, settings)
+        enable_briefings = settings.auto_briefing_enabled
 
         # Use the user's explicitly chosen calendars, or fall back to default calendar only
         user_calendar_ids = settings.calendar_ids or []
         calendar_ids = user_calendar_ids if user_calendar_ids else [settings.default_calendar_id or "primary"]
 
-        results = await calendar_service.sync_upcoming_events(
-            days_ahead=days_ahead,
-            briefing_hours_before=settings.briefing_hours_before or 1,
-            enable_briefings=enable_briefings,
-            calendar_ids=calendar_ids,
-        )
+        if provider == "google":
+            results = await calendar_service.sync_upcoming_events(
+                days_ahead=days_ahead,
+                briefing_hours_before=settings.briefing_hours_before or 1,
+                enable_briefings=enable_briefings,
+                calendar_ids=calendar_ids,
+            )
+        else:
+            results = await calendar_service.sync_upcoming_events(
+                days_ahead=days_ahead,
+                calendar_ids=calendar_ids,
+            )
 
         calendar_cache.invalidate_all(user.user_id)
         cache_coordinator.invalidate_action_chips(_tenant_id(), user.user_id)
@@ -355,7 +394,8 @@ async def check_calendar_availability(
     end_time: str,
     calendar_ids: str = None,
     user: AuthenticatedUser = Depends(require_active_subscription),
-    db: Session = Depends(get_db_for_user)
+    db: Session = Depends(get_db_for_user),
+    settings: UserSettings = Depends(get_user_settings),
 ):
     """Check calendar availability for a time range"""
 
@@ -367,21 +407,31 @@ async def check_calendar_availability(
 
     calendar_id_list = calendar_ids.split(',') if calendar_ids else None
 
-    calendar_service = CalendarService(db, user_id=user.user_id)
+    calendar_service, provider = _get_calendar_service(settings, db, user.user_id)
 
     try:
-        busy_slots = await calendar_service.get_availability(start, end, calendar_id_list)
-
-        # Get user timezone
-        settings = db.query(UserSettings).first()
-        user_timezone = settings.default_timezone if settings else "UTC"
-
-        return CalendarAvailabilityResponse(
-            busy_slots=[{
+        if provider == "google":
+            busy_slots = await calendar_service.get_availability(start, end, calendar_id_list)
+            busy_payload = [{
                 "start": slot.start.isoformat(),
                 "end": slot.end.isoformat(),
                 "calendar_id": slot.calendar_id
-            } for slot in busy_slots],
+            } for slot in busy_slots]
+        else:
+            schedules = await calendar_service.get_availability(start, end, calendar_id_list)
+            busy_payload = []
+            for sched in schedules:
+                for item in sched.get("scheduleItems", []):
+                    busy_payload.append({
+                        "start": item.get("start", {}).get("dateTime"),
+                        "end": item.get("end", {}).get("dateTime"),
+                        "calendar_id": sched.get("scheduleId"),
+                    })
+
+        user_timezone = settings.default_timezone if settings else "UTC"
+
+        return CalendarAvailabilityResponse(
+            busy_slots=busy_payload,
             timezone=user_timezone
         )
 
@@ -392,21 +442,31 @@ async def check_calendar_availability(
 @router.get("/calendars")
 async def get_user_calendars(
     user: AuthenticatedUser = Depends(require_active_subscription),
-    db: Session = Depends(get_db_for_user)
+    db: Session = Depends(get_db_for_user),
+    settings: UserSettings = Depends(get_user_settings),
 ):
     """Get list of user's Google calendars"""
 
-    calendar_service = CalendarService(db, user_id=user.user_id)
+    calendar_service, provider = _get_calendar_service(settings, db, user.user_id)
 
     try:
         calendars = await calendar_service.get_calendars()
 
+        if provider == "google":
+            return {
+                "calendars": [CalendarInfoResponse(
+                    id=cal.id,
+                    summary=cal.summary,
+                    primary=cal.primary,
+                    access_role=cal.access_role
+                ) for cal in calendars]
+            }
         return {
             "calendars": [CalendarInfoResponse(
-                id=cal.id,
-                summary=cal.summary,
-                primary=cal.primary,
-                access_role=cal.access_role
+                id=cal.get("id"),
+                summary=cal.get("name") or cal.get("summary") or "Calendar",
+                primary=cal.get("isDefaultCalendar", False),
+                access_role=cal.get("canEdit", False) and "writer" or "reader"
             ) for cal in calendars]
         }
 
@@ -492,9 +552,8 @@ def update_calendar_settings(
 @router.post("/events/{event_id}/generate-briefing")
 def generate_meeting_briefing(
     event_id: int,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user),
-    _gate=Depends(require_feature(Feature.MEETING_BRIEFINGS)),
 ):
     """Generate a briefing for a calendar event"""
     event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
@@ -520,9 +579,8 @@ def generate_meeting_briefing(
 @router.post("/events/{event_id}/generate-followups")
 def generate_meeting_followups(
     event_id: int,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user),
-    _gate=Depends(require_feature(Feature.CALENDAR_SYNC)),
 ):
     """
     Generate follow-up items for a completed meeting.

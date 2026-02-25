@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -11,12 +11,14 @@ import {
     MessageSquare,
     Target,
     Calendar,
+    CreditCard,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { chatService } from "@/services/chat";
+import { getBillingPortalUrl } from "@/services/billing";
 
 const primaryNavItems = [
     { href: "/dashboard/chat",     label: "Chat",     icon: MessageSquare },
@@ -78,9 +80,10 @@ export default function DashboardLayout({
     children: React.ReactNode;
 }) {
     const queryClient = useQueryClient();
-    const { signOut, settings } = useAuth();
+    const { signOut, settings, refreshProfile } = useAuth();
     const pathname = usePathname();
     const prevSyncCompletedRef = useRef<boolean | null>(null);
+    const [billingBusy, setBillingBusy] = useState(false);
 
     useEffect(() => {
         if (!settings) return;
@@ -132,6 +135,27 @@ export default function DashboardLayout({
             window.clearTimeout(timer);
         };
     }, [queryClient]);
+
+    useEffect(() => {
+        if (!settings?.dunning_active) return;
+        const interval = window.setInterval(() => {
+            refreshProfile().catch(() => {});
+        }, 60_000);
+        return () => window.clearInterval(interval);
+    }, [settings?.dunning_active, refreshProfile]);
+
+    const handleOpenBillingPortal = async () => {
+        if (billingBusy) return;
+        setBillingBusy(true);
+        try {
+            const data = await getBillingPortalUrl();
+            window.location.href = data.portal_url;
+        } catch {
+            toast.error("Couldn't open billing right now. Please try again.");
+        } finally {
+            setBillingBusy(false);
+        }
+    };
 
     return (
         <div className="min-h-screen bg-background">
@@ -231,6 +255,33 @@ export default function DashboardLayout({
                 {/* ── Main content ────────────────────────────────────────────── */}
                 <main className="flex-1 lg:pl-[216px] min-h-screen">
                     <div className="mx-auto max-w-7xl px-6 py-8">
+                        {settings?.dunning_active && (
+                            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <p className="text-[13px] font-semibold text-amber-900">
+                                            {settings?.dunning_suspended_at
+                                                ? "Pro is paused until payment is updated"
+                                                : "Payment update needed to keep Pro active"}
+                                        </p>
+                                        <p className="mt-0.5 text-[12px] text-amber-800">
+                                            {settings?.dunning_suspended_at
+                                                ? "Update your payment method to restore access immediately."
+                                                : `We couldn't process your latest payment. Retry ${Math.max(1, settings?.dunning_attempt_count ?? 1)}/3. ${Math.max(0, settings?.dunning_days_remaining ?? 0)} day(s) left before Pro is paused.`}
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleOpenBillingPortal}
+                                        disabled={billingBusy}
+                                        className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-[12px] font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+                                    >
+                                        <CreditCard size={14} />
+                                        {billingBusy ? "Opening..." : "Update payment method"}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                         {children}
                     </div>
                 </main>

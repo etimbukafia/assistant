@@ -114,7 +114,7 @@ class TestSubscriptionLifecycleDB:
         handle_subscription_canceled(event_data, mock_db)
 
         # Assert
-        assert user_with_pro.subscription_status == "canceled"
+        assert user_with_pro.subscription_status == "cancel_scheduled"
         # Tier should still be pro (access until period end)
         assert user_with_pro.subscription_tier == "pro"
 
@@ -142,7 +142,7 @@ class TestSubscriptionLifecycleDB:
     def test_subscription_uncanceled_reactivates(self, mock_db, user_with_pro):
         # Arrange
         from app.handlers.webhook_handlers import handle_subscription_uncanceled
-        user_with_pro.subscription_status = "canceled"
+        user_with_pro.subscription_status = "cancel_scheduled"
         setup_mock_db_with_user(mock_db, user_with_pro)
 
         event_data = {
@@ -366,7 +366,7 @@ class TestFullSubscriptionLifecycle:
         }, mock_db)
 
         assert user_with_trial.subscription_tier == "pro"  # Still pro
-        assert user_with_trial.subscription_status == "canceled"
+        assert user_with_trial.subscription_status == "cancel_scheduled"
 
         # Step 3: Revoke subscription (period ended)
         handle_subscription_revoked({
@@ -392,7 +392,7 @@ class TestFullSubscriptionLifecycle:
             "data": {"customer_id": "cust_db_pro_123"}
         }, mock_db)
 
-        assert user_with_pro.subscription_status == "canceled"
+        assert user_with_pro.subscription_status == "cancel_scheduled"
 
         # Step 2: Uncancel (user changed mind)
         handle_subscription_uncanceled({

@@ -109,11 +109,15 @@ function BriefingCard({
 }
 
 export default function LoginPage() {
-    const { loading, signInWithGoogle } = useAuth();
+    const { loading, signInWithGoogle, signInWithMicrosoft } = useAuth();
 
     const handleContinue = () => {
         // Navigate to connect-google trust screen first
         window.location.href = "/auth/connect-google";
+    };
+
+    const handleContinueMicrosoft = () => {
+        window.location.href = "/auth/connect-microsoft";
     };
 
     const handleLogin = async () => {
@@ -121,6 +125,9 @@ export default function LoginPage() {
         await signInWithGoogle();
     };
 
+    const handleLoginMicrosoft = async () => {
+        await signInWithMicrosoft();
+    };
 
     if (loading) {
         return (
@@ -166,6 +173,18 @@ export default function LoginPage() {
                         </svg>
                         Continue with Google
                     </button>
+                    <button
+                        onClick={handleContinueMicrosoft}
+                        className="w-full flex items-center justify-center gap-3 bg-obsidian text-white py-4 rounded shadow-lg shadow-obsidian/20 font-semibold text-[15px] hover:bg-obsidian/90 transition-colors"
+                    >
+                        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="2" y="2" width="9" height="9" fill="#F25022" />
+                            <rect x="13" y="2" width="9" height="9" fill="#7FBA00" />
+                            <rect x="2" y="13" width="9" height="9" fill="#00A4EF" />
+                            <rect x="13" y="13" width="9" height="9" fill="#FFB900" />
+                        </svg>
+                        Continue with Microsoft
+                    </button>
                     <p className="text-xs text-faint text-center">
                         Already signed up?{" "}
                         <button
@@ -173,7 +192,15 @@ export default function LoginPage() {
                             onClick={handleLogin}
                             className="underline text-copper"
                         >
-                            Log in
+                            Log in with Google
+                        </button>
+                        {" "}or{" "}
+                        <button
+                            type="button"
+                            onClick={handleLoginMicrosoft}
+                            className="underline text-copper"
+                        >
+                            Log in with Microsoft
                         </button>
                     </p>
 

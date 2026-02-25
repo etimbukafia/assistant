@@ -14,15 +14,18 @@ export default function SubscriptionPage() {
     const {
         user,
         settings,
-        loading,
-        settingsLoading,
         gmailConnectError,
         gmailConnectInFlight,
         gmailConnected,
+        microsoftConnectError,
+        microsoftConnectInFlight,
+        microsoftConnected,
         retryGmailConnect,
+        retryMicrosoftConnect,
         refreshProfile,
     } = useAuth();
     const [selectedPlan, setSelectedPlan] = useState<PlanType>("trial");
+    const [proCycle, setProCycle] = useState<"monthly" | "annual">("monthly");
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -32,13 +35,19 @@ export default function SubscriptionPage() {
         return first || "there";
     }, [user]);
 
+    const isMicrosoft = settings?.connected_provider === "microsoft" || !!microsoftConnectError;
+    const providerLabel = isMicrosoft ? "Microsoft" : "Gmail";
+    const providerConnected = isMicrosoft ? microsoftConnected : gmailConnected;
+    const providerConnectInFlight = isMicrosoft ? microsoftConnectInFlight : gmailConnectInFlight;
+    const providerConnectError = isMicrosoft ? microsoftConnectError : gmailConnectError;
+
     const handleContinue = async () => {
-        if (gmailConnectInFlight) {
-            setError("Gmail is still connecting. Please wait a moment.");
+        if (providerConnectInFlight) {
+            setError(`${providerLabel} is still connecting. Please wait a moment.`);
             return;
         }
-        if (!gmailConnected) {
-            setError("Gmail isn't connected yet. Please connect to continue.");
+        if (!providerConnected) {
+            setError(`${providerLabel} isn't connected yet. Please connect to continue.`);
             return;
         }
         setIsProcessing(true);
@@ -47,8 +56,8 @@ export default function SubscriptionPage() {
             if (selectedPlan === "trial") {
                 await activateTrial();
                 try {
-                    if (gmailConnected) {
-                        await triggerInitialSync();
+                    if (providerConnected) {
+                        await triggerInitialSync(isMicrosoft ? "microsoft" : "google");
                     }
                 } catch {
                     // Non-fatal: sync can be retried from settings
@@ -59,6 +68,7 @@ export default function SubscriptionPage() {
                 const data = await createCheckout({
                     success_url: `${window.location.origin}/auth/setup`,
                     cancel_url: `${window.location.origin}/auth/subscription`,
+                    plan_cycle: proCycle,
                 });
                 if (data?.checkout_url) {
                     window.location.href = data.checkout_url;
@@ -73,12 +83,13 @@ export default function SubscriptionPage() {
 
     const ctaText = selectedPlan === "trial"
         ? "Try this week with Teeks"
-        : "Try this month with Teeks";
+        : proCycle === "annual"
+            ? "Start annual Pro"
+            : "Start monthly Pro";
 
     return (
         <div className="min-h-screen" style={{ backgroundColor: "#FFFDF9" }}>
             <div className="max-w-lg mx-auto px-6 pt-12 pb-8">
-                {/* Header */}
                 <div className="text-center mb-10">
                     <DonnaText variant="h2" className="font-playfair font-bold text-auburn text-2xl leading-[30px] tracking-tight mb-2">
                         You don&apos;t have to carry alone
@@ -88,9 +99,7 @@ export default function SubscriptionPage() {
                     </DonnaText>
                 </div>
 
-                {/* Email Cards */}
                 <div className="space-y-5">
-                    {/* Trial Card */}
                     <button
                         onClick={() => setSelectedPlan("trial")}
                         className={`relative w-full text-left rounded-lg overflow-visible transition-all duration-200 ${
@@ -100,10 +109,8 @@ export default function SubscriptionPage() {
                         }`}
                         style={{ backgroundColor: "#FFFCF8" }}
                     >
-                        {/* Clip */}
                         <div className="absolute -top-1.5 left-7 w-9 h-2.5 rounded-sm bg-gray-300 z-10" />
 
-                        {/* Subject */}
                         <div className="px-6 pt-5 pb-2.5 border-b border-dashed border-black/[0.06]">
                             <span className="text-[11px] uppercase tracking-wider text-faint/55">
                                 Subject:{" "}
@@ -111,7 +118,6 @@ export default function SubscriptionPage() {
                             </span>
                         </div>
 
-                        {/* Body */}
                         <div className="px-6 pt-4 pb-2">
                             <p className="text-[15px] text-obsidian mb-2.5">
                                 Dear <span className="text-copper font-semibold">{firstName}</span>,
@@ -120,21 +126,19 @@ export default function SubscriptionPage() {
                                 Start free. See the difference in a week.
                             </p>
                             <p className="text-sm text-faint leading-relaxed">
-                                Full access to all pro features and 100 Teeks credits for reply drafting and chat for 5 days. No credit card required.
+                                Full access to all pro features and 100 Teeks credits for reply drafting and chat for 7 days. No credit card required.
                             </p>
                         </div>
 
-                        {/* Price */}
                         <div className="px-6 pb-4 flex justify-end">
                             <div className="flex items-baseline">
                                 <span className="text-[11px] text-faint/60 mr-0.5">$</span>
                                 <span className="font-playfair font-bold text-[22px] text-auburn">0</span>
-                                <span className="text-xs text-faint ml-1">/ 5 days</span>
+                                <span className="text-xs text-faint ml-1">/ 7 days</span>
                             </div>
                         </div>
                     </button>
 
-                    {/* Pro Card */}
                     <button
                         onClick={() => setSelectedPlan("pro")}
                         className={`relative w-full text-left rounded-lg overflow-visible transition-all duration-200 ${
@@ -143,10 +147,8 @@ export default function SubscriptionPage() {
                                 : "border border-black/5 shadow-md shadow-auburn/[0.04]"
                         } bg-white`}
                     >
-                        {/* Copper Clip */}
                         <div className="absolute -top-1.5 left-7 w-9 h-2.5 rounded-sm bg-copper z-10" />
 
-                        {/* Subject */}
                         <div className="px-6 pt-5 pb-2.5 border-b border-dashed border-black/[0.06]">
                             <span className="text-[11px] uppercase tracking-wider text-faint/55">
                                 Subject:{" "}
@@ -154,7 +156,6 @@ export default function SubscriptionPage() {
                             </span>
                         </div>
 
-                        {/* Body */}
                         <div className="px-6 pt-4 pb-2">
                             <p className="text-[15px] text-obsidian mb-2.5">
                                 Dear <span className="text-copper font-semibold">{firstName}</span>,
@@ -163,60 +164,81 @@ export default function SubscriptionPage() {
                                 Work with clarity. Achieve more with an executive partner at your side.
                             </p>
                             <p className="text-sm text-faint leading-relaxed">
-                                Inbox intelligence, task management, AI-assisted replies in your voice, calendar assistance, and executive context memory — everything you need, always by your side.
+                                Inbox intelligence, task management, AI-assisted replies in your voice, calendar assistance, and executive context memory - everything you need, always by your side.
                             </p>
+                            <div className="mt-3 inline-flex rounded-lg border border-black/10 p-1 bg-white">
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setProCycle("monthly");
+                                    }}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-medium ${proCycle === "monthly" ? "bg-auburn text-white" : "text-faint hover:bg-black/5"}`}
+                                >
+                                    Monthly
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setProCycle("annual");
+                                    }}
+                                    className={`px-3 py-1.5 rounded-md text-xs font-medium ${proCycle === "annual" ? "bg-auburn text-white" : "text-faint hover:bg-black/5"}`}
+                                >
+                                    Annual
+                                </button>
+                            </div>
                         </div>
 
-                        {/* Price */}
                         <div className="px-6 pb-4 flex justify-end">
                             <div className="flex items-baseline">
                                 <span className="text-[11px] text-faint/60 mr-0.5">$</span>
                                 <span className="font-playfair font-bold text-[22px] text-auburn">19</span>
-                                <span className="text-xs text-faint ml-1">/ month</span>
+                                <span className="text-xs text-faint ml-1">
+                                    {proCycle === "annual" ? "/ month, billed annually" : "/ month"}
+                                </span>
                             </div>
                         </div>
                     </button>
 
-                    {/* Founding Note */}
                     <p className="text-[13px] italic text-faint text-center leading-5">
                         Founding members get full access, early features, and locked-in pricing
                     </p>
                 </div>
 
-                {gmailConnectError && (
+                {providerConnectError && (
                     <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm text-center">
-                        Gmail connection issue: {gmailConnectError}. Please retry to continue.
+                        {providerLabel} connection issue: {providerConnectError}. Please retry to continue.
                         <div className="mt-2">
                             <button
-                                onClick={() => retryGmailConnect()}
-                                disabled={gmailConnectInFlight}
+                                onClick={() => (isMicrosoft ? retryMicrosoftConnect() : retryGmailConnect())}
+                                disabled={providerConnectInFlight}
                                 className="text-amber-900 underline font-medium disabled:opacity-60"
                             >
-                                {gmailConnectInFlight ? "Reconnecting..." : "Retry Gmail connection"}
+                                {providerConnectInFlight ? "Reconnecting..." : `Retry ${providerLabel} connection`}
                             </button>
                         </div>
                     </div>
                 )}
 
-                {!gmailConnected && !gmailConnectError && (
+                {!providerConnected && !providerConnectError && (
                     <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm text-center">
-                        Connecting Gmail. This must complete before you continue.
+                        Connecting {providerLabel}. This must complete before you continue.
                     </div>
                 )}
 
                 {error && (
-                    <div className="mt-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm text-center">
+                    <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm text-center">
                         {error}
                     </div>
                 )}
             </div>
 
-            {/* Sticky Footer CTA */}
             <div className="sticky bottom-0 p-6" style={{ backgroundColor: "#FFFDF9" }}>
                 <div className="max-w-lg mx-auto">
                     <button
                         onClick={handleContinue}
-                        disabled={isProcessing || gmailConnectInFlight || !gmailConnected}
+                        disabled={isProcessing || providerConnectInFlight || !providerConnected}
                         className="w-full flex items-center justify-center bg-auburn text-white py-4 rounded font-semibold text-[17px] shadow-lg shadow-auburn/25 hover:bg-auburn/90 transition-colors disabled:opacity-60"
                     >
                         {isProcessing ? (

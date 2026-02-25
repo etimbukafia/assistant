@@ -8,7 +8,6 @@ from .task_handlers import *
 from .scheduling_handlers import *
 from .notification_handlers import *
 from .task_handlers import *
-from .webhook_handlers import *
 from .vault_handlers import *
 
 # Import this module in main.py to register all handlers

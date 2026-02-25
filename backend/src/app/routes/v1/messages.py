@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 from app.security.auth import get_current_user, get_db, get_db_for_user, AuthenticatedUser, require_active_subscription
 from app.security.encryption import encrypt_body
 from app.integrations.gmail import GmailClient, get_gmail_client
-from app.data.models import Message, GmailAccount, Task, ThreadState, SchedulingSuggestion, TaskQueue, UserSettings
+from app.integrations.outlook import OutlookClient
+from app.data.models import Message, GmailAccount, OutlookAccount, Task, ThreadState, SchedulingSuggestion, TaskQueue, UserSettings
 from app.services.email_filter import EmailFilterService, FilterAction
 from app.data.schemas import (
     SyncResponse, MessagesListResponse, MessageResponse,
@@ -718,25 +719,39 @@ def send_reply(
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    # Get Gmail client for this user
-    gmail_account = db.query(GmailAccount).filter(
-        GmailAccount.user_id == message.user_id
-    ).first()
-    if not gmail_account:
-        return SendReplyResponse(sent=False, error="No Gmail account connected")
-
     try:
-        gmail_client = GmailClient(gmail_account)
+        if message.provider == "microsoft":
+            outlook_account = db.query(OutlookAccount).filter(
+                OutlookAccount.user_id == message.user_id
+            ).first()
+            if not outlook_account:
+                return SendReplyResponse(sent=False, error="No Microsoft account connected")
+            outlook_client = OutlookClient(db=db, user_id=message.user_id)
+            if not outlook_client.load_credentials(email=outlook_account.email):
+                return SendReplyResponse(sent=False, error="Microsoft credentials invalid")
+            # Use external_message_id for reply
+            external_id = message.external_message_id or message.message_id.replace("ms:", "")
+            outlook_client.send_reply(external_id, request.body)
+            result = {"id": external_id, "threadId": message.thread_id}
+        else:
+            # Get Gmail client for this user
+            gmail_account = db.query(GmailAccount).filter(
+                GmailAccount.user_id == message.user_id
+            ).first()
+            if not gmail_account:
+                return SendReplyResponse(sent=False, error="No Gmail account connected")
 
-        subject = request.subject or f"Re: {message.subject}"
+            gmail_client = GmailClient(gmail_account)
 
-        result = gmail_client.send_message(
-            to=request.to,
-            subject=subject,
-            body=request.body,
-            in_reply_to=message.gmail_id,
-            thread_id=message.thread_id,
-        )
+            subject = request.subject or f"Re: {message.subject}"
+
+            result = gmail_client.send_message(
+                to=request.to,
+                subject=subject,
+                body=request.body,
+                in_reply_to=message.gmail_id,
+                thread_id=message.thread_id,
+            )
 
         # Update thread state: no longer needs reply
         thread_state = db.query(ThreadState).filter(
@@ -919,12 +934,11 @@ def delete_message(
 # Initial Sync Endpoint (moved from sync.py)
 # ========================================
 
-from app.security.feature_gating import require_feature, Feature
 from app.jobs.queue import enqueue_task
 
 @router.post("/gmail/sync/initial")
 def trigger_initial_sync(
-    user: AuthenticatedUser = Depends(require_feature(Feature.EMAIL_SYNC)),
+    user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user)
 ):
     """
@@ -963,6 +977,42 @@ def trigger_initial_sync(
         "sync_mode": "today",  # New mode: fetch from midnight in user's timezone
         "user_timezone": user_timezone,
         "gmail_account_id": gmail_account.id
+    })
+
+    return {"status": "queued", "sync_type": "initial", "mode": "today", "timezone": user_timezone}
+
+
+@router.post("/outlook/sync/initial")
+def trigger_outlook_initial_sync(
+    user: AuthenticatedUser = Depends(require_active_subscription),
+    db: Session = Depends(get_db_for_user)
+):
+    """
+    Trigger initial Outlook email backfill for today's emails.
+    """
+    logger.info(f"Outlook initial sync request for user_id={user.user_id}")
+    outlook_account = db.query(OutlookAccount).filter(
+        OutlookAccount.user_id == user.user_id
+    ).first()
+
+    if not outlook_account:
+        logger.error(f"No OutlookAccount found for user_id={user.user_id}")
+        raise HTTPException(404, "No Microsoft account connected")
+
+    if outlook_account.initial_sync_completed:
+        return {"status": "already_completed", "sync_type": "incremental"}
+
+    # Use user's timezone for "today"
+    user_settings = db.query(UserSettings).filter(
+        UserSettings.user_id == user.user_id
+    ).first()
+    user_timezone = user_settings.default_timezone if user_settings else "UTC"
+
+    enqueue_task("outlook_email_backfill", {
+        "user_id": user.user_id,
+        "sync_mode": "today",
+        "user_timezone": user_timezone,
+        "outlook_account_id": outlook_account.id
     })
 
     return {"status": "queued", "sync_type": "initial", "mode": "today", "timezone": user_timezone}

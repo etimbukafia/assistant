@@ -15,7 +15,7 @@ from app.jobs.trial_warnings import (
     _get_users_for_milestone,
     _send_trial_warning,
     NOTIFICATION_CONFIG,
-    GRACE_PERIOD_DAYS,
+    TRIAL_GRACE_DAYS,
 )
 
 
@@ -124,64 +124,33 @@ class TestGetUsersForMilestone:
         assert len(users) == 1
         assert users[0].user_id == "user_match"
     
-    def test_expired_milestone_returns_users_in_grace(self, db_session):
-        """Should return users whose trial expired but are in grace period."""
+    def test_expired_milestone_returns_recently_expired_users(self, db_session):
+        """Should return users whose trial ended recently."""
         now = datetime.now(timezone.utc)
         
-        # User with trial expired 1 day ago (in grace, should match)
+        # User with trial expired 12 hours ago (should match)
         matching_user = UserSettings(
             user_id="user_match",
             user_email="match@test.com",
             subscription_tier="trial",
             subscription_status="trialing",
-            trial_ends_at=now - timedelta(days=1),
+            trial_ends_at=now - timedelta(hours=12),
         )
         db_session.add(matching_user)
         
-        # User with trial expired 5 days ago (past grace, should not match)
+        # User with trial expired 2 days ago (should not match)
         non_matching_user = UserSettings(
             user_id="user_nomatch",
             user_email="nomatch@test.com",
             subscription_tier="trial",
             subscription_status="expired",
-            trial_ends_at=now - timedelta(days=5),
+            trial_ends_at=now - timedelta(days=2),
         )
         db_session.add(non_matching_user)
         
         db_session.commit()
         
         users = _get_users_for_milestone(db_session, "expired", now)
-        
-        assert len(users) == 1
-        assert users[0].user_id == "user_match"
-    
-    def test_grace_ending_milestone_returns_correct_users(self, db_session):
-        """Should return users with 1 day left in grace period."""
-        now = datetime.now(timezone.utc)
-        
-        # User with trial expired 2 days ago (1 day left in grace, should match)
-        matching_user = UserSettings(
-            user_id="user_match",
-            user_email="match@test.com",
-            subscription_tier="trial",
-            subscription_status="trialing",
-            trial_ends_at=now - timedelta(days=2, hours=12),
-        )
-        db_session.add(matching_user)
-        
-        # User with trial expired 1 day ago (2 days left in grace, should not match)
-        non_matching_user = UserSettings(
-            user_id="user_nomatch",
-            user_email="nomatch@test.com",
-            subscription_tier="trial",
-            subscription_status="trialing",
-            trial_ends_at=now - timedelta(days=1),
-        )
-        db_session.add(non_matching_user)
-        
-        db_session.commit()
-        
-        users = _get_users_for_milestone(db_session, "grace_ending", now)
         
         assert len(users) == 1
         assert users[0].user_id == "user_match"
@@ -233,7 +202,7 @@ class TestSendTrialWarning:
         assert notification is not None
         assert notification.title == NOTIFICATION_CONFIG["3_days"]["title"]
         assert notification.body == NOTIFICATION_CONFIG["3_days"]["body"]
-        assert notification.priority == "high"
+        assert notification.priority == "normal"
         assert notification.target_type == "settings"
         assert notification.target_id == "subscription"
     
@@ -285,14 +254,13 @@ class TestNotificationConfig:
     
     def test_all_milestones_have_config(self):
         """All expected milestones should have notification config."""
-        expected_milestones = ["3_days", "1_day", "expired", "grace_ending"]
+        expected_milestones = ["3_days", "1_day", "expired"]
         
         for milestone in expected_milestones:
             assert milestone in NOTIFICATION_CONFIG
             assert "title" in NOTIFICATION_CONFIG[milestone]
             assert "body" in NOTIFICATION_CONFIG[milestone]
     
-    def test_grace_period_days_matches_feature_gating(self):
-        """Grace period should match the value in feature_gating.py."""
-        # This ensures consistency between modules
-        assert GRACE_PERIOD_DAYS == 3
+    def test_trial_grace_days_disabled(self):
+        """Trial grace should remain disabled."""
+        assert TRIAL_GRACE_DAYS == 0

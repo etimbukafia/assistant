@@ -321,7 +321,25 @@ class ChatService:
 
             if mtype == "contact":
                 email = None
-                if "@" in ref_id:
+                if ref_id.startswith("contact:"):
+                    try:
+                        contact_id = int(ref_id.split(":", 1)[1])
+                    except (TypeError, ValueError):
+                        contact_id = None
+                    if contact_id:
+                        contact = (
+                            self.db.query(Contact)
+                            .filter(
+                                Contact.user_id == self.user_id,
+                                Contact.id == contact_id,
+                            )
+                            .first()
+                        )
+                        if contact:
+                            email = (contact.email or "").lower()
+                            if not email:
+                                email = None
+                elif "@" in ref_id:
                     email = self._sanitize_mention_text(ref_id.lower(), max_len=254)
                 else:
                     contact = None

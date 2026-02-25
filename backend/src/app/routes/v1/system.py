@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 
 from app.security.auth import get_db_for_user, get_db
+from app.infra.config import get_settings
 from datetime import datetime, timedelta, timezone
 
 from app.data.models import Message, TaskQueue, WebhookLog
@@ -96,8 +97,14 @@ def get_webhook_health(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
     since_24h = now - timedelta(hours=24)
 
+    billing_source = (get_settings().BILLING_PROVIDER or "dodo").strip().lower()
+    sources = []
+    for source in (billing_source, "gmail", "outlook"):
+        if source not in sources:
+            sources.append(source)
+
     result = {}
-    for source in ("polar", "gmail"):
+    for source in sources:
         # Last received
         last = db.query(WebhookLog).filter(
             WebhookLog.source == source,

@@ -3,20 +3,25 @@ Webhook endpoints for external service notifications.
 
 POST /webhooks/gmail    - Receives Gmail Pub/Sub push notifications
 POST /webhooks/calendar - Receives Google Calendar push notifications
+POST /webhooks/billing  - Receives billing provider notifications (Dodo/Polar)
+POST /webhooks/polar    - Legacy alias for Polar billing webhook
 """
 
 import base64
 import json
 import logging
+import hashlib
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status, Response
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.data.models import (
     CalendarWatchChannel,
     GmailAccount,
+    OutlookAccount,
+    OutlookWatchSubscription,
     Message,
     WebhookDelivery,
     WebhookLog,
@@ -24,10 +29,15 @@ from app.data.models import (
 from app.infra.config import get_settings
 from app.infra.database import SessionLocal
 from app.integrations.gmail import GmailClient
+from app.integrations.outlook import OutlookClient
 from app.jobs.queue import queue_service
 from app.jobs.worker import handle_process_email_batch
 from app.security.encryption import encrypt_body
 from app.services.email_filter import EmailFilterService, FilterAction
+from app.services.billing_provider import (
+    build_billing_provider,
+    serialize_billing_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +190,134 @@ def _decode_pubsub_data(encoded_data: str) -> dict:
     """
     padded = encoded_data + "=" * ((4 - len(encoded_data) % 4) % 4)
     return json.loads(base64.urlsafe_b64decode(padded))
+
+
+def _billing_delivery_fingerprint(provider: str, payload: bytes) -> str:
+    digest = hashlib.sha256(payload).hexdigest()[:32]
+    return f"{provider}:sha256:{digest}"
+
+
+async def _process_billing_webhook(
+    request: Request,
+    *,
+    forced_provider: str | None = None,
+):
+    """
+    Provider-agnostic billing webhook endpoint.
+
+    The active provider is selected via BILLING_PROVIDER (dodo|polar).
+    """
+    payload = await request.body()
+    headers = {
+        "webhook-signature": request.headers.get("webhook-signature", ""),
+        "webhook-id": request.headers.get("webhook-id", ""),
+        "webhook-timestamp": request.headers.get("webhook-timestamp", ""),
+    }
+
+    configured_provider = (get_settings().BILLING_PROVIDER or "dodo").strip().lower()
+    if forced_provider and forced_provider != configured_provider:
+        logger.info(
+            "Billing webhook ignored for inactive provider path=%s active=%s",
+            forced_provider,
+            configured_provider,
+        )
+        return {"received": True, "handled": False, "reason": "inactive_provider"}
+
+    provider = build_billing_provider()
+    provider_name = provider.provider
+
+    try:
+        event = provider.normalize_webhook_event(payload=payload, headers=headers)
+    except ValueError:
+        _log_webhook_event(provider_name, "unknown", False, "invalid_signature")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid webhook signature",
+        )
+
+    if event is None:
+        _log_webhook_event(provider_name, "unknown", False, "webhook_not_configured")
+        return {"received": True, "handled": False, "reason": "webhook_not_configured"}
+
+    if not event.delivery_id:
+        event.delivery_id = _billing_delivery_fingerprint(provider_name, payload)
+
+    db = SessionLocal()
+    try:
+        if _is_duplicate_delivery(db, provider_name, event.delivery_id):
+            logger.info(
+                "Billing webhook duplicate ignored provider=%s delivery_id=%s",
+                provider_name,
+                event.delivery_id,
+            )
+            return {"received": True, "handled": True, "duplicate": True}
+
+        _record_processed_delivery(
+            db=db,
+            source=provider_name,
+            delivery_id=event.delivery_id,
+            event_type=event.event_type,
+            customer_id=event.customer_id or event.customer_email,
+        )
+
+        queue_service.enqueue(
+            task_type="process_billing_webhook_event",
+            payload={
+                "event": serialize_billing_event(event),
+            },
+            correlation_id=event.delivery_id,
+            user_id=None,
+            db=db,
+        )
+
+        db.add(
+            WebhookLog(
+                source=provider_name,
+                event_type=event.event_type,
+                processed=True,
+                customer_id=event.customer_id or event.customer_email,
+            )
+        )
+        db.commit()
+
+        return {
+            "received": True,
+            "handled": True,
+            "queued": True,
+            "delivery_id": event.delivery_id,
+        }
+    except IntegrityError:
+        db.rollback()
+        return {"received": True, "handled": True, "duplicate": True}
+    except Exception as exc:
+        db.rollback()
+        logger.error("Billing webhook enqueue failed: %s", exc, exc_info=True)
+        _log_webhook_event(provider_name, event.event_type, False, "enqueue_failed", customer_id=event.customer_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="billing_webhook_processing_failed",
+        )
+    finally:
+        db.close()
+
+
+@router.post("/billing")
+async def handle_billing_webhook(request: Request):
+    """
+    Provider-agnostic billing webhook endpoint.
+
+    The active provider is selected via BILLING_PROVIDER (dodo|polar).
+    """
+    return await _process_billing_webhook(request)
+
+
+@router.post("/polar")
+async def handle_legacy_polar_webhook(request: Request):
+    """
+    Backward-compatible alias for legacy Polar webhook URL.
+    Active only when BILLING_PROVIDER=polar.
+    """
+    return await _process_billing_webhook(request, forced_provider="polar")
 
 
 @router.post("/gmail")
@@ -482,5 +620,159 @@ async def handle_calendar_push(request: Request):
         logger.error("Calendar webhook processing failed: %s", exc, exc_info=True)
         # Return 200 to prevent Google retry storms for calendar channel pings.
         return {"status": "error"}
+    finally:
+        db.close()
+
+
+@router.post("/outlook")
+async def handle_outlook_push(request: Request):
+    """
+    Receive Microsoft Graph webhook notifications.
+    Supports validationToken handshake and change notifications.
+    """
+    # Validation handshake
+    validation_token = request.query_params.get("validationToken")
+    if validation_token:
+        return Response(content=validation_token, media_type="text/plain")
+
+    try:
+        body = await request.json()
+    except Exception:
+        logger.warning("Outlook webhook: invalid JSON body")
+        _log_webhook_event("outlook", "outlook_push", False, "invalid_json")
+        return {"status": "ignored", "reason": "invalid_json"}
+
+    notifications = body.get("value", [])
+    if not notifications:
+        return {"status": "ignored", "reason": "no_notifications"}
+
+    db = SessionLocal()
+    try:
+        for notification in notifications:
+            sub_id = notification.get("subscriptionId")
+            resource = notification.get("resource")
+            client_state = notification.get("clientState")
+
+            if not sub_id:
+                continue
+
+            sub = db.query(OutlookWatchSubscription).filter(
+                OutlookWatchSubscription.subscription_id == sub_id
+            ).first()
+            if not sub:
+                continue
+
+            if client_state and client_state != sub.client_state:
+                logger.warning("Outlook webhook: clientState mismatch for sub %s", sub_id)
+                continue
+
+            user_id = sub.user_id
+            account = db.query(OutlookAccount).filter(OutlookAccount.user_id == user_id).first()
+            if not account:
+                continue
+
+            try:
+                db.execute(
+                    text("SELECT set_config('app.user_id', :uid, true)"),
+                    {"uid": user_id},
+                )
+            except Exception:
+                logger.debug("Outlook webhook: RLS context not applied (non-Postgres backend)")
+
+            delivery_id = notification.get("id") or f"{sub_id}:{notification.get('sequenceNumber')}"
+            if _is_duplicate_delivery(db, "outlook", delivery_id):
+                continue
+
+            if resource and "messages" in resource:
+                client = OutlookClient(db=db, user_id=user_id)
+                if not client.load_credentials(email=account.email):
+                    continue
+                delta = client.get_delta_messages(account.last_delta_token)
+                messages = delta.get("value", [])
+                account.last_delta_token = delta.get("@odata.deltaLink", account.last_delta_token)
+
+                filter_service = EmailFilterService(db=db, user_id=user_id)
+                process_ids: list[int] = []
+                for msg in messages:
+                    msg_id = msg.get("id")
+                    conv_id = msg.get("conversationId")
+                    if not msg_id:
+                        continue
+                    existing = db.query(Message).filter(
+                        Message.external_message_id == msg_id,
+                        Message.provider == "microsoft",
+                    ).first()
+                    if existing:
+                        continue
+                    sender_email = (msg.get("from") or {}).get("emailAddress", {}).get("address", "")
+                    subject = msg.get("subject") or ""
+                    body_content = (msg.get("body") or {}).get("content") or ""
+                    filter_result = filter_service.apply_filters(
+                        gmail_labels=[],
+                        sender_email=sender_email,
+                        subject=subject,
+                        headers={},
+                        body_preview=body_content[:200],
+                        thread_id=f"ms:{conv_id}" if conv_id else None,
+                    )
+                    if filter_result.action == FilterAction.SKIP:
+                        continue
+                    db_message = Message(
+                        message_id=f"ms:{msg_id}",
+                        thread_id=f"ms:{conv_id}" if conv_id else None,
+                        user_id=user_id,
+                        subject=subject,
+                        sender=sender_email,
+                        recipient=",".join([r.get("emailAddress", {}).get("address") for r in msg.get("toRecipients", [])]),
+                        body=encrypt_body(body_content),
+                        body_encrypted=True,
+                        received_at=datetime.fromisoformat(msg.get("receivedDateTime").replace("Z", "+00:00")) if msg.get("receivedDateTime") else datetime.now(timezone.utc),
+                        provider="microsoft",
+                        external_message_id=msg_id,
+                        external_thread_id=conv_id,
+                        processed=filter_result.action == FilterAction.METADATA_ONLY,
+                    )
+                    db.add(db_message)
+                    db.flush()
+                    if filter_result.action == FilterAction.PROCESS:
+                        process_ids.append(db_message.id)
+
+                if process_ids:
+                    for msg_id in process_ids:
+                        queue_service.enqueue(
+                            task_type="process_email",
+                            payload={"message_id": msg_id, "user_id": user_id},
+                            user_id=user_id,
+                            db=db,
+                        )
+
+            if resource and "events" in resource:
+                queue_service.enqueue(
+                    task_type="sync_calendar_for_user",
+                    payload={"user_id": user_id},
+                    user_id=user_id,
+                    db=db,
+                )
+
+            _record_processed_delivery(
+                db,
+                source="outlook",
+                delivery_id=delivery_id,
+                event_type="outlook_push",
+                customer_id=str(user_id),
+            )
+
+        db.commit()
+        _log_webhook_event("outlook", "outlook_push", True)
+        return {"status": "ok"}
+
+    except Exception as exc:
+        db.rollback()
+        logger.error("Outlook webhook processing failed: %s", exc, exc_info=True)
+        _log_webhook_event("outlook", "outlook_push", False, "processing_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="outlook_webhook_processing_failed",
+        )
     finally:
         db.close()

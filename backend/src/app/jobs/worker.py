@@ -912,6 +912,135 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
         db.close()
 
 
+async def handle_outlook_email_backfill(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Handler for 'outlook_email_backfill' tasks.
+
+    Fetches Outlook emails for today and queues for AI processing.
+    """
+    from app.data.models import OutlookAccount, Message
+    from app.infra.database import SessionLocal
+    from app.integrations.outlook import OutlookClient
+    from app.security.encryption import encrypt_body
+    from app.services.email_filter import EmailFilterService, FilterAction
+    from app.jobs.queue import enqueue_task
+    from zoneinfo import ZoneInfo
+
+    user_id = payload.get("user_id")
+    sync_mode = payload.get("sync_mode", "today")
+    user_timezone = payload.get("user_timezone", "UTC")
+
+    if not user_id:
+        raise ValueError(f"Task {task_id}: user_id is required")
+
+    db = SessionLocal()
+    db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+
+    try:
+        if sync_mode == "today":
+            try:
+                user_tz = ZoneInfo(user_timezone)
+            except Exception:
+                user_tz = timezone.utc
+            now_user = datetime.now(user_tz)
+            midnight_user = now_user.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            midnight_user = datetime.now(timezone.utc) - timedelta(hours=24)
+
+        client = OutlookClient(db=db, user_id=user_id)
+        if not client.load_credentials():
+            raise RuntimeError(f"Failed to load Outlook credentials for user {user_id}")
+
+        messages = client.get_messages(max_results=500)
+        filter_service = EmailFilterService(db=db, user_id=user_id)
+
+        synced_count = 0
+        filtered_count = 0
+        message_ids = []
+
+        for msg in messages:
+            received = msg.get("receivedDateTime")
+            if received:
+                received_dt = datetime.fromisoformat(received.replace("Z", "+00:00"))
+                if received_dt < midnight_user:
+                    continue
+
+            msg_id = msg.get("id")
+            conv_id = msg.get("conversationId")
+            if not msg_id:
+                continue
+
+            existing = db.query(Message).filter(
+                Message.external_message_id == msg_id,
+                Message.provider == "microsoft",
+            ).first()
+            if existing:
+                continue
+
+            sender_email = (msg.get("from") or {}).get("emailAddress", {}).get("address", "")
+            subject = msg.get("subject") or ""
+            body_content = (msg.get("body") or {}).get("content") or ""
+
+            filter_result = filter_service.apply_filters(
+                gmail_labels=[],
+                sender_email=sender_email,
+                subject=subject,
+                headers={},
+                body_preview=body_content[:200],
+                thread_id=f"ms:{conv_id}" if conv_id else None,
+            )
+
+            if filter_result.action == FilterAction.SKIP:
+                continue
+
+            message = Message(
+                message_id=f"ms:{msg_id}",
+                thread_id=f"ms:{conv_id}" if conv_id else None,
+                user_id=user_id,
+                subject=subject,
+                sender=sender_email,
+                recipient=",".join([r.get("emailAddress", {}).get("address") for r in msg.get("toRecipients", [])]),
+                body=encrypt_body(body_content),
+                body_encrypted=True,
+                received_at=received_dt if received else datetime.now(timezone.utc),
+                processed=filter_result.action == FilterAction.METADATA_ONLY,
+                provider="microsoft",
+                external_message_id=msg_id,
+                external_thread_id=conv_id,
+            )
+            db.add(message)
+            db.flush()
+            synced_count += 1
+            if filter_result.action == FilterAction.PROCESS:
+                message_ids.append(message.id)
+            else:
+                filtered_count += 1
+
+        db.commit()
+
+        for msg_id in message_ids:
+            enqueue_task(
+                task_type="process_email",
+                payload={"message_id": msg_id, "user_id": user_id},
+                correlation_id=correlation_id,
+                db=db
+            )
+
+        outlook_account = db.query(OutlookAccount).filter(OutlookAccount.user_id == user_id).first()
+        if outlook_account:
+            was_completed = outlook_account.initial_sync_completed
+            if not was_completed:
+                outlook_account.initial_sync_completed = True
+            outlook_account.last_sync = datetime.now(timezone.utc)
+            db.commit()
+
+        logger.info(
+            f"Outlook backfill complete: synced={synced_count}, processed={len(message_ids)}, filtered={filtered_count}"
+        )
+    finally:
+        db.close()
+
+
 # =============================================================================
 # Digest Handlers
 # =============================================================================
@@ -1528,6 +1657,25 @@ async def handle_renew_calendar_watches(task_id: int, task_type: str, payload: D
     logger.info(f"[{correlation_id}] Next Calendar watch renewal scheduled for {next_run}")
 
 
+async def handle_renew_outlook_subscriptions(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Renew Outlook Graph subscriptions for all users.
+    """
+    from app.services.outlook_watch import renew_all_subscriptions
+
+    logger.info(f"[{correlation_id}] Renewing Outlook subscriptions")
+    result = renew_all_subscriptions()
+    logger.info(f"[{correlation_id}] Outlook subscription renewal: {result}")
+
+    next_run = datetime.utcnow() + timedelta(days=1)
+    queue_service.enqueue(
+        task_type="renew_outlook_subscriptions",
+        payload={},
+        scheduled_for=next_run,
+    )
+    logger.info(f"[{correlation_id}] Next Outlook subscription renewal scheduled for {next_run}")
+
+
 async def handle_sync_calendar_for_user(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
     """
     Handler for 'sync_calendar_for_user' tasks.
@@ -1537,6 +1685,7 @@ async def handle_sync_calendar_for_user(task_id: int, task_type: str, payload: D
     so the next frontend load gets fresh data.
     """
     from app.services.calendar import CalendarService
+    from app.services.calendar_ms import MicrosoftCalendarService
     from app.infra.database import SessionLocal
     from core.cache import calendar_cache
 
@@ -1557,16 +1706,272 @@ async def handle_sync_calendar_for_user(task_id: int, task_type: str, payload: D
         default_cal = (user_settings.default_calendar_id or "primary") if user_settings else "primary"
         calendar_ids = chosen if chosen else [default_cal]
 
-        cal_service = CalendarService(db=db, user_id=user_id)
-        await cal_service.sync_upcoming_events(
-            days_ahead=14,
-            calendar_ids=calendar_ids,
-        )
+        if user_settings and user_settings.connected_provider == "microsoft":
+            cal_service = MicrosoftCalendarService(db=db, user_id=user_id)
+            await cal_service.sync_upcoming_events(
+                days_ahead=14,
+                calendar_ids=calendar_ids,
+            )
+        else:
+            cal_service = CalendarService(db=db, user_id=user_id)
+            await cal_service.sync_upcoming_events(
+                days_ahead=14,
+                calendar_ids=calendar_ids,
+            )
         logger.info(
             f"[{correlation_id}] Calendar synced for user={user_id} (push notification)"
         )
     except Exception as e:
         logger.error(f"[{correlation_id}] Calendar sync failed for user={user_id}: {e}", exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
+async def handle_process_billing_webhook_event(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Process a normalized billing webhook event from queue.
+
+    This keeps webhook route fast (verify + enqueue) while preserving
+    deterministic, idempotent billing state updates in one place.
+    """
+    from app.infra.database import SessionLocal
+    from app.data.models import BillingEvent, WebhookLog
+    from app.services.billing_provider import (
+        apply_billing_event,
+        deserialize_billing_event,
+        get_user_for_billing_event,
+    )
+    from app.services.billing_ledger import sync_billing_ledger_from_event
+    from app.services.dunning import (
+        apply_failure_state,
+        clear_dunning_state,
+        is_failure_event,
+        is_recovery_event,
+        notify_stage,
+    )
+
+    serialized = payload.get("event")
+    if not isinstance(serialized, dict):
+        raise ValueError("process_billing_webhook_event missing 'event' payload")
+
+    event = deserialize_billing_event(serialized)
+    if not event.provider:
+        raise ValueError("process_billing_webhook_event missing provider")
+
+    db = SessionLocal()
+    try:
+        if event.delivery_id:
+            existing = db.query(BillingEvent).filter(
+                BillingEvent.provider == event.provider,
+                BillingEvent.delivery_id == event.delivery_id,
+            ).first()
+            if existing and existing.handled:
+                logger.info(
+                    "[%s] Billing event already handled provider=%s delivery_id=%s",
+                    correlation_id,
+                    event.provider,
+                    event.delivery_id,
+                )
+                return
+
+        user_row = get_user_for_billing_event(db, event)
+        handled = apply_billing_event(db, event)
+
+        if user_row:
+            if is_recovery_event(event):
+                clear_dunning_state(user_row)
+            elif is_failure_event(event):
+                immediate_stage = apply_failure_state(user_row, event)
+                if immediate_stage:
+                    notify_stage(db, user_row, immediate_stage)
+
+        sync_billing_ledger_from_event(
+            db,
+            event=event,
+            user=user_row,
+            handled=handled,
+            error=None if handled else "no_handler",
+        )
+
+        if not handled:
+            db.add(
+                WebhookLog(
+                    source=event.provider,
+                    event_type=event.event_type,
+                    processed=False,
+                    error="no_handler",
+                    customer_id=event.customer_id or event.customer_email,
+                )
+            )
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        try:
+            db.add(
+                WebhookLog(
+                    source=event.provider or "billing",
+                    event_type=event.event_type or "unknown",
+                    processed=False,
+                    error="processing_failed",
+                    customer_id=event.customer_id or event.customer_email,
+                )
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+async def handle_apply_scheduled_plan_change(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Apply a previously scheduled downgrade at renewal time.
+
+    This keeps downgrade behavior predictable:
+    - no immediate change when requested
+    - apply on/after next billing cycle boundary
+    """
+    from app.infra.database import SessionLocal
+    from app.data.models import BillingSubscription, UserSettings
+    from app.services.billing_provider import get_billing_provider
+    from app.services.billing_ledger import sync_subscription_snapshot_from_settings
+
+    user_id = payload.get("user_id")
+    target_cycle = str(payload.get("target_cycle") or "").strip().lower()
+    provider_name = str(payload.get("provider") or "").strip().lower()
+
+    if not user_id:
+        raise ValueError("apply_scheduled_plan_change missing user_id")
+    if target_cycle not in {"monthly", "annual"}:
+        raise ValueError("apply_scheduled_plan_change requires target_cycle monthly|annual")
+
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
+        settings_row = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+        if not settings_row:
+            logger.warning("[%s] apply_scheduled_plan_change user not found user=%s", correlation_id, user_id)
+            return
+
+        billing = get_billing_provider()
+        if provider_name and billing.provider != provider_name:
+            logger.warning(
+                "[%s] apply_scheduled_plan_change provider mismatch payload=%s active=%s user=%s",
+                correlation_id,
+                provider_name,
+                billing.provider,
+                user_id,
+            )
+            return
+
+        result, error = billing.change_plan(
+            settings_row=settings_row,
+            target_cycle=target_cycle,
+            db=db,
+        )
+        if error or result is None:
+            raise RuntimeError(error or "scheduled_plan_change_failed")
+
+        subscription = (
+            db.query(BillingSubscription)
+            .filter(
+                BillingSubscription.user_id == user_id,
+                BillingSubscription.provider == billing.provider,
+            )
+            .order_by(BillingSubscription.updated_at.desc())
+            .first()
+        )
+        if subscription:
+            meta = dict(subscription.provider_metadata or {})
+            meta.pop("scheduled_plan_change", None)
+            subscription.provider_metadata = meta
+
+        sync_subscription_snapshot_from_settings(
+            db,
+            settings_row=settings_row,
+            provider=billing.provider,
+        )
+        db.commit()
+        logger.info(
+            "[%s] apply_scheduled_plan_change success user=%s provider=%s target_cycle=%s",
+            correlation_id,
+            user_id,
+            billing.provider,
+            target_cycle,
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def get_next_dunning_check_time() -> datetime:
+    """Run dunning checks hourly."""
+    now = datetime.now(timezone.utc)
+    return (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+
+
+async def handle_check_dunning_status(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """
+    Periodic dunning lifecycle check.
+
+    Sends staged reminders and pauses access after recovery window expires.
+    """
+    from app.infra.database import SessionLocal
+    from app.data.models import UserSettings
+    from app.jobs.queue import enqueue_task
+    from app.services.dunning import (
+        notify_stage,
+        should_suspend_access,
+        stage_due_for_user,
+        suspend_access,
+    )
+
+    db = SessionLocal()
+    now = datetime.now(timezone.utc)
+    try:
+        users = db.query(UserSettings).filter(
+            UserSettings.dunning_active == True,
+            UserSettings.subscription_tier == "pro",
+        ).all()
+
+        reminded = 0
+        suspended = 0
+        for user in users:
+            stage = stage_due_for_user(user, now=now)
+            if stage:
+                notify_stage(db, user, stage)
+                reminded += 1
+
+            if should_suspend_access(user, now=now):
+                if user.dunning_last_notified_stage != "final":
+                    notify_stage(db, user, "final")
+                    reminded += 1
+                suspend_access(user, now=now)
+                suspended += 1
+
+        next_run = get_next_dunning_check_time()
+        enqueue_task(
+            task_type="check_dunning_status",
+            payload={},
+            scheduled_for=next_run,
+            db=db,
+        )
+        db.commit()
+        logger.info(
+            "[%s] Dunning check complete users=%s reminded=%s suspended=%s next_run=%s",
+            correlation_id,
+            len(users),
+            reminded,
+            suspended,
+            next_run,
+        )
+    except Exception:
+        db.rollback()
         raise
     finally:
         db.close()
@@ -1587,10 +1992,15 @@ TASK_HANDLERS = {
     # DORMANT: "generate_digest": handle_generate_digest,
     # DORMANT: "deliver_digest": handle_deliver_digest,
     "email_backfill": handle_email_backfill,
+    "outlook_email_backfill": handle_outlook_email_backfill,
     "process_chat_message": handle_process_chat_message,
     "renew_gmail_watches": handle_renew_gmail_watches,
     "renew_calendar_watches": handle_renew_calendar_watches,
+    "renew_outlook_subscriptions": handle_renew_outlook_subscriptions,
     "sync_calendar_for_user": handle_sync_calendar_for_user,
+    "process_billing_webhook_event": handle_process_billing_webhook_event,
+    "apply_scheduled_plan_change": handle_apply_scheduled_plan_change,
+    "check_dunning_status": handle_check_dunning_status,
     "check_trial_expirations": handle_check_trial_expirations,
     "check_webhook_health": handle_check_webhook_health,
 }
@@ -1618,6 +2028,7 @@ def _notify_permanent_failure(task_id: int, task_type: str, payload: dict, error
         "generate_digest": "Digest generation",
         "deliver_digest": "Digest delivery",
         "email_backfill": "Email sync",
+        "outlook_email_backfill": "Outlook email sync",
         "process_chat_message": "Chat processing",
     }
     task_desc = task_descriptions.get(task_type, f"Background task ({task_type})")
@@ -1650,7 +2061,7 @@ def schedule_cleanup_jobs_if_needed(db):
     from app.data.models import TaskQueue
     from app.jobs.queue import enqueue_task
 
-    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations", "check_webhook_health"]
+    cleanup_jobs = ["cleanup_stuck_chat_messages", "chat_cleanup", "data_cleanup", "check_trial_expirations", "check_webhook_health", "check_dunning_status"]
     if get_settings().PROPOSALS_ENABLED:
         cleanup_jobs.append("vault_proposal_cleanup")
 
@@ -1671,6 +2082,8 @@ def schedule_cleanup_jobs_if_needed(db):
                 next_run = get_next_trial_check_time()
             elif task_type == "check_webhook_health":
                 next_run = get_next_webhook_health_check_time()
+            elif task_type == "check_dunning_status":
+                next_run = get_next_dunning_check_time()
             elif task_type == "vault_proposal_cleanup":
                 from app.handlers.vault_handlers import get_next_vault_cleanup_time
                 next_run = get_next_vault_cleanup_time()

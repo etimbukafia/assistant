@@ -123,6 +123,16 @@ def _load_prompt(name: str) -> str:
     return _prompt_cache[name]
 
 
+_PLANNER_HIDDEN_TOOLS = {
+    "get_contact_context",
+    "get_thread_history",
+    "get_user_preferences",
+    "get_event_context",
+    "get_message_context",
+    "get_task_context",
+}
+
+
 # =========================================================================
 # Mode Configuration
 # =========================================================================
@@ -220,6 +230,20 @@ class ChatOrchestrator:
         self.context_manager = ChatContextManager(db, user_id)
         self.tool_registry = ChatToolRegistry(db, user_id)
         self.tool_policy = ToolPolicyEngine()
+
+    def _release_db_connection(self) -> None:
+        """
+        Release any checked-out DB connection before long LLM work.
+
+        We only use rollback here to end implicit read transactions and
+        return the connection to the pool. This keeps DB access short and
+        avoids holding connections while waiting on LLMs.
+        """
+        try:
+            if self.db.in_transaction():
+                self.db.rollback()
+        except Exception:
+            logger.debug("chat_db_release_failed", exc_info=True)
 
     async def process_message(
         self,
@@ -389,6 +413,9 @@ class ChatOrchestrator:
             for msg in history:
                 messages.append({"role": msg["role"], "content": msg["content"]})
             messages.append({"role": "user", "content": user_message})
+
+        # Release DB connection before LLM work to avoid holding pool slots.
+        self._release_db_connection()
 
         pending_actions: List[Dict[str, Any]] = []
         tool_execution_records: List[Dict[str, Any]] = []
@@ -1755,7 +1782,16 @@ class ChatOrchestrator:
                 session_id,
                 raw_plan[:220],
             )
-            return None
+            repaired = await self._repair_planner_output(
+                raw_plan=raw_plan,
+                user_message=user_message,
+                mention_context=mention_context,
+                active_tools=active_tools,
+                session_id=session_id,
+            )
+            if repaired is None:
+                return None
+            plan = repaired
 
         if plan.clarification.needed and plan.clarification.question:
             return {
@@ -1815,6 +1851,7 @@ class ChatOrchestrator:
             result = self.tool_registry.execute_tool(tool_name, tool_args)
             if is_action_tool and result.success:
                 action_count += 1
+            self._release_db_connection()
             return result
 
         dag_result = await executor.execute(
@@ -1876,6 +1913,69 @@ class ChatOrchestrator:
             "llm_calls": 1,
         }
 
+    async def _repair_planner_output(
+        self,
+        raw_plan: str,
+        user_message: str,
+        mention_context: Dict[str, Any],
+        active_tools: List[Dict[str, Any]],
+        session_id: str,
+    ) -> Optional["ExecutionPlan"]:
+        """
+        Attempt to repair planner output into a valid ExecutionPlan.
+
+        This reduces fallbacks to freeform LLM responses that can hallucinate
+        placeholders or generic templates.
+        """
+        catalog: List[Dict[str, Any]] = []
+        for tool in active_tools:
+            fn = tool.get("function") or {}
+            name = (fn.get("name") or "").strip()
+            if not name:
+                continue
+            if name in _PLANNER_HIDDEN_TOOLS:
+                continue
+            family = TOOL_FAMILY_BY_NAME.get(name)
+            catalog.append(
+                {
+                    "name": name,
+                    "family": family.value if family else "read_context",
+                    "description": str(fn.get("description") or ""),
+                }
+            )
+
+        repair_system = (
+            "You fix planner JSON. Return ONLY valid JSON (no markdown) matching: "
+            "{plan_id, sub_requests[], nodes[], clarification}. "
+            "Do not add prose."
+        )
+        repair_user = (
+            f"User message: {user_message}\n"
+            f"Resolved mention context JSON: {json.dumps(mention_context or {}, ensure_ascii=True, separators=(',', ':'))}\n"
+            f"Tool catalog JSON: {json.dumps(catalog, ensure_ascii=True, separators=(',', ':'))}\n"
+            f"Broken planner output:\n{raw_plan}\n"
+            "Return corrected JSON only."
+        )
+        repair_response = await self._call_llm(
+            [{"role": "system", "content": repair_system}, {"role": "user", "content": repair_user}],
+            tools=[],
+            session_id=session_id,
+            max_output_tokens=520,
+        )
+        repaired_raw = (repair_response.get("content") or "").strip()
+        if not repaired_raw:
+            return None
+        try:
+            return parse_execution_plan(repaired_raw)
+        except PlanParseError:
+            logger.warning(
+                "plan_repair_failed user=%s session=%s raw_preview=%s",
+                self.user_id,
+                session_id,
+                repaired_raw[:220],
+            )
+            return None
+
     def _build_plan_builder_messages(
         self,
         user_message: str,
@@ -1888,6 +1988,8 @@ class ChatOrchestrator:
             fn = tool.get("function") or {}
             name = (fn.get("name") or "").strip()
             if not name:
+                continue
+            if name in _PLANNER_HIDDEN_TOOLS:
                 continue
             family = TOOL_FAMILY_BY_NAME.get(name)
             catalog.append(
@@ -1904,6 +2006,9 @@ class ChatOrchestrator:
             "{plan_id, sub_requests[], nodes[], clarification}. "
             "Each node must include: id, sub_request_id, family, tool, args, depends_on[]. "
             "Use only tools from the provided catalog. "
+            "Prefer unified tools (entity_search, context_search) over deprecated get_* context tools. "
+            "Use context_search when the user asks to retrieve decisions, commitments, preferences, relationships, risks, or history "
+            "about an entity (contact/thread/event/message/task), or when they ask for updates/recaps/status/what-changed."
             "Prefer minimal plans. "
             "If the request is blocked, set clarification.needed=true with one concise question. "
             "If not blocked, clarification.needed=false."

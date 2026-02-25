@@ -12,9 +12,10 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 
 def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettingsResponse:
     """Build enriched settings response with computed fields."""
-    from app.data.models import GmailAccount
+    from app.data.models import GmailAccount, OutlookAccount
 
     gmail_account = db.query(GmailAccount).filter(GmailAccount.user_id == settings.user_id).first()
+    outlook_account = db.query(OutlookAccount).filter(OutlookAccount.user_id == settings.user_id).first()
     
     initial_sync_completed = gmail_account.initial_sync_completed if gmail_account else False
     initial_sync_failed = False
@@ -47,14 +48,31 @@ def _enrich_settings_response(settings: UserSettings, db: Session) -> UserSettin
         trial_ends_at=settings.trial_ends_at,
         is_active=settings.is_active,
         days_remaining=settings.days_remaining,
+        dunning_active=bool(settings.dunning_active),
+        dunning_deadline_at=settings.dunning_deadline_at,
+        dunning_days_remaining=settings.dunning_days_remaining,
+        dunning_attempt_count=settings.dunning_attempt_count or 0,
+        dunning_suspended_at=settings.dunning_suspended_at,
         # Personalization & Onboarding
         assistant_name=settings.assistant_name or "Teeks",
         onboarding_completed=settings.onboarding_completed or False,
+        # Personal profile
+        full_name=settings.full_name,
+        preferred_name=settings.preferred_name,
+        role=settings.role,
+        personal_preferences=settings.personal_preferences,
+        # Executive profile
+        exec_full_name=settings.exec_full_name,
+        exec_preferred_name=settings.exec_preferred_name,
+        exec_role=settings.exec_role,
+        exec_preferences=settings.exec_preferences,
         # Integration status (computed)
         initial_sync_completed=initial_sync_completed,
         initial_sync_failed=initial_sync_failed,
         gmail_connected=gmail_account is not None,
+        outlook_connected=outlook_account is not None,
         calendar_connected=bool(settings.calendar_ids),
+        connected_provider=settings.connected_provider,
         default_calendar_id=settings.default_calendar_id,
         auto_briefing_enabled=settings.auto_briefing_enabled,
         briefing_hours_before=settings.briefing_hours_before,
@@ -109,6 +127,22 @@ def update_existing_settings(
         settings.auto_briefing_enabled = request.auto_briefing_enabled
     if request.briefing_hours_before is not None:
         settings.briefing_hours_before = request.briefing_hours_before
+    if request.full_name is not None:
+        settings.full_name = request.full_name.strip() or None
+    if request.preferred_name is not None:
+        settings.preferred_name = request.preferred_name.strip() or None
+    if request.role is not None:
+        settings.role = request.role.strip() or None
+    if request.personal_preferences is not None:
+        settings.personal_preferences = request.personal_preferences.strip() or None
+    if request.exec_full_name is not None:
+        settings.exec_full_name = request.exec_full_name.strip() or None
+    if request.exec_preferred_name is not None:
+        settings.exec_preferred_name = request.exec_preferred_name.strip() or None
+    if request.exec_role is not None:
+        settings.exec_role = request.exec_role.strip() or None
+    if request.exec_preferences is not None:
+        settings.exec_preferences = request.exec_preferences.strip() or None
 
     db.commit()
     db.refresh(settings)

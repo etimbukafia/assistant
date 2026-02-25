@@ -226,7 +226,7 @@ def handle_subscription_canceled(event_data: Dict[str, Any], db) -> None:
     """
     Handle subscription.canceled event.
 
-    Marks subscription as canceled but keeps access until period end.
+    Marks subscription as cancellation scheduled but keeps access until period end.
     """
     subscription = _subscription_payload(event_data)
     customer_id = subscription.get("customer_id")
@@ -239,7 +239,7 @@ def handle_subscription_canceled(event_data: Dict[str, Any], db) -> None:
         logger.warning(f"Subscription canceled event for unknown customer {customer_id}")
         return
     
-    user.subscription_status = "canceled"
+    user.subscription_status = "cancel_scheduled"
     # Note: Keep tier as "pro" until revoked - user still has access until period end
     
     logger.info(f"Subscription canceled for user {user.user_email}")
@@ -503,12 +503,12 @@ async def cancel_subscription(
         )
     
     # Update local status
-    user.subscription_status = "canceled"
+    user.subscription_status = "cancel_scheduled"
     db.commit()
     
     return {
         "success": True,
-        "message": "Subscription will be canceled at end of billing period"
+        "message": "You're all set. Cancellation is scheduled for the end of your current billing period."
     }
 
 

@@ -3,7 +3,8 @@ from .models import (
     AgentActivityLog, SchedulingSuggestion, CalendarEvent,
     PrincipalMemory, DecisionPattern, ThreadState, TaskQueue,
     ChatSession, ChatMessage, ChatPendingAction, Digest,
-    WebhookLog, WebhookDelivery, TokenUsage, ChatModelCallMetric
+    WebhookLog, WebhookDelivery, TokenUsage, ChatModelCallMetric,
+    BillingPlan, BillingSubscription, BillingInvoice, BillingPaymentAttempt, BillingEvent, CreditTopup
 )
 from .schemas import (
     MessageResponse, TaskResponse, UserSettingsResponse,
@@ -17,6 +18,7 @@ __all__ = [
     "PrincipalMemory", "DecisionPattern", "ThreadState", "TaskQueue",
     "ChatSession", "ChatMessage", "ChatPendingAction", "Digest",
     "WebhookLog", "WebhookDelivery", "TokenUsage", "ChatModelCallMetric",
+    "BillingPlan", "BillingSubscription", "BillingInvoice", "BillingPaymentAttempt", "BillingEvent", "CreditTopup",
     # Schemas
     "MessageResponse", "TaskResponse", "UserSettingsResponse",
     "UserSettingsUpdateRequest", "TaskUpdateRequest",

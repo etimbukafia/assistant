@@ -83,6 +83,16 @@ class TestIsActiveProperty:
         # Act & Assert
         assert user.is_active is False
 
+    def test_is_active_true_for_pro_cancel_scheduled_status(self, make_user):
+        # Arrange
+        user = make_user(
+            subscription_tier="pro",
+            subscription_status="cancel_scheduled"
+        )
+
+        # Act & Assert
+        assert user.is_active is True
+
     def test_is_active_false_for_pro_expired_status(self, make_user):
         # Arrange
         user = make_user(
@@ -122,6 +132,30 @@ class TestIsActiveProperty:
             subscription_tier="trial",
             subscription_status="trialing",
             trial_ends_at=datetime(2026, 1, 10, tzinfo=timezone.utc)
+        )
+
+        # Act & Assert
+        assert user.is_active is False
+
+    @freeze_time("2026-01-15 12:00:00")
+    def test_is_active_true_for_pro_within_grace(self, make_user):
+        # Arrange - expiry 2 days ago, still within 4-day pro grace
+        user = make_user(
+            subscription_tier="pro",
+            subscription_status="active",
+            subscription_expires_at=datetime(2026, 1, 13, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
+        # Act & Assert
+        assert user.is_active is True
+
+    @freeze_time("2026-01-15 12:00:00")
+    def test_is_active_false_for_pro_after_grace(self, make_user):
+        # Arrange - expiry 10 days ago, outside grace
+        user = make_user(
+            subscription_tier="pro",
+            subscription_status="active",
+            subscription_expires_at=datetime(2026, 1, 5, 12, 0, 0, tzinfo=timezone.utc),
         )
 
         # Act & Assert

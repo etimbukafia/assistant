@@ -24,7 +24,7 @@ Test Categories:
 - handle_subscription_created() - activates Pro, sets dates, missing data
 - handle_subscription_active() - renews subscription
 - handle_subscription_updated() - syncs status/dates
-- handle_subscription_canceled() - marks canceled, keeps access
+- handle_subscription_canceled() - marks cancel_scheduled, keeps access
 - handle_subscription_revoked() - revokes access immediately
 """
 import pytest
@@ -306,7 +306,7 @@ class TestHandleSubscriptionActive:
         # Arrange
         from app.handlers.webhook_handlers import handle_subscription_active
         mock_db_session.query().filter().first.return_value = mock_user_settings
-        mock_user_settings.subscription_status = "canceled"
+        mock_user_settings.subscription_status = "cancel_scheduled"
         
         # Act
         handle_subscription_active(subscription_active_event, mock_db_session)
@@ -394,7 +394,7 @@ class TestHandleSubscriptionUpdated:
 class TestHandleSubscriptionCanceled:
     """Tests for subscription.canceled event handler."""
 
-    def test_handle_subscription_canceled_marks_status_canceled(
+    def test_handle_subscription_canceled_marks_status_cancel_scheduled(
         self, mock_db_session, mock_user_settings, subscription_canceled_event
     ):
         # Arrange
@@ -406,7 +406,7 @@ class TestHandleSubscriptionCanceled:
         handle_subscription_canceled(subscription_canceled_event, mock_db_session)
         
         # Assert
-        assert mock_user_settings.subscription_status == "canceled"
+        assert mock_user_settings.subscription_status == "cancel_scheduled"
         # Tier remains Pro until period ends
         assert mock_user_settings.subscription_tier == "pro"
 
@@ -424,7 +424,7 @@ class TestHandleSubscriptionUncanceled:
         # Arrange
         from app.handlers.webhook_handlers import handle_subscription_uncanceled
         mock_db_session.query().filter().first.return_value = mock_user_settings
-        mock_user_settings.subscription_status = "canceled"
+        mock_user_settings.subscription_status = "cancel_scheduled"
         mock_user_settings.subscription_tier = "pro"
         
         event_data = {
