@@ -85,7 +85,7 @@ export function ContactDialog({ open, onOpenChange, senderEmail, senderDisplayNa
                     category: category,
                 });
             }
-            queryClient.invalidateQueries({ queryKey: diaryKeys.contactByEmail(senderEmail) });
+            queryClient.invalidateQueries({ queryKey: diaryKeys.contactLookup(senderEmail) });
             onOpenChange(false);
         } finally {
             setIsSaving(false);

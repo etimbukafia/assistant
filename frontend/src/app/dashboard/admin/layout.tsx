@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
@@ -31,5 +32,25 @@ export default async function AdminLayout({
         redirect("/dashboard/chat");
     }
 
-    return <>{children}</>;
+    return (
+        <div className="min-h-screen bg-linen/20">
+            <div className="mx-auto max-w-6xl px-6 py-8">
+                <div className="mb-6 flex flex-wrap items-center gap-3">
+                    <Link
+                        href="/dashboard/admin/telemetry"
+                        className="rounded-full border border-border/70 bg-white px-4 py-2 text-sm font-medium text-obsidian transition-colors hover:bg-linen/70"
+                    >
+                        Telemetry
+                    </Link>
+                    <Link
+                        href="/dashboard/admin/spend"
+                        className="rounded-full border border-border/70 bg-white px-4 py-2 text-sm font-medium text-obsidian transition-colors hover:bg-linen/70"
+                    >
+                        AI Spend
+                    </Link>
+                </div>
+                {children}
+            </div>
+        </div>
+    );
 }

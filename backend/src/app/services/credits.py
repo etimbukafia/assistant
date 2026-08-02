@@ -1,11 +1,11 @@
 """
 Credit service for AI usage gating.
 
-Manages user credits for Gemini AI operations:
+Manages user credits for billable hosted AI operations:
 - Trial users: 100 credits = $1.00 USD
 - Pro users: 500 credits = $5.00 USD
 
-Credits are only consumed by Gemini models (not Gemma).
+Credits are consumed by priced hosted models. Gemma remains free.
 """
 import logging
 from datetime import datetime, timezone
@@ -68,7 +68,7 @@ def add_credit_usage(
     """
     Add credit usage to user's current period.
 
-    Called after recording token usage for Gemini models.
+    Called after recording token usage for billable hosted models.
 
     Args:
         db: Database session
@@ -177,34 +177,18 @@ def get_credit_status(settings: UserSettings) -> Dict[str, Any]:
     }
 
 
-def is_gemini_model(model_name: str) -> bool:
+def is_billable_model_name(model_name: str) -> bool:
     """
-    Check if a model name is a Gemini model (not Gemma).
+    Check if a model name should consume credits.
 
-    Gemini models consume credits, Gemma models are free.
+    Billable hosted models consume credits. Gemma remains free.
 
     Args:
         model_name: Model name string
 
     Returns:
-        True if this is a billable Gemini model
+        True if this is a billable model
     """
-    if not model_name:
-        return False
+    from core.llm.token_tracking import is_billable_model
 
-    model_lower = model_name.lower()
-
-    # Handle "models/gemini-..." prefix from API responses
-    if "/" in model_lower:
-        model_lower = model_lower.rsplit("/", 1)[-1]
-
-    # Gemma models are free - don't count
-    if model_lower.startswith("gemma"):
-        return False
-
-    # Gemini models are paid
-    if model_lower.startswith("gemini"):
-        return True
-
-    # Unknown model - don't count to be safe
-    return False
+    return is_billable_model(model_name)

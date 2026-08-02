@@ -12,6 +12,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.data.models import CalendarEvent, Contact, ContextEntry, EntityReference, Message, Task
+from app.services.context_memory_policy import apply_confidence_retrieval_filter, apply_memory_retrieval_filter
 from app.services.warm_cache import WarmCacheService
 from app.services.warm_context_snapshot import (
     build_contact_snapshot,
@@ -206,7 +207,9 @@ class MentionContextService:
         limit = max(1, min(limit, 100))
         offset = max(0, offset)
 
-        memory_query = self.db.query(ContextEntry).filter(ContextEntry.user_id == self.user_id)
+        memory_query = apply_memory_retrieval_filter(
+            self.db.query(ContextEntry).filter(ContextEntry.user_id == self.user_id)
+        )
         normalized_type = _normalize_memory_type_query((memory_type or "").strip()) if memory_type else None
         if normalized_type:
             memory_query = memory_query.filter(ContextEntry.type == normalized_type)
@@ -234,13 +237,14 @@ class MentionContextService:
 
         results: List[Dict[str, str]] = []
         for row in rows:
+            subtitle = self._memory_subtitle_for_row(row)
             results.append(
                 {
                     "kind": "memory",
                     "ref": f"ctx:{row.id}",
                     "label": _memory_display_label(row.type, row.content),
                     "display_label": _memory_display_label(row.type, row.content),
-                    "subtitle": _memory_subtitle(row.entity_type, row.entity_id, row.status, row.importance_level),
+                    "subtitle": subtitle,
                     "last_seen_at": row.updated_at.isoformat() if row.updated_at else "",
                     "created_at": row.created_at.isoformat() if row.created_at else "",
                     "updated_at": row.updated_at.isoformat() if row.updated_at else "",
@@ -251,7 +255,7 @@ class MentionContextService:
 
     def _build_mentions_index(self) -> Dict[str, Any]:
         context_rows = (
-            self.db.query(ContextEntry)
+            apply_memory_retrieval_filter(self.db.query(ContextEntry))
             .filter(
                 ContextEntry.user_id == self.user_id,
                 ContextEntry.entity_type.in_(["contact", "event", "thread"]),
@@ -268,6 +272,8 @@ class MentionContextService:
             if not ref:
                 continue
             if row.entity_type == "thread" and ref.startswith(MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX):
+                continue
+            if not self._entity_reference_exists(str(row.entity_type or ""), ref):
                 continue
             ref_key = ref.lower() if row.entity_type == "contact" else ref
             key = f"{row.entity_type}:{ref_key.lower()}"
@@ -481,11 +487,22 @@ class MentionContextService:
         unresolved.extend(overflow_mentions)
 
         entities: List[Dict[str, Any]] = []
+        primary_contact: Dict[str, Any] = {}
         for mention in resolved:
             snapshot = self._get_snapshot_for_mention(mention)
             entries = _extract_entries(snapshot, mention.kind)
             recent_changes = self._recent_changes_for_mention(mention, since_ts=since_ts) if include_recent_changes else []
             entity_payload: Dict[str, Any] = {}
+            if mention.kind == "contact":
+                contact_payload = self._build_contact_payload(mention.ref, mention.label, snapshot)
+                if contact_payload:
+                    entity_payload.update(contact_payload)
+                    if not primary_contact and contact_payload.get("contact_id"):
+                        primary_contact = {
+                            "id": contact_payload.get("contact_id"),
+                            "email": contact_payload.get("contact_email"),
+                            "name": contact_payload.get("contact_name") or mention.label,
+                        }
             if mention.kind == "event":
                 event_payload = self._build_event_payload(mention.ref)
                 if event_payload:
@@ -535,6 +552,7 @@ class MentionContextService:
             "selected_count": len(selected),
             "dropped_count": dropped,
             "context_types": list(kinds.keys()),
+            "primary_contact": primary_contact or None,
             "budgets": {
                 "max_items_per_entity": max_items_per_entity,
                 "max_items_total": max_items_total,
@@ -552,7 +570,7 @@ class MentionContextService:
         if window_start < max_window_start:
             window_start = max_window_start
         q = (
-            self.db.query(ContextEntry)
+            apply_confidence_retrieval_filter(self.db.query(ContextEntry))
             .filter(
                 ContextEntry.user_id == self.user_id,
                 ContextEntry.entity_type == mention.kind,
@@ -576,11 +594,104 @@ class MentionContextService:
                 "content": row.content,
                 "updated_at": row.updated_at.isoformat() if row.updated_at else None,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
-                "importance_level": row.importance_level,
                 "status": row.status,
             }
             for row in rows
         ]
+
+    def _memory_subtitle_for_row(self, row: ContextEntry) -> str:
+        scope_label = self._memory_scope_label(
+            entity_type=str(row.entity_type or ""),
+            entity_id=str(row.entity_id or ""),
+            linked_to=str(getattr(row, "linked_to", None) or ""),
+        )
+        return _memory_subtitle(scope_label, row.status)
+
+    def _memory_scope_label(self, *, entity_type: str, entity_id: str, linked_to: str) -> Optional[str]:
+        normalized_type = " ".join(str(entity_type or "").split()).strip().lower()
+        normalized_id = " ".join(str(entity_id or "").split()).strip()
+        if normalized_type == "global":
+            return None
+        if not normalized_type or not normalized_id:
+            return None
+        if not self._entity_reference_exists(normalized_type, normalized_id):
+            return None
+        label = " ".join(str(linked_to or "").split()).strip()
+        if label:
+            return label
+        return normalized_type.title()
+
+    def _entity_reference_exists(self, kind: str, ref: str) -> bool:
+        normalized_kind = " ".join(str(kind or "").split()).strip().lower()
+        normalized_ref = " ".join(str(ref or "").split()).strip()
+        if not normalized_kind or not normalized_ref:
+            return False
+        if normalized_kind == "contact":
+            query = self.db.query(Contact).filter(Contact.user_id == self.user_id)
+            if normalized_ref.isdigit():
+                return query.filter(Contact.id == int(normalized_ref)).first() is not None
+            return query.filter(func.lower(Contact.email) == normalized_ref.lower()).first() is not None
+        if normalized_kind == "thread":
+            ref_exists = (
+                self.db.query(EntityReference)
+                .filter(
+                    EntityReference.user_id == self.user_id,
+                    EntityReference.entity_type == "thread",
+                    EntityReference.ref == normalized_ref,
+                )
+                .first()
+            )
+            if ref_exists:
+                return True
+            return (
+                self.db.query(Message)
+                .filter(
+                    Message.user_id == self.user_id,
+                    Message.thread_id == normalized_ref,
+                )
+                .first()
+            ) is not None
+        if normalized_kind == "event":
+            if normalized_ref.isdigit():
+                event = (
+                    self.db.query(CalendarEvent)
+                    .filter(CalendarEvent.user_id == self.user_id, CalendarEvent.id == int(normalized_ref))
+                    .first()
+                )
+                if event:
+                    return True
+            event = (
+                self.db.query(CalendarEvent)
+                .filter(CalendarEvent.user_id == self.user_id, CalendarEvent.external_event_id == normalized_ref)
+                .first()
+            )
+            if event:
+                return True
+            return (
+                self.db.query(EntityReference)
+                .filter(
+                    EntityReference.user_id == self.user_id,
+                    EntityReference.entity_type == "event",
+                    EntityReference.ref == normalized_ref,
+                )
+                .first()
+            ) is not None
+        if normalized_kind == "message":
+            query = self.db.query(Message).filter(Message.user_id == self.user_id)
+            if normalized_ref.isdigit():
+                return query.filter(Message.id == int(normalized_ref)).first() is not None
+            return query.filter(
+                or_(Message.message_id == normalized_ref, Message.external_message_id == normalized_ref)
+            ).first() is not None
+        if normalized_kind == "task":
+            if not normalized_ref.isdigit():
+                return False
+            return (
+                self.db.query(Task)
+                .filter(Task.user_id == self.user_id, Task.id == int(normalized_ref))
+                .first()
+            ) is not None
+        return False
 
     def _build_event_payload(self, event_ref: str) -> Dict[str, Any]:
         event = None
@@ -648,10 +759,34 @@ class MentionContextService:
                 "entity_id": str(payload.get("id") or event_ref),
                 "created_by": "Teeks",
                 "created_at": created_at,
-                "importance_level": "high" if participant_names else "normal",
                 "status": payload.get("status") or "active",
             }
         ]
+
+    def _build_contact_payload(self, contact_ref: str, label: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        contact = (
+            self.db.query(Contact)
+            .filter(
+                Contact.user_id == self.user_id,
+                func.lower(Contact.email) == str(contact_ref or "").lower(),
+            )
+            .first()
+        )
+        if not contact:
+            return {}
+
+        payload: Dict[str, Any] = {
+            "contact_id": contact.id,
+            "contact_email": (contact.email or "").strip().lower() or None,
+            "contact_name": (contact.name or "").strip() or label or None,
+        }
+        brief_preview = snapshot.get("brief_preview") or {}
+        if brief_preview:
+            payload["brief_preview"] = brief_preview
+        compact_contact = snapshot.get("contact") or {}
+        if compact_contact:
+            payload["contact"] = compact_contact
+        return payload
 
     def _build_thread_message_entries(self, thread_ref: str, limit: int = 3) -> List[Dict[str, Any]]:
         rows = (
@@ -681,7 +816,6 @@ class MentionContextService:
                     "entity_id": thread_ref,
                     "created_by": "Teeks",
                     "created_at": created_at.isoformat() if created_at else None,
-                    "importance_level": "normal",
                     "status": row.status or "inbox",
                 }
             )
@@ -717,15 +851,7 @@ class MentionContextService:
                 )
                 if not contact:
                     contact_lookup = mention.label or mention.ref
-                    contact = (
-                        self.db.query(Contact)
-                        .filter(
-                            Contact.user_id == self.user_id,
-                            (func.lower(Contact.name) == contact_lookup.lower())
-                            | Contact.name.ilike(f"%{contact_lookup}%"),
-                        )
-                        .first()
-                    )
+                    contact = self._find_unique_contact_by_exact_name(contact_lookup)
                 if contact and contact.email:
                     resolved.append(Mention(kind="contact", ref=contact.email.lower(), label=(contact.name or "").strip() or mention.label))
                     continue
@@ -871,6 +997,23 @@ class MentionContextService:
             deduped[f"{mention.kind}:{mention.ref.lower()}"] = mention
         return list(deduped.values()), unresolved
 
+    def _find_unique_contact_by_exact_name(self, lookup: str) -> Optional[Contact]:
+        token = _normalize_lookup_token(lookup)
+        if not token:
+            return None
+        rows = (
+            self.db.query(Contact)
+            .filter(
+                Contact.user_id == self.user_id,
+                func.lower(Contact.name) == token.lower(),
+            )
+            .limit(2)
+            .all()
+        )
+        if len(rows) != 1:
+            return None
+        return rows[0]
+
     def _get_snapshot_for_mention(self, mention: Mention) -> Dict[str, Any]:
         scope = f"{mention.kind}:{mention.ref}"
         if mention.kind == "contact":
@@ -927,7 +1070,6 @@ class MentionContextService:
                 "recent_timeline": [],
             }
 
-        importance = "high" if (task.priority or "").lower() in {"high", "urgent"} else "normal"
         entity_id = str(task.id)
         timeline: List[Dict[str, Any]] = [
             {
@@ -938,7 +1080,6 @@ class MentionContextService:
                 "entity_id": entity_id,
                 "created_by": "Teeks",
                 "created_at": task.created_at.isoformat() if task.created_at else now_iso,
-                "importance_level": importance,
             },
             {
                 "id": f"task:{task.id}:status",
@@ -948,7 +1089,6 @@ class MentionContextService:
                 "entity_id": entity_id,
                 "created_by": "Teeks",
                 "created_at": task.updated_at.isoformat() if task.updated_at else now_iso,
-                "importance_level": "normal",
             },
         ]
         if task.deadline:
@@ -961,7 +1101,6 @@ class MentionContextService:
                     "entity_id": entity_id,
                     "created_by": "Teeks",
                     "created_at": task.deadline.isoformat(),
-                    "importance_level": importance,
                 }
             )
         if task.description:
@@ -974,11 +1113,40 @@ class MentionContextService:
                     "entity_id": entity_id,
                     "created_by": "Teeks",
                     "created_at": task.updated_at.isoformat() if task.updated_at else now_iso,
-                    "importance_level": "normal",
                 }
             )
 
-        by_type: Dict[str, List[Dict[str, Any]]] = {"commitment": [], "risks": []}
+        source_message = getattr(task, "source_message", None)
+        if source_message:
+            source_msg_ref = (source_message.message_id or "").strip()
+            source_thread_ref = (source_message.thread_id or "").strip()
+            task_thread_ref = (task.thread_id or "").strip()
+            is_manual_source = (
+                source_msg_ref.startswith(MANUAL_TASK_PLACEHOLDER_MESSAGE_PREFIX)
+                or source_thread_ref.startswith(MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX)
+                or task_thread_ref.startswith(MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX)
+            )
+            if not is_manual_source:
+                source_summary = (source_message.summary or "").strip()
+                source_snippet = source_summary or (source_message.decrypted_body or "").strip()[:240]
+                if source_snippet:
+                    source_subject = (source_message.subject or "Email").strip()
+                    source_sender = (source_message.sender or "unknown sender").strip()
+                    timeline.append(
+                        {
+                            "id": f"task:{task.id}:source_email",
+                            "type": "insight",
+                            "content": f"Source email \"{source_subject}\" from {source_sender}: {source_snippet}",
+                            "entity_type": "task",
+                            "entity_id": entity_id,
+                            "created_by": "Teeks",
+                            "created_at": source_message.received_at.isoformat()
+                            if source_message.received_at
+                            else now_iso,
+                        }
+                    )
+
+        by_type: Dict[str, List[Dict[str, Any]]] = {"commitment": [], "risk": []}
         for item in timeline:
             by_type.setdefault(item["type"], []).append(item)
 
@@ -993,7 +1161,7 @@ class MentionContextService:
             "counts_by_type": {k: len(v) for k, v in by_type.items() if v},
             "by_type": {k: v for k, v in by_type.items() if v},
             "by_entity": {f"task:{entity_id}": timeline},
-            "critical_items": [item for item in timeline if item.get("importance_level") == "high"],
+            "critical_items": [],
             "recent_timeline": timeline,
         }
 
@@ -1001,13 +1169,13 @@ class MentionContextService:
 def _extract_entries(snapshot: Dict[str, Any], kind: str) -> List[Dict[str, Any]]:
     by_type = snapshot.get("by_type", {}) or {}
     order_map = {
-        "contact": ["relationships", "preferences", "risks", "decision", "commitment"],
-        "event": ["decision", "commitment", "risks", "relationships", "preferences"],
-        "message": ["commitment", "decision", "risks", "relationships", "preferences"],
-        "thread": ["decision", "commitment", "risks", "relationships", "preferences"],
-        "task": ["commitment", "risks", "decision", "relationships", "preferences"],
+        "contact": ["insight", "preference", "risk", "decision", "commitment"],
+        "event": ["decision", "commitment", "risk", "insight", "preference"],
+        "message": ["commitment", "decision", "risk", "insight", "preference"],
+        "thread": ["decision", "commitment", "risk", "insight", "preference"],
+        "task": ["commitment", "insight", "risk", "decision", "preference"],
     }
-    order = order_map.get(kind, ["risks"])
+    order = order_map.get(kind, ["risk"])
     results: List[Dict[str, Any]] = []
     seen = set()
     for type_name in order:
@@ -1023,23 +1191,21 @@ def _extract_entries(snapshot: Dict[str, Any], kind: str) -> List[Dict[str, Any]
 def _score_entries(entries: List[Dict[str, Any]], kind: str, label: str) -> List[Tuple[Dict[str, Any], float]]:
     scored: List[Tuple[Dict[str, Any], float]] = []
     for item in entries:
-        importance = item.get("importance_level") or "normal"
-        importance_score = {"low": 0.0, "normal": 1.0, "high": 3.0}.get(importance, 1.0)
         recency_score = _recency_score(item.get("created_at"))
         kind_bonus = _kind_bonus(kind, item.get("type"))
         label_bonus = 0.5 if label and label.lower() in (item.get("content") or "").lower() else 0.0
-        scored.append((item, importance_score + recency_score + kind_bonus + label_bonus))
+        scored.append((item, recency_score + kind_bonus + label_bonus))
     scored.sort(key=lambda tup: tup[1], reverse=True)
     return scored
 
 
 def _kind_bonus(kind: str, entry_type: Optional[str]) -> float:
     priorities = {
-        "contact": {"relationships": 1.5, "preferences": 0.75},
+        "contact": {"insight": 1.5, "preference": 0.75},
         "event": {"decision": 1.5, "commitment": 1.25},
         "message": {"commitment": 1.5, "decision": 1.25},
         "thread": {"decision": 1.5, "commitment": 1.25},
-        "task": {"commitment": 1.5, "risks": 1.0},
+        "task": {"commitment": 1.5, "risk": 1.0},
     }
     return priorities.get(kind, {}).get(entry_type or "", 0.0)
 
@@ -1053,9 +1219,13 @@ def _recency_score(created_at: Optional[str]) -> float:
             ts = ts.replace(tzinfo=timezone.utc)
         delta_days = (datetime.now(timezone.utc) - ts).days
         if delta_days <= 3:
-            return 2.0
+            return 2.5
         if delta_days <= 14:
+            return 1.75
+        if delta_days <= 45:
             return 1.0
+        if delta_days <= 180:
+            return 0.35
     except Exception:
         return 0.0
     return 0.0
@@ -1070,7 +1240,6 @@ def _to_context_entry_payload(item: Dict[str, Any], mention: Mention, score: flo
         "entity_id": item.get("entity_id"),
         "created_by": item.get("created_by"),
         "created_at": item.get("created_at"),
-        "importance_level": item.get("importance_level"),
         "mention_kind": mention.kind,
         "mention_ref": mention.ref,
         "mention_label": mention.label,
@@ -1132,9 +1301,9 @@ def _memory_type_title(value: str) -> str:
     mapping = {
         "decision": "Decision",
         "commitment": "Commitment",
-        "preferences": "Preference",
-        "relationships": "Relationship",
-        "risks": "Risk",
+        "preference": "Preference",
+        "insight": "Insight",
+        "risk": "Risk",
     }
     return mapping.get((value or "").strip().lower(), "Remember")
 
@@ -1147,7 +1316,7 @@ def _memory_display_label(entry_type: str, content: str) -> str:
     return prefix
 
 
-def _memory_subtitle(entity_type: Optional[str], entity_id: Optional[str], status: Optional[str], importance: Optional[str]) -> str:
+def _memory_subtitle(entity_type: Optional[str], entity_id: Optional[str], status: Optional[str]) -> str:
     parts: List[str] = []
     if entity_type:
         scope_label = (entity_type or "").strip().title()
@@ -1157,8 +1326,16 @@ def _memory_subtitle(entity_type: Optional[str], entity_id: Optional[str], statu
             parts.append(scope_label)
     if status:
         parts.append(str(status).title())
-    if importance:
-        parts.append(f"{str(importance).title()} priority")
+    return " | ".join(parts)
+
+
+def _memory_subtitle(scope_label: Optional[str], status: Optional[str]) -> str:
+    parts: List[str] = []
+    label = " ".join(str(scope_label or "").split()).strip()
+    if label:
+        parts.append(label)
+    if status:
+        parts.append(str(status).title())
     return " | ".join(parts)
 
 
@@ -1171,16 +1348,15 @@ def _normalize_memory_type_query(query: str) -> Optional[str]:
         "decisions": "decision",
         "commitment": "commitment",
         "commitments": "commitment",
-        "preference": "preferences",
-        "preferences": "preferences",
-        "relationship": "relationships",
-        "relationships": "relationships",
-        "watchout": "risks",
-        "watchouts": "risks",
-        "risks": "risks",
-        "insights": "risks",
-        "risk": "risks",
-        "risks": "risks",
+        "preference": "preference",
+        "preferences": "preference",
+        "relationship": "insight",
+        "relationships": "insight",
+        "watchout": "risk",
+        "watchouts": "risk",
+        "risks": "risk",
+        "insights": "insight",
+        "risk": "risk",
     }
     return aliases.get(token)
 
@@ -1282,3 +1458,4 @@ def _format_suggestion_subtitle(kind: str, last_seen_at: str, sample: str, menti
     if sample_hint:
         parts.append(sample_hint)
     return " | ".join(parts)
+

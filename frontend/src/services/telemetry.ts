@@ -7,7 +7,6 @@ type TelemetryEvent = {
     event_name: string;
     event_payload: TelemetryPayload;
     page_path?: string;
-    session_id?: string;
     client_ts: string;
 };
 
@@ -30,6 +29,14 @@ export interface TelemetryDashboard {
         action_approved: number;
     }>;
 }
+
+const EVENT_PAYLOAD_ALLOWLIST: Record<string, readonly string[]> = {
+    mention_selected: ["mention_type", "source"],
+    chat_message_sent: ["has_mentions", "mention_count", "source"],
+    chat_chip_clicked: ["chip_id", "prompt_length", "source"],
+    chat_approval_sent: ["pending_count", "source"],
+    chat_action_approved: ["pending_count", "source"],
+};
 
 const queue: TelemetryEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -70,32 +77,45 @@ async function flushTelemetry() {
 export function trackUIEvent(eventName: string, payload: TelemetryPayload = {}): void {
     try {
         if (typeof window !== "undefined") {
+            const safePayload = sanitizeTelemetryPayload(eventName, payload);
             queue.push({
                 event_id: generateEventId(),
                 event_name: eventName,
-                event_payload: payload,
+                event_payload: safePayload,
                 page_path: window.location.pathname,
-                session_id:
-                    window.localStorage.getItem("chat_current_session_id") ||
-                    window.sessionStorage.getItem("chat_current_session_id") ||
-                    undefined,
                 client_ts: new Date().toISOString(),
             });
             scheduleFlush();
 
             window.dispatchEvent(
                 new CustomEvent("teeks.telemetry", {
-                    detail: { event: eventName, payload, at: new Date().toISOString() },
+                    detail: { event: eventName, payload: safePayload, at: new Date().toISOString() },
                 })
             );
         }
         if (process.env.NODE_ENV !== "production") {
             // eslint-disable-next-line no-console
-            console.debug("[telemetry]", eventName, payload);
+            console.debug("[telemetry]", eventName, sanitizeTelemetryPayload(eventName, payload));
         }
     } catch {
         // telemetry must never break UX flows
     }
+}
+
+function sanitizeTelemetryPayload(eventName: string, payload: TelemetryPayload): TelemetryPayload {
+    const allowedKeys = EVENT_PAYLOAD_ALLOWLIST[eventName] || [];
+    const sanitized: TelemetryPayload = {};
+
+    for (const key of allowedKeys) {
+        const value = payload[key];
+        if (typeof value === "boolean" || typeof value === "number") {
+            sanitized[key] = value;
+        } else if (typeof value === "string") {
+            sanitized[key] = value.slice(0, 120);
+        }
+    }
+
+    return sanitized;
 }
 
 export async function getTelemetryDashboard(days = 7, userId?: string, eventName?: string): Promise<TelemetryDashboard> {

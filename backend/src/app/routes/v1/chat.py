@@ -28,8 +28,10 @@ from app.chat.service import ChatService, ProcessingStatus
 from app.services.chat_metrics import summarize_chat_metrics
 from app.services.action_chips import get_cached_action_chips
 from app.services.warm_cache import get_warm_cache_service
+from app.services.warm_context_snapshot import build_profile_snapshot
 from app.services.mention_context import MentionContextService
 from app.chat.tools import ChatToolRegistry
+from app.security.privacy_utils import mask_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,19 @@ def _check_rate_limit(user_id: str):
     _rate_limit_store[user_id].append(now)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+def _prewarm_profile_context(db: Session, user_id: str) -> None:
+    """Best-effort prewarm of shared profile snapshot used by chat context assembly."""
+    try:
+        get_warm_cache_service().get_or_build(
+            tenant_id="default",
+            user_id=user_id,
+            scope="profile",
+            builder=lambda: build_profile_snapshot(db, user_id),
+        )
+    except Exception:
+        logger.debug("chat_profile_prewarm_failed user=%s", user_id, exc_info=True)
 
 
 # =============================================================================
@@ -148,6 +163,7 @@ async def get_action_chips(
     Fast, deterministic personalized action chips for new chat sessions.
     Uses lightweight DB reads only (no LLM calls).
     """
+    _prewarm_profile_context(db, user.user_id)
     return get_cached_action_chips(
         db=db,
         warm_cache=get_warm_cache_service(),
@@ -181,6 +197,7 @@ async def create_session(
 ):
     """Create a new chat session."""
     logger.info(f"Creating chat session: type={request.session_type}, user={user.user_id}")
+    _prewarm_profile_context(db, user.user_id)
     service = ChatService(db, user.user_id)
     
     # Extract first name from display_name for personalization
@@ -218,7 +235,7 @@ async def list_sessions(
             {
                 "id": s.id,
                 "session_type": s.session_type,
-                "title": s.title or ("Reflection" if s.session_type == "reflection" else "Work Chat"),
+                "title": s.title or ("Memory Reflection" if s.session_type == "reflection" else "Memory Reflection Space"),
                 "created_at": s.created_at.isoformat(),
                 "last_activity_at": s.last_activity_at.isoformat(),
                 "message_count": len(s.messages) if s.messages else 0
@@ -242,7 +259,7 @@ async def get_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    messages = service.get_messages(session_id)
+    messages = service.get_recent_messages(session_id, limit=200)
     pending_actions = service.get_pending_actions(session_id)
     
     return {
@@ -321,24 +338,39 @@ async def send_message(
     # Rate limit check
     _check_rate_limit(user.user_id)
 
-    logger.info(f"Chat message: session={session_id}, user={user.user_id}, length={len(request.content)}")
+    logger.info(
+        "Chat message: session=%s user=%s length=%s",
+        mask_identifier(session_id),
+        mask_identifier(user.user_id),
+        len(request.content),
+    )
     service = ChatService(db, user.user_id)
 
     # Verify session exists
     session = service.get_session(session_id)
     if not session:
-        logger.warning(f"Chat session not found: session={session_id}, user={user.user_id}")
+        logger.warning(
+            "Chat session not found: session=%s user=%s",
+            mask_identifier(session_id),
+            mask_identifier(user.user_id),
+        )
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Process message
     try:
         result = await service.send_message(session_id, request.content, mentions=request.mentions or [])
     except Exception as e:
-        logger.error(f"Chat send_message failed: session={session_id}, user={user.user_id}, error={e}", exc_info=True)
+        logger.error(
+            "Chat send_message failed: session=%s user=%s error=%s",
+            mask_identifier(session_id),
+            mask_identifier(user.user_id),
+            e,
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail="Failed to process message")
 
     if result.status == ProcessingStatus.FAILED:
-        logger.error(f"Chat processing failed: session={session_id}, error={result.error}")
+        logger.error("Chat processing failed: session=%s error=%s", mask_identifier(session_id), result.error)
         raise HTTPException(status_code=500, detail=result.error or "Failed to process message")
 
     # Return unified response format
@@ -350,12 +382,20 @@ async def send_message(
     if result.status == ProcessingStatus.PROCESSING:
         # Async path - return job_id for polling
         response["job_id"] = result.job_id
-        logger.info(f"Chat async: session={session_id}, job_id={result.job_id}")
+        logger.info(
+            "Chat async: session=%s job_id=%s",
+            mask_identifier(session_id),
+            mask_identifier(result.job_id),
+        )
     else:
         # Sync path - return response immediately
         response["response"] = result.response
         response["pending_actions"] = result.pending_actions or []
-        logger.info(f"Chat sync complete: session={session_id}, response_length={len(result.response or '')}")
+        logger.info(
+            "Chat sync complete: session=%s response_length=%s",
+            mask_identifier(session_id),
+            len(result.response or ""),
+        )
 
     return response
 
@@ -380,7 +420,11 @@ async def get_job_status(
     result = service.get_job_status(job_id)
 
     if result.status == ProcessingStatus.FAILED and result.error == "Job not found":
-        logger.warning("Chat job polling failed: user=%s job_id=%s reason=not_found", user.user_id, job_id)
+        logger.warning(
+            "Chat job polling failed: user=%s job_id=%s reason=not_found",
+            mask_identifier(user.user_id),
+            mask_identifier(job_id),
+        )
         raise HTTPException(status_code=404, detail="Job not found")
 
     response = {
@@ -397,8 +441,8 @@ async def get_job_status(
     elif result.status == ProcessingStatus.FAILED:
         logger.error(
             "Chat job failed: user=%s job_id=%s message_id=%s error=%s",
-            user.user_id,
-            job_id,
+            mask_identifier(user.user_id),
+            mask_identifier(job_id),
             result.message_id,
             result.error,
         )

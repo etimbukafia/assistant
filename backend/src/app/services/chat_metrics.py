@@ -22,6 +22,10 @@ _signature_cache_lock = threading.RLock()
 _signature_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 
 
+def _persisted_session_key(user_id: str, session_id: str) -> str:
+    return hashlib.sha256(f"{user_id}:{session_id}".encode("utf-8")).hexdigest()[:24]
+
+
 def build_prompt_text(
     messages: List[Dict[str, Any]],
     *,
@@ -162,7 +166,7 @@ def record_chat_model_metric(
 
     row = ChatModelCallMetric(
         user_id=user_id,
-        session_id=session_id,
+        session_id=_persisted_session_key(user_id, session_id),
         model=model,
         provider=provider,
         path=path,
@@ -176,7 +180,6 @@ def record_chat_model_metric(
         repeated_prefix_rate=max(0.0, min(1.0, float(repeated_rate))),
         tool_definitions_count=max(0, int(tool_definitions_count)),
         tool_calls_count=max(0, int(tool_calls_count)),
-        prompt_prefix_signature=prompt_signature,
         success=bool(success),
         error_type=(error_type or "")[:80] or None,
     )

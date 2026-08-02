@@ -11,6 +11,7 @@ from .config import LLMConfig
 from .providers.base import BaseLLMProvider
 from .providers.hf_transformers import HFTransformersProvider
 from .providers.gemini import GeminiProvider
+from .providers.anthropic import AnthropicProvider
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class LLMOrchestrator:
         elif self.config.provider == "gemini":
             logger.info(f"Using Gemini API: {self.config.gemini_model}")
             return GeminiProvider(self.config)
+        elif self.config.provider == "anthropic":
+            logger.info(f"Using Anthropic API: {self.config.anthropic_model}")
+            return AnthropicProvider(self.config)
         else:
             raise ValueError(f"Unknown provider: {self.config.provider}")
 
@@ -67,6 +71,22 @@ class LLMOrchestrator:
         """
         return self.provider.generate(prompt, system_prompt)
 
+    def generate_text(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        *,
+        max_output_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        """Generate raw text synchronously."""
+        return self.provider.generate_text(
+            prompt,
+            system_prompt,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+        )
+
     async def agenerate_text(
         self,
         prompt: str,
@@ -79,6 +99,26 @@ class LLMOrchestrator:
         Uses native async I/O when the provider supports it (e.g. Gemini).
         """
         return await self.provider.agenerate_text(prompt, system_prompt)
+
+    async def agenerate_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
+        max_output_tokens: int = 300,
+    ) -> Dict[str, Any]:
+        """
+        Async generate with normalized tool calling.
+
+        Providers with native tool support adapt their SDK-specific message and
+        tool formats behind the shared interface.
+        """
+        return await self.provider.agenerate_with_tools(
+            messages=messages,
+            tools=tools,
+            system_prompt=system_prompt,
+            max_output_tokens=max_output_tokens,
+        )
 
     def generate_batch(
         self,
@@ -99,7 +139,7 @@ class LLMOrchestrator:
 
     def switch_provider(self, provider: str) -> None:
         """Switch to a different provider at runtime"""
-        if provider not in ("huggingface", "gemini"):
+        if provider not in ("huggingface", "gemini", "anthropic"):
             raise ValueError(f"Unknown provider: {provider}")
 
         if self._provider is not None:
@@ -108,6 +148,10 @@ class LLMOrchestrator:
 
         self.config.provider = provider
         logger.info(f"Switched to provider: {provider}")
+
+    def supports_tools(self) -> bool:
+        """Whether the active provider supports native tool calling."""
+        return self.provider.supports_tools()
 
     def cleanup(self) -> None:
         """Release resources"""

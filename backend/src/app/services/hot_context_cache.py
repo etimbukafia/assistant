@@ -222,7 +222,7 @@ class HotContextCacheService:
 
 def _filter_active(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     now = datetime.now(timezone.utc)
-    governed_statuses = {"active", "resolved", "stale", "archived"}
+    governed_statuses = {"active", "resolved", "stale", "archived", "forgotten"}
     filtered = []
     for item in entries or []:
         status = (item.get("status") or "active").lower()

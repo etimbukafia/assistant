@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import RedirectResponse
 
 # App infrastructure
@@ -31,14 +32,21 @@ from app.routes.v1 import (
     focus,
     telemetry,
     action_tools,
+    contacts,
+    automations,
 )
 from app.security.rate_limiter import RateLimitMiddleware
+from app.infra.config import get_settings
 
 app = FastAPI(
     title="AI Assistant for Assistants",
     description="Universal Inbox Brain - Email management with AI",
     version="1.0.0"
 )
+app_settings = get_settings()
+enforce_https = app_settings.FORCE_HTTPS or app_settings.ENV in {"staging", "production"}
+if enforce_https:
+    app.add_middleware(HTTPSRedirectMiddleware)
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -58,12 +66,19 @@ app.add_middleware(
 # Rate limiting middleware (applied to chat and sync endpoints)
 app.add_middleware(RateLimitMiddleware)
 
+
+@app.middleware("http")
+async def add_hsts_header(request: Request, call_next):
+    response = await call_next(request)
+    if enforce_https:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 # Initialize database and logging on startup
 @app.on_event("startup")
 def startup_event():
     setup_logging(level="INFO", structured=False)
-    from app.infra.config import get_settings
-    print(f"Startup Config: ENV={get_settings().ENV}")
+    print(f"Startup Config: ENV={app_settings.ENV}")
     init_db()
     schedule_cleanup_job_if_needed()
     schedule_chat_cleanup_job_if_needed()
@@ -254,9 +269,12 @@ app.include_router(webhooks.router, prefix="/v1")  # Gmail/Calendar/Outlook/Bill
 app.include_router(notifications.router, prefix="/v1")
 app.include_router(onboarding.router, prefix="/v1")
 app.include_router(vault.router, prefix="/v1")
+app.include_router(vault.context_router, prefix="/v1")
 app.include_router(focus.router, prefix="/v1")
 app.include_router(telemetry.router, prefix="/v1")
 app.include_router(action_tools.router, prefix="/v1")
+app.include_router(contacts.router, prefix="/v1")
+app.include_router(automations.router, prefix="/v1")
 
 
 @app.get("/")

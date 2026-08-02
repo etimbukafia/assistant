@@ -20,13 +20,14 @@ from app.data.schemas import (
     ThreadDetailResponse, ThreadStateResponse, ThreadMessageResponse,
     TaskListItem, SchedulingSuggestionResponse
 )
-from app.jobs.worker import handle_process_email_batch
+from app.jobs.worker import handle_process_email_batch, handle_emit_event_batch
 from app.jobs.queue import queue_service
 from core.events import emit_event
 from app.processors.ai import AIProcessor
 from app.services.thread_state import ThreadStateService
 from core.cache import thread_cache
 from app.services.entity_cache_coordinator import EntityCacheCoordinator
+from app.services.contact_linking import ContactLinker
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
 cache_coordinator = EntityCacheCoordinator()
@@ -39,7 +40,31 @@ def _tenant_id() -> str:
 def _invalidate_thread_and_prewarm(db: Session, user_id: str, thread_id: str) -> None:
     if not thread_id:
         return
-    cache_coordinator.invalidate_thread(_tenant_id(), user_id, thread_id)
+    cache_coordinator.invalidate_thread_related_contact(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user_id,
+        thread_id=thread_id,
+    )
+    cache_coordinator.prewarm_action_chips(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=message.user_id,
+    )
+
+
+def _invalidate_message_related_and_prewarm(db: Session, message: Message) -> None:
+    if not message.user_id:
+        return
+    cache_coordinator.invalidate_message_related_contact(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=message.user_id,
+        message_db_id=message.id,
+        thread_id=message.thread_id,
+        contact_id=message.contact_id,
+        message_scope_id=message.message_id,
+    )
     cache_coordinator.prewarm_action_chips(
         db=db,
         tenant_id=_tenant_id(),
@@ -71,6 +96,7 @@ async def sync_messages(
     try:
         # Fetch messages from Gmail
         messages = gmail_client.get_messages(max_results=max_results, query=query)
+        contact_linker = ContactLinker(db=db, user_id=user.user_id)
 
         # Initialize filter service
         filter_service = EmailFilterService(db=db, user_id=user.user_id)
@@ -78,6 +104,7 @@ async def sync_messages(
         synced_count = 0
         filtered_count = 0
         message_ids = []  # Messages to process with AI
+        created_messages: list[Message] = []
 
         for msg_data in messages:
             # Check if message already exists
@@ -114,6 +141,11 @@ async def sync_messages(
                 subject=msg_data['subject'],
                 sender=msg_data['sender'],
                 recipient=msg_data['recipient'],
+                contact_id=contact_linker.resolve_message_contact_id(
+                    sender_value=msg_data['sender'],
+                    recipient_value=msg_data.get('recipient'),
+                    source="messages_sync",
+                ),
                 body=encrypt_body(msg_data['body']),
                 body_encrypted=True,
                 received_at=msg_data['received_at'],
@@ -124,6 +156,8 @@ async def sync_messages(
 
             db.add(message)
             db.flush()
+            contact_linker.link_thread_state(message.thread_id, message.contact_id)
+            created_messages.append(message)
             synced_count += 1
 
             # Only queue for AI processing if filter allows
@@ -145,6 +179,8 @@ async def sync_messages(
                 account.last_history_id = history_id
 
         db.commit()
+        for message in created_messages:
+            _invalidate_message_related_and_prewarm(db, message)
 
         # Process messages in batch (immediate, no queue delay)
         if message_ids:
@@ -162,6 +198,15 @@ async def sync_messages(
                 user_id=user.user_id,
                 task_type="process_email",
                 handler=handle_process_email_batch,
+                db=db
+            )
+
+            # Process user-scoped event tasks now so scheduling intents and
+            # downstream handlers are visible without waiting for background worker.
+            await queue_service.process_batch_now(
+                user_id=user.user_id,
+                task_type="emit_event",
+                handler=handle_emit_event_batch,
                 db=db
             )
 
@@ -277,7 +322,8 @@ def sync_sent_messages(
 
         # Find the thread state
         thread_state = db.query(ThreadState).filter(
-            ThreadState.thread_id == thread_id
+            ThreadState.thread_id == thread_id,
+            ThreadState.user_id == user.user_id,
         ).first()
 
         if thread_state and thread_state.needs_reply:
@@ -289,7 +335,12 @@ def sync_sent_messages(
 
     db.commit()
     for thread_id in thread_ids_updated:
-        cache_coordinator.invalidate_thread(_tenant_id(), user.user_id, thread_id)
+        cache_coordinator.invalidate_thread_related_contact(
+            db=db,
+            tenant_id=_tenant_id(),
+            user_id=user.user_id,
+            thread_id=thread_id,
+        )
     if thread_ids_updated:
         cache_coordinator.prewarm_action_chips(
             db=db,
@@ -475,11 +526,13 @@ def get_thread_detail(
 
     def build():
         thread_state = db.query(ThreadState).filter(
-            ThreadState.thread_id == thread_id
+            ThreadState.thread_id == thread_id,
+            ThreadState.user_id == user.user_id,
         ).first()
 
         messages = db.query(Message).filter(
-            Message.thread_id == thread_id
+            Message.thread_id == thread_id,
+            Message.user_id == user.user_id,
         ).order_by(Message.received_at.asc()).all()
 
         if not messages:
@@ -501,12 +554,14 @@ def get_thread_detail(
         ]
 
         tasks = db.query(Task).filter(
-            Task.thread_id == thread_id
+            Task.thread_id == thread_id,
+            Task.user_id == user.user_id,
         ).order_by(Task.created_at.desc()).all()
 
         suggestions = db.query(SchedulingSuggestion).filter(
             SchedulingSuggestion.thread_id == thread_id,
-            SchedulingSuggestion.status == "pending"
+            SchedulingSuggestion.status == "pending",
+            SchedulingSuggestion.user_id == user.user_id,
         ).order_by(SchedulingSuggestion.created_at.desc()).all()
 
         response = ThreadDetailResponse(
@@ -536,7 +591,8 @@ def get_thread_detail(
 
     # Re-attach bodies from DB after cache lookup — bodies are never cached
     messages = db.query(Message).filter(
-        Message.thread_id == thread_id
+        Message.thread_id == thread_id,
+        Message.user_id == user.user_id,
     ).order_by(Message.received_at.asc()).all()
     body_map = {msg.id: msg.decrypted_body for msg in messages}
     for msg in result["messages"]:
@@ -558,7 +614,8 @@ def get_message(message_id: int, db: Session = Depends(get_db_for_user)):
     
     # Fetch thread context for history awareness
     thread_state = db.query(ThreadState).filter(
-        ThreadState.thread_id == message.thread_id
+        ThreadState.thread_id == message.thread_id,
+        ThreadState.user_id == message.user_id,
     ).first()
 
     # Build message dict with tasks and thread context
@@ -764,7 +821,7 @@ def send_reply(
 
         db.commit()
 
-        _invalidate_thread_and_prewarm(db, message.user_id, message.thread_id)
+        _invalidate_message_related_and_prewarm(db, message)
 
         return SendReplyResponse(
             sent=True,
@@ -823,7 +880,7 @@ def reprocess_message(message_id: int, db: Session = Depends(get_db_for_user)):
 
     db.commit()
 
-    _invalidate_thread_and_prewarm(db, message.user_id, message.thread_id)
+    _invalidate_message_related_and_prewarm(db, message)
 
     return {"message": "Message reprocessed successfully"}
 
@@ -850,7 +907,7 @@ def update_message_status(
     message.status = status
     db.commit()
 
-    _invalidate_thread_and_prewarm(db, user.user_id, message.thread_id)
+    _invalidate_message_related_and_prewarm(db, message)
 
     return {"message": f"Message marked as {status}", "id": message_id, "status": status}
 
@@ -871,7 +928,7 @@ def mark_message_done(
     message.status = "done"
     db.commit()
 
-    _invalidate_thread_and_prewarm(db, user.user_id, message.thread_id)
+    _invalidate_message_related_and_prewarm(db, message)
 
     # Track pattern for learning (especially if marked done without replying)
     track_message_action(db, "mark_done", message)
@@ -893,7 +950,7 @@ def archive_message(
     message.status = "archived"
     db.commit()
 
-    _invalidate_thread_and_prewarm(db, user.user_id, message.thread_id)
+    _invalidate_message_related_and_prewarm(db, message)
 
     return {"message": "Message archived", "id": message_id}
 
@@ -911,6 +968,8 @@ def delete_message(
         raise HTTPException(status_code=404, detail="Message not found")
 
     thread_id = message.thread_id
+    contact_id = message.contact_id
+    message_scope_id = message.message_id
 
     # Delete related tasks first (foreign key constraint)
     db.query(Task).filter(Task.message_id == message_id).delete(synchronize_session='fetch')
@@ -925,7 +984,19 @@ def delete_message(
     db.delete(message)
     db.commit()
 
-    _invalidate_thread_and_prewarm(db, user.user_id, thread_id)
+    cache_coordinator.invalidate_message_related_contact(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user.user_id,
+        thread_id=thread_id,
+        contact_id=contact_id,
+        message_scope_id=message_scope_id,
+    )
+    cache_coordinator.prewarm_action_chips(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user.user_id,
+    )
 
     return {"message": "Message deleted", "id": message_id}
 

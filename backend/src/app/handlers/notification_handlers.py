@@ -12,9 +12,18 @@ from core.events import register_handler
 from app.infra.database import SessionLocal
 from app.data.models import Task, UserSettings
 from app.agents.modules.communication import CommunicationModule
+from app.infra.config import get_settings
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+
+_settings = get_settings()
+# Temporary product switch:
+# - Reminder notifications are paused
+# - Digest notifications are paused
+# - Deadline notifications remain active (via reminder_due event)
+ENABLE_REMINDER_NOTIFICATIONS = bool(getattr(_settings, "ENABLE_REMINDER_NOTIFICATIONS", False))
+ENABLE_DIGEST_NOTIFICATIONS = bool(getattr(_settings, "ENABLE_DIGEST_NOTIFICATIONS", False))
 
 
 def meets_email_criteria(task: Task) -> bool:
@@ -88,6 +97,10 @@ async def maybe_send_email_notification(event: Dict[str, Any], payload: Dict[str
     This runs when evaluate_reminder fires. It checks if the task
     is urgent enough to warrant an email interruption.
     """
+    if not ENABLE_REMINDER_NOTIFICATIONS:
+        logger.debug("Reminder email notifications disabled; skipping reminder_due email")
+        return
+
     task_id = payload.get("task_id")
     user_id = payload.get("user_id")
     
@@ -147,8 +160,8 @@ async def maybe_send_email_notification(event: Dict[str, Any], payload: Dict[str
 # =========================================================================
 
 @register_handler("reminder_due")
-async def create_reminder_notification(event: Dict[str, Any], payload: Dict[str, Any]):
-    """Create in-app + push notification when a task reminder fires."""
+async def create_task_deadline_notification(event: Dict[str, Any], payload: Dict[str, Any]):
+    """Create deadline notifications when reminder evaluation says a task needs attention."""
     task_id = payload.get("task_id")
     user_id = payload.get("user_id")
     task_title = payload.get("task_title", "Task reminder")
@@ -163,15 +176,15 @@ async def create_reminder_notification(event: Dict[str, Any], payload: Dict[str,
         from app.services.notification import NotificationService
         service = NotificationService(db, user_id)
         service.create_notification(
-            title=f"Reminder: {task_title}",
+            title=f"Deadline: {task_title}",
             body=message or f"Task '{task_title}' needs your attention",
-            category="reminder_due",
+            category="task_deadline",
             priority="high",
             target_type="task",
             target_id=str(task_id),
         )
     except Exception as e:
-        logger.error(f"Failed to create reminder notification: {e}", exc_info=True)
+        logger.error(f"Failed to create deadline notification: {e}", exc_info=True)
     finally:
         db.close()
 
@@ -179,6 +192,10 @@ async def create_reminder_notification(event: Dict[str, Any], payload: Dict[str,
 @register_handler("digest_delivered")
 async def create_digest_notification(event: Dict[str, Any], payload: Dict[str, Any]):
     """Create in-app + push notification when a digest is delivered."""
+    if not ENABLE_DIGEST_NOTIFICATIONS:
+        logger.debug("Digest notifications disabled; skipping digest_delivered notification")
+        return
+
     user_id = payload.get("user_id")
     digest_type = payload.get("digest_type", "digest")
     digest_id = payload.get("digest_id")

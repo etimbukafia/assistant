@@ -1,0 +1,2 @@
+ALTER TABLE chat_pending_actions
+ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP WITH TIME ZONE;

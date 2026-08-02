@@ -9,7 +9,9 @@ from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from enum import Enum
+import json
 import logging
+import re
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -22,10 +24,26 @@ from app.data.models import (
     Contact,
     ContextEntry,
     EntityReference,
+    ThreadState,
+    ChatSession,
+    ChatPendingAction,
+    VaultProposal,
 )
+
+MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX = "__manual_tasks__"
+MANUAL_TASK_PLACEHOLDER_MESSAGE_PREFIX = "__manual_tasks_placeholder__"
 from app.security.tool_validator import validate_tool_args
+from app.security.prompt_sanitizer import sanitize_with_detection
 from app.security.security_logger import log_validation_failure
 from app.services.vault import VaultService
+from app.services.contact_brief import ContactBriefService
+from app.services.contact_signals import ContactSignalsService
+from app.services.contact_timeline import ContactTimelineService
+from app.services.context_memory_policy import (
+    apply_confidence_retrieval_filter,
+    apply_historical_expiry_retrieval_filter,
+    is_expiry_retrievable,
+)
 from app.services.hot_context_cache import get_hot_context_cache_service
 from app.services.warm_cache import get_warm_cache_service
 from app.services.warm_context_snapshot import (
@@ -35,7 +53,7 @@ from app.services.warm_context_snapshot import (
     build_profile_snapshot,
     build_thread_snapshot,
 )
-from app.superpowers.email_drafting import EmailDraftingService
+from app.superpowers.email_drafting import DraftGenerationError, EmailDraftingService
 from app.superpowers.meeting_brief import MeetingBriefService
 
 logger = logging.getLogger(__name__)
@@ -47,6 +65,34 @@ HIDDEN_TOOLS = {
     "get_event_context",
     "get_message_context",
     "get_task_context",
+}
+
+APPROVAL_QUERY_STOPWORDS = {
+    "a",
+    "about",
+    "an",
+    "any",
+    "approve",
+    "approved",
+    "approval",
+    "did",
+    "do",
+    "have",
+    "is",
+    "last",
+    "me",
+    "pending",
+    "show",
+    "status",
+    "tell",
+    "that",
+    "the",
+    "this",
+    "we",
+    "what",
+    "when",
+    "who",
+    "with",
 }
 
 
@@ -119,7 +165,10 @@ class ChatToolRegistry:
             ),
             "search_tasks": ToolDefinition(
                 name="search_tasks",
-                description="Search user's tasks. Filter by status, priority, or keyword.",
+                description=(
+                    "Search user's tasks. Filter by status, priority, or keyword. "
+                    "Includes source email linkage metadata when available."
+                ),
                 tool_type=ToolType.READ_ONLY,
                 parameters={
                     "type": "object",
@@ -127,7 +176,13 @@ class ChatToolRegistry:
                         "query": {"type": "string", "description": "Keyword search"},
                         "status": {"type": "string", "enum": ["pending", "in_progress", "done", "dismissed"]},
                         "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"]},
-                        "limit": {"type": "integer", "default": 5}
+                        "limit": {"type": "integer", "default": 5},
+                        "include_source_email": {"type": "boolean", "default": True},
+                        "include_source_body": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Only for exact-wording requests; includes full source email body when available.",
+                        },
                     }
                 }
             ),
@@ -169,16 +224,69 @@ class ChatToolRegistry:
             ),
             "get_contact_context": ToolDefinition(
                 name="get_contact_context",
-                description="(Deprecated) Get relationship history and communication patterns for a contact. Prefer context_search.",
+                description="(Deprecated) Get relationship history and communication patterns for a contact. Prefer get_contact_brief.",
                 tool_type=ToolType.READ_ONLY,
                 parameters={
                     "type": "object",
                     "properties": {
+                        "contact_id": {"type": "integer"},
                         "contact": {"type": "string"},
                         "email": {"type": "string"},
                         "name": {"type": "string"},
                         "limit": {"type": "integer", "default": 5},
                         "include_non_active": {"type": "boolean", "default": False},
+                    },
+                },
+            ),
+            "get_contact_brief": ToolDefinition(
+                name="get_contact_brief",
+                description=(
+                    "Get the active relationship brief for a contact, including summary, preferences, "
+                    "open commitments, decisions, recent interactions, and signals."
+                ),
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "contact_id": {"type": "integer"},
+                        "contact": {"type": "string"},
+                        "email": {"type": "string"},
+                        "name": {"type": "string"},
+                    },
+                },
+            ),
+            "get_contact_timeline": ToolDefinition(
+                name="get_contact_timeline",
+                description=(
+                    "Get a chronological relationship timeline for a contact, combining recent interactions, "
+                    "decisions, commitments, and upcoming meetings."
+                ),
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "contact_id": {"type": "integer"},
+                        "contact": {"type": "string"},
+                        "email": {"type": "string"},
+                        "name": {"type": "string"},
+                        "limit": {"type": "integer", "default": 8},
+                    },
+                },
+            ),
+            "get_contact_signals": ToolDefinition(
+                name="get_contact_signals",
+                description=(
+                    "Get deterministic relationship signals for a contact, such as stale follow-up, open commitments, "
+                    "and upcoming meetings."
+                ),
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "contact_id": {"type": "integer"},
+                        "contact": {"type": "string"},
+                        "email": {"type": "string"},
+                        "name": {"type": "string"},
                     },
                 },
             ),
@@ -253,7 +361,7 @@ class ChatToolRegistry:
             "context_search": ToolDefinition(
                 name="context_search",
                 description=(
-                    "Unified search over context entries (decisions, commitments, preferences, relationships, risks) "
+                    "Unified search over context entries (decisions, commitments, preferences, insights, risks) "
                     "for memory retrieval. Use filters instead of raw SQL."
                 ),
                 tool_type=ToolType.READ_ONLY,
@@ -270,7 +378,7 @@ class ChatToolRegistry:
                             "type": "array",
                             "items": {
                                 "type": "string",
-                                "enum": ["decision", "commitment", "preferences", "relationships", "risks", "insight"],
+                                "enum": ["decision", "commitment", "preference", "risk", "insight"],
                             },
                         },
                         "status": {
@@ -288,7 +396,7 @@ class ChatToolRegistry:
                 name="entity_search",
                 description=(
                     "Unified entity search for contacts, threads, events, messages, and tasks. "
-                    "Requires explicit entity_types filter."
+                    "Requires explicit entity_types filter. For task results, source email linkage metadata is included when available."
                 ),
                 tool_type=ToolType.READ_ONLY,
                 parameters={
@@ -303,8 +411,31 @@ class ChatToolRegistry:
                         "offset": {"type": "integer", "default": 0},
                         "recent_first": {"type": "boolean", "default": True},
                         "include_archived": {"type": "boolean", "default": False},
+                        "include_source_body": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "When true and entity_types includes task, include full source email body if available.",
+                        },
                     },
                     "required": ["entity_types"],
+                },
+            ),
+            "get_approval_history": ToolDefinition(
+                name="get_approval_history",
+                description=(
+                    "Deterministically retrieve approval status/history across tasks, chat pending actions, "
+                    "and vault proposals. Use for questions like did we approve X, was this approved, or who approved X."
+                ),
+                tool_type=ToolType.READ_ONLY,
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Named item, vendor, project, or approval subject to search for."},
+                        "limit": {"type": "integer", "default": 10},
+                        "include_pending": {"type": "boolean", "default": True},
+                        "include_rejected": {"type": "boolean", "default": True},
+                        "since": {"type": "string", "description": "ISO datetime; approvals after this time."},
+                    },
                 },
             ),
             "search_vault": ToolDefinition(
@@ -335,7 +466,11 @@ class ChatToolRegistry:
             ),
             "draft_email": ToolDefinition(
                 name="draft_email",
-                description="Draft an email using thread/message/contact context.",
+                description=(
+                    "Draft a follow-up reply using thread/message/contact context. "
+                    "Defaults to email style when thread/email signals are present; "
+                    "otherwise returns a channel-neutral message draft."
+                ),
                 tool_type=ToolType.ACTION,
                 parameters={
                     "type": "object",
@@ -602,6 +737,8 @@ class ChatToolRegistry:
         status = params.get("status")
         priority = params.get("priority")
         limit = params.get("limit", 5)
+        include_source_email = bool(params.get("include_source_email", True))
+        include_source_body = bool(params.get("include_source_body", False))
         
         db_query = self.db.query(Task).filter(Task.user_id == self.user_id)
         
@@ -629,6 +766,9 @@ class ChatToolRegistry:
                     if getattr(t, "deadline", None)
                     else (getattr(t, "due_date", None).isoformat() if getattr(t, "due_date", None) else None)
                 ),
+                "source_email": self._build_task_source_email_payload(t, include_body=include_source_body)
+                if include_source_email
+                else None,
             }
             for t in tasks
         ]
@@ -731,23 +871,148 @@ class ChatToolRegistry:
         )
 
     def _execute_get_contact_context(self, params: Dict[str, Any]) -> ToolResult:
-        contact_email = self._resolve_contact_email(
+        result = self._execute_get_contact_brief(params)
+        if not result.success or not isinstance(result.data, dict):
+            return result
+
+        brief = result.data
+        entries: List[Dict[str, Any]] = []
+        summary = brief.get("summary") or {}
+        headline = " ".join(str(summary.get("headline") or "").split()).strip()
+        if headline:
+            entries.append(
+                {
+                    "id": f"contact-brief:headline:{brief.get('contact_id')}",
+                    "type": "insight",
+                    "content": headline,
+                    "entity_type": "contact",
+                    "entity_id": brief.get("contact_email"),
+                    "status": "active",
+                }
+            )
+
+        for item in (brief.get("preferences") or [])[:2]:
+            content = " ".join(str(item.get("content") or "").split()).strip()
+            if content:
+                entries.append(
+                    {
+                        "id": item.get("id"),
+                        "type": "preference",
+                        "content": content,
+                        "entity_type": "contact",
+                        "entity_id": brief.get("contact_email"),
+                        "status": "active",
+                    }
+                )
+
+        for item in (brief.get("commitments") or [])[:2]:
+            content = " ".join(str(item.get("title") or "").split()).strip()
+            if content:
+                entries.append(
+                    {
+                        "id": item.get("id"),
+                        "type": "commitment",
+                        "content": content,
+                        "entity_type": "contact",
+                        "entity_id": brief.get("contact_email"),
+                        "status": item.get("status") or "active",
+                    }
+                )
+
+        self._merge_hot(entries)
+        return ToolResult(
+            success=True,
+            data={
+                "contact_email": brief.get("contact_email"),
+                "contact_id": brief.get("contact_id"),
+                "entries": entries,
+                "brief": brief,
+            },
+            state_updates=result.state_updates,
+        )
+
+    def _execute_get_contact_brief(self, params: Dict[str, Any]) -> ToolResult:
+        contact = self._resolve_contact_record(
+            contact_id=params.get("contact_id"),
             contact=params.get("contact"),
             email=params.get("email"),
             name=params.get("name"),
         )
-        if not contact_email:
-            return ToolResult(success=False, error="contact/email/name is required")
-        limit = max(1, min(int(params.get("limit", 5)), 10))
-        include_non_active = bool(params.get("include_non_active", False))
-        return self._execute_context_search(
+        if not contact:
+            return ToolResult(success=False, error="contact_id/contact/email/name is required")
+
+        brief = ContactBriefService(self.db, user_id=self.user_id).get_contact_brief(contact.id, consumer="chat_tool")
+        if not brief:
+            return ToolResult(success=False, error="Contact brief not found")
+
+        data = self._serialize_contact_brief(contact, brief)
+        return ToolResult(
+            success=True,
+            data=data,
+            state_updates={"current_contact_id": contact.id},
+        )
+
+    def _execute_get_contact_timeline(self, params: Dict[str, Any]) -> ToolResult:
+        contact, brief = self._resolve_contact_and_brief(params)
+        if not contact or not brief:
+            return ToolResult(success=False, error="contact_id/contact/email/name is required")
+
+        limit = max(1, min(int(params.get("limit", 8)), 20))
+        timeline_items = ContactTimelineService(self.db, user_id=self.user_id).get_contact_timeline(contact.id, limit=limit)
+        timeline = [
             {
-                "entity_type": "contact",
-                "entity_id": contact_email,
-                "types": ["relationships"],
-                "limit": limit,
-                "include_non_active": include_non_active,
+                "id": item.get("id"),
+                "kind": item.get("kind"),
+                "title": self._sanitize_prompt_contact_text(
+                    item.get("title"),
+                    field=f"timeline.{item.get('kind') or 'item'}",
+                    contact_id=contact.id,
+                ),
+                "detail": self._sanitize_prompt_contact_text(
+                    item.get("detail"),
+                    field=f"timeline.{item.get('kind') or 'item'}_detail",
+                    contact_id=contact.id,
+                ),
+                "occurred_at": self._iso_value(item.get("occurred_at")),
+                "source_ref": item.get("source_ref"),
+                "source_type": item.get("source_type"),
+                "status": item.get("status"),
             }
+            for item in (timeline_items or [])
+        ]
+        return ToolResult(
+            success=True,
+            data={
+                "contact_id": contact.id,
+                "contact_email": (contact.email or "").strip().lower() or None,
+                "timeline": timeline,
+            },
+            state_updates={"current_contact_id": contact.id},
+        )
+
+    def _execute_get_contact_signals(self, params: Dict[str, Any]) -> ToolResult:
+        contact, brief = self._resolve_contact_and_brief(params)
+        if not contact or not brief:
+            return ToolResult(success=False, error="contact_id/contact/email/name is required")
+
+        signal_items = ContactSignalsService(self.db, user_id=self.user_id).get_contact_signals(contact.id, consumer="chat_tool")
+        signals = [
+            {
+                "key": item.get("key"),
+                "label": self._sanitize_prompt_contact_text(item.get("label"), field="signal.label", contact_id=contact.id),
+                "message": self._sanitize_prompt_contact_text(item.get("detail"), field="signal.detail", contact_id=contact.id),
+                "severity": item.get("severity"),
+            }
+            for item in (signal_items or [])[:6]
+        ]
+        return ToolResult(
+            success=True,
+            data={
+                "contact_id": contact.id,
+                "contact_email": (contact.email or "").strip().lower() or None,
+                "signals": signals,
+            },
+            state_updates={"current_contact_id": contact.id},
         )
 
     def _execute_get_thread_history(self, params: Dict[str, Any]) -> ToolResult:
@@ -781,17 +1046,16 @@ class ChatToolRegistry:
             .all()
         )
         entries = [
-            {
-                "id": f"thread_msg:{msg.id}",
-                "type": "thread_excerpt",
-                "content": f"{(msg.sender or '').strip() or 'Unknown sender'}: {((msg.summary or msg.decrypted_body or msg.subject or '').strip())[:260]}",
-                "entity_type": "thread",
-                "entity_id": thread_ref,
-                "created_by": "Teeks",
-                "created_at": msg.received_at.isoformat() if msg.received_at else None,
-                "importance_level": "normal",
-                "status": msg.status or "inbox",
-            }
+                {
+                    "id": f"thread_msg:{msg.id}",
+                    "type": "thread_excerpt",
+                    "content": f"{(msg.sender or '').strip() or 'Unknown sender'}: {((msg.summary or msg.decrypted_body or msg.subject or '').strip())[:260]}",
+                    "entity_type": "thread",
+                    "entity_id": thread_ref,
+                    "created_by": "Teeks",
+                    "created_at": msg.received_at.isoformat() if msg.received_at else None,
+                    "status": msg.status or "inbox",
+                }
             for msg in thread_messages
         ]
         self._merge_hot(entries)
@@ -803,7 +1067,7 @@ class ChatToolRegistry:
         result = self._execute_context_search(
             {
                 "entity_type": "executive",
-                "types": ["preferences"],
+                "types": ["preference", "preferences"],
                 "limit": limit,
                 "include_non_active": False,
             }
@@ -828,7 +1092,7 @@ class ChatToolRegistry:
             {
                 "entity_type": "event",
                 "entity_id": event_ref,
-                "types": ["decision", "commitment", "risks"],
+                "types": ["decision", "commitment", "risk", "risks"],
                 "limit": limit,
                 "include_non_active": include_non_active,
             }
@@ -884,16 +1148,15 @@ class ChatToolRegistry:
                     "id": f"event:{event.id}:facts",
                     "type": "event_facts",
                     "content": " | ".join(bits),
-                    "entity_type": "event",
-                    "entity_id": str(event.id),
-                    "created_by": "Teeks",
-                    "created_at": (event.updated_at or event.start_time or event.created_at).isoformat()
-                    if (event.updated_at or event.start_time or event.created_at)
-                    else None,
-                    "importance_level": "high" if participant_names else "normal",
-                    "status": event.status or "active",
-                }
-            ]
+                "entity_type": "event",
+                "entity_id": str(event.id),
+                "created_by": "Teeks",
+                "created_at": (event.updated_at or event.start_time or event.created_at).isoformat()
+                if (event.updated_at or event.start_time or event.created_at)
+                else None,
+                "status": event.status or "active",
+            }
+        ]
         self._merge_hot(entries)
         return ToolResult(success=True, data={"event_id": event_ref, "entries": entries})
 
@@ -907,7 +1170,7 @@ class ChatToolRegistry:
             {
                 "entity_type": "message",
                 "entity_id": message_ref,
-                "types": ["commitment", "decision", "risks"],
+                "types": ["commitment", "decision", "risk", "risks"],
                 "limit": limit,
                 "include_non_active": include_non_active,
             }
@@ -949,8 +1212,30 @@ class ChatToolRegistry:
         if entity_type and entity_type not in allowed_entity_types:
             return ToolResult(success=False, error="entity_type is invalid")
 
-        allowed_types = {"decision", "commitment", "preferences", "relationships", "risks", "insight"}
-        types = [t for t in types if t in allowed_types]
+        allowed_types = {
+            "decision",
+            "commitment",
+            "preference",
+            "risk",
+            "insight",
+        }
+        normalized_types: list[str] = []
+        for item in types:
+            if item == "preference":
+                normalized_types.append("preference")
+            elif item == "risk":
+                normalized_types.append("risk")
+            elif item == "insight":
+                normalized_types.append("insight")
+            elif item == "preferences":
+                normalized_types.append("preference")
+            elif item in {"risks", "relationship", "relationships"}:
+                normalized_types.append("insight" if item.startswith("relationship") else "risk")
+            elif item in allowed_types:
+                normalized_types.append(item)
+        types = sorted(set(normalized_types))
+        if entity_type == "contact" and not types:
+            types = ["insight", "preference", "decision", "commitment", "risk"]
 
         allowed_status = {"active", "resolved", "dismissed", "archived", "stale"}
         status = [s for s in status if s in allowed_status]
@@ -970,6 +1255,7 @@ class ChatToolRegistry:
 
         now = datetime.now(timezone.utc)
         query = self.db.query(ContextEntry).filter(ContextEntry.user_id == self.user_id)
+        query = apply_confidence_retrieval_filter(query)
 
         if entity_type:
             if entity_type in {"global", "executive"}:
@@ -992,7 +1278,7 @@ class ChatToolRegistry:
             query = query.filter(ContextEntry.created_at <= until_ts)
 
         if not include_non_active:
-            query = query.filter(or_(ContextEntry.expires_at.is_(None), ContextEntry.expires_at >= now))
+            query = apply_historical_expiry_retrieval_filter(query, now=now)
 
         if query_text:
             safe_query = escape_like(query_text)
@@ -1000,7 +1286,7 @@ class ChatToolRegistry:
 
         rows = (
             query
-            .order_by(ContextEntry.importance_level.desc(), ContextEntry.created_at.desc())
+            .order_by(ContextEntry.updated_at.desc(), ContextEntry.created_at.desc())
             .limit(limit)
             .all()
         )
@@ -1032,6 +1318,7 @@ class ChatToolRegistry:
         offset = max(0, int(params.get("offset", 0)))
         recent_first = bool(params.get("recent_first", True))
         include_archived = bool(params.get("include_archived", False))
+        include_source_body = bool(params.get("include_source_body", False))
 
         allowed = {"contact", "thread", "event", "message", "task"}
         entity_types = [t for t in entity_types if t in allowed]
@@ -1073,6 +1360,7 @@ class ChatToolRegistry:
                 EntityReference.user_id == self.user_id,
                 EntityReference.entity_type == "thread",
             )
+            q = q.filter(~EntityReference.ref.ilike(f"{MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX}%"))
             if query_text:
                 q = q.filter(
                     func.lower(EntityReference.display_name).ilike(f"%{safe_query}%", escape="\\")
@@ -1098,6 +1386,8 @@ class ChatToolRegistry:
             # Fallback to recent threads from messages when no entity references exist.
             if not refs:
                 mq = self.db.query(Message).filter(Message.user_id == self.user_id)
+                mq = mq.filter(~Message.thread_id.ilike(f"{MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX}%"))
+                mq = mq.filter(~Message.message_id.ilike(f"{MANUAL_TASK_PLACEHOLDER_MESSAGE_PREFIX}%"))
                 if query_text:
                     mq = mq.filter(
                         Message.subject.ilike(f"%{safe_query}%", escape="\\")
@@ -1223,14 +1513,28 @@ class ChatToolRegistry:
                 .all()
             )
             for t in tasks:
+                source_email = self._build_task_source_email_payload(t, include_body=include_source_body)
+                source_search = ""
+                if source_email:
+                    source_search = " ".join(
+                        filter(
+                            None,
+                            [
+                                str(source_email.get("subject") or ""),
+                                str(source_email.get("sender") or ""),
+                                str(source_email.get("summary") or source_email.get("snippet") or ""),
+                            ],
+                        )
+                    )
                 results.append(
                     {
                         "kind": "task",
                         "ref": str(t.id),
                         "label": t.title,
                         "last_updated_at": (t.updated_at or t.created_at).isoformat() if (t.updated_at or t.created_at) else None,
-                        "search_text": t.title,
+                        "search_text": " ".join(filter(None, [t.title, source_search])).strip(),
                         "sample": (t.description or "")[:140],
+                        "source_email": source_email,
                     }
                 )
 
@@ -1238,6 +1542,287 @@ class ChatToolRegistry:
             results.sort(key=lambda item: item.get("last_updated_at") or "", reverse=True)
 
         return ToolResult(success=True, data={"items": results[:limit], "count": len(results[:limit])})
+
+    def _execute_get_approval_history(self, params: Dict[str, Any]) -> ToolResult:
+        query_text = " ".join(str(params.get("query") or "").split()).strip()
+        include_pending = bool(params.get("include_pending", True))
+        include_rejected = bool(params.get("include_rejected", True))
+        limit = max(1, min(int(params.get("limit", 10)), 25))
+        since_ts = self._parse_iso_timestamp(params.get("since"))
+        search_terms = self._approval_search_terms(query_text)
+        if not search_terms:
+            return ToolResult(
+                success=False,
+                error="A specific approval subject is required for approval history lookup.",
+            )
+
+        items: List[Dict[str, Any]] = []
+
+        task_query = self.db.query(Task).filter(Task.user_id == self.user_id)
+        task_statuses = ["approved", "completed", "superseded"]
+        if include_pending:
+            task_statuses.append("pending_approval")
+        if include_rejected:
+            task_statuses.append("dismissed")
+        task_query = task_query.filter(Task.status.in_(sorted(set(task_statuses))))
+        if since_ts:
+            task_query = task_query.filter(
+                or_(
+                    Task.approved_at >= since_ts,
+                    Task.updated_at >= since_ts,
+                    Task.created_at >= since_ts,
+                )
+            )
+        tasks = (
+            task_query
+            .order_by(Task.approved_at.desc(), Task.updated_at.desc(), Task.created_at.desc())
+            .limit(max(limit * 3, 20))
+            .all()
+        )
+        for task in tasks:
+            source_email = self._build_task_source_email_payload(task, include_body=False)
+            text_blob = " ".join(
+                filter(
+                    None,
+                    [
+                        task.title or "",
+                        task.description or "",
+                        task.source_snippet or "",
+                        json.dumps(task.related_people or [], ensure_ascii=True),
+                        json.dumps(source_email or {}, ensure_ascii=True),
+                    ],
+                )
+            )
+            if not self._approval_text_matches(text_blob, search_terms):
+                continue
+            items.append(
+                {
+                    "source": "task",
+                    "ref": str(task.id),
+                    "title": (task.title or f"Task {task.id}").strip(),
+                    "status": task.status,
+                    "approved": bool(task.status == "approved" or task.approved_at),
+                    "acted_at": (
+                        task.approved_at or task.updated_at or task.created_at
+                    ).isoformat() if (task.approved_at or task.updated_at or task.created_at) else None,
+                    "summary": (task.description or task.source_snippet or "").strip()[:240] or None,
+                    "thread_id": (task.thread_id or "").strip() or None,
+                    "source_email": source_email,
+                }
+            )
+
+        action_query = (
+            self.db.query(ChatPendingAction)
+            .join(ChatSession, ChatPendingAction.session_id == ChatSession.id)
+            .filter(ChatSession.user_id == self.user_id)
+        )
+        action_statuses = ["approved"]
+        if include_pending:
+            action_statuses.append("pending")
+        if include_rejected:
+            action_statuses.append("rejected")
+        action_query = action_query.filter(ChatPendingAction.status.in_(sorted(set(action_statuses))))
+        if since_ts:
+            action_query = action_query.filter(ChatPendingAction.created_at >= since_ts)
+        actions = (
+            action_query
+            .order_by(ChatPendingAction.created_at.desc())
+            .limit(max(limit * 3, 20))
+            .all()
+        )
+        for action in actions:
+            action_data = action.action_data or {}
+            text_blob = " ".join(
+                filter(
+                    None,
+                    [
+                        action.action_type or "",
+                        json.dumps(action_data, ensure_ascii=True, sort_keys=True),
+                    ],
+                )
+            )
+            if not self._approval_text_matches(text_blob, search_terms):
+                continue
+            items.append(
+                {
+                    "source": "chat_action",
+                    "ref": action.id,
+                    "title": self._approval_action_title(action),
+                    "status": action.status,
+                    "approved": action.status == "approved",
+                    "acted_at": (
+                        action.reviewed_at or action.created_at
+                    ).isoformat() if (action.reviewed_at or action.created_at) else None,
+                    "summary": self._truncate_approval_summary(json.dumps(action_data, ensure_ascii=True, sort_keys=True)),
+                    "action_type": action.action_type,
+                }
+            )
+
+        proposal_query = self.db.query(VaultProposal).filter(VaultProposal.user_id == self.user_id)
+        proposal_statuses = ["approved"]
+        if include_pending:
+            proposal_statuses.append("pending")
+        if include_rejected:
+            proposal_statuses.append("rejected")
+        proposal_query = proposal_query.filter(VaultProposal.status.in_(sorted(set(proposal_statuses))))
+        if since_ts:
+            proposal_query = proposal_query.filter(
+                or_(
+                    VaultProposal.reviewed_at >= since_ts,
+                    VaultProposal.created_at >= since_ts,
+                )
+            )
+        proposals = (
+            proposal_query
+            .order_by(VaultProposal.reviewed_at.desc(), VaultProposal.created_at.desc())
+            .limit(max(limit * 2, 15))
+            .all()
+        )
+        for proposal in proposals:
+            proposal_data = proposal.proposed_data or {}
+            text_blob = " ".join(
+                filter(
+                    None,
+                    [
+                        proposal.proposal_type or "",
+                        proposal.diff_summary or "",
+                        proposal.source_type or "",
+                        proposal.source_id or "",
+                        json.dumps(proposal_data, ensure_ascii=True, sort_keys=True),
+                    ],
+                )
+            )
+            if not self._approval_text_matches(text_blob, search_terms):
+                continue
+            items.append(
+                {
+                    "source": "vault_proposal",
+                    "ref": str(proposal.id),
+                    "title": self._approval_proposal_title(proposal),
+                    "status": proposal.status,
+                    "approved": proposal.status == "approved",
+                    "acted_at": (
+                        proposal.reviewed_at or proposal.created_at
+                    ).isoformat() if (proposal.reviewed_at or proposal.created_at) else None,
+                    "summary": self._truncate_approval_summary(proposal.diff_summary or json.dumps(proposal_data, ensure_ascii=True, sort_keys=True)),
+                    "proposal_type": proposal.proposal_type,
+                }
+            )
+
+        items.sort(key=lambda item: item.get("acted_at") or "", reverse=True)
+        trimmed = items[:limit]
+        return ToolResult(
+            success=True,
+            data={
+                "items": trimmed,
+                "count": len(trimmed),
+                "query": query_text or None,
+                "approved_count": sum(1 for item in trimmed if item.get("status") == "approved"),
+                "pending_count": sum(1 for item in trimmed if item.get("status") in {"pending", "pending_approval"}),
+                "rejected_count": sum(1 for item in trimmed if item.get("status") in {"rejected", "dismissed"}),
+                "latest_match": trimmed[0] if trimmed else None,
+            },
+        )
+
+    def _approval_search_terms(self, query_text: str) -> List[str]:
+        tokens = re.findall(r"[a-z0-9][a-z0-9._-]*", (query_text or "").lower())
+        terms: List[str] = []
+        seen = set()
+        has_long_term = False
+        filtered_tokens: List[str] = []
+        for token in tokens:
+            if token in APPROVAL_QUERY_STOPWORDS:
+                continue
+            filtered_tokens.append(token)
+            if len(token) >= 2 or token.isdigit():
+                has_long_term = True
+
+        for token in filtered_tokens:
+            if len(token) < 2 and not token.isdigit() and not has_long_term:
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            terms.append(token)
+        return terms
+
+    def _approval_text_matches(self, text_blob: str, search_terms: List[str]) -> bool:
+        if not search_terms:
+            return True
+        lowered = " ".join(str(text_blob or "").lower().split())
+        return all(term in lowered for term in search_terms)
+
+    def _approval_action_title(self, action: ChatPendingAction) -> str:
+        data = action.action_data or {}
+        title = (
+            data.get("title")
+            or data.get("subject")
+            or data.get("event_title")
+            or data.get("email_subject")
+            or action.action_type
+            or "Approval action"
+        )
+        return " ".join(str(title).split()).strip()
+
+    def _approval_proposal_title(self, proposal: VaultProposal) -> str:
+        proposed_data = proposal.proposed_data or {}
+        title = (
+            proposed_data.get("title")
+            or proposed_data.get("name")
+            or proposed_data.get("slug")
+            or proposal.diff_summary
+            or proposal.proposal_type
+            or f"Proposal {proposal.id}"
+        )
+        return " ".join(str(title).split()).strip()
+
+    def _truncate_approval_summary(self, value: str, limit: int = 240) -> Optional[str]:
+        text = " ".join(str(value or "").split()).strip()
+        if not text:
+            return None
+        return text[:limit]
+
+    def _build_task_source_email_payload(self, task: Task, include_body: bool = False) -> Optional[Dict[str, Any]]:
+        source = getattr(task, "source_message", None)
+        if not source and getattr(task, "message_id", None):
+            source = (
+                self.db.query(Message)
+                .filter(
+                    Message.user_id == self.user_id,
+                    Message.id == task.message_id,
+                )
+                .first()
+            )
+        if not source:
+            return None
+
+        source_msg_id = (source.message_id or "").strip()
+        source_thread_id = (source.thread_id or "").strip()
+        task_thread_id = (task.thread_id or "").strip()
+        if source_msg_id.startswith(MANUAL_TASK_PLACEHOLDER_MESSAGE_PREFIX):
+            return None
+        if source_thread_id.startswith(MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX):
+            return None
+        if task_thread_id.startswith(MANUAL_TASK_PLACEHOLDER_THREAD_PREFIX):
+            return None
+
+        decrypted = (source.decrypted_body or "").strip()
+        summary = (source.summary or "").strip() or (task.source_snippet or "").strip()
+        snippet = summary or (decrypted[:280] if decrypted else "")
+
+        payload: Dict[str, Any] = {
+            "message_id": source.id,
+            "message_ref": source.message_id,
+            "thread_id": source.thread_id,
+            "subject": source.subject,
+            "sender": source.sender,
+            "received_at": source.received_at.isoformat() if source.received_at else None,
+            "summary": summary or None,
+            "snippet": snippet or None,
+        }
+        if include_body:
+            payload["body"] = decrypted
+        return payload
 
     def _execute_draft_email(self, params: Dict[str, Any]) -> ToolResult:
         service = EmailDraftingService(db=self.db, user_id=self.user_id)
@@ -1255,19 +1840,22 @@ class ChatToolRegistry:
             "message_id": (params.get("message_id") or "").strip()[:200],
         }
         logger.info("draft_email_invoked %s", safe_log)
-        draft = service.draft(
-            subject=subject,
-            intent=params.get("intent", ""),
-            recipient=params.get("recipient"),
-            sender_name=params.get("sender_name"),
-            thread_id=params.get("thread_id"),
-            message_id=params.get("message_id"),
-            thread=params.get("thread"),
-            message=params.get("message"),
-            context=params.get("context"),
-            user_request=params.get("user_request"),
-        )
-        return ToolResult(success=True, data=draft)
+        try:
+            draft = service.draft(
+                subject=subject,
+                intent=params.get("intent", ""),
+                recipient=params.get("recipient"),
+                sender_name=params.get("sender_name"),
+                thread_id=params.get("thread_id"),
+                message_id=params.get("message_id"),
+                thread=params.get("thread"),
+                message=params.get("message"),
+                context=params.get("context"),
+                user_request=params.get("user_request"),
+            )
+            return ToolResult(success=True, data=draft)
+        except DraftGenerationError as exc:
+            return ToolResult(success=False, error=str(exc) or "draft_generation_failed")
 
     def _user_safe_validation_error(self, tool_name: str) -> str:
         name = (tool_name or "").strip().lower()
@@ -1328,17 +1916,72 @@ class ChatToolRegistry:
         candidate_name = (name or contact or "").strip()
         if not candidate_name:
             return None
-        row = (
-            self.db.query(Contact)
-            .filter(
-                Contact.user_id == self.user_id,
-                func.lower(Contact.name) == candidate_name.lower(),
-            )
-            .first()
-        )
+        row = self._find_unique_contact_by_exact_name(candidate_name)
         if row and row.email:
             return row.email.lower()
         return None
+
+    def _resolve_contact_record(
+        self,
+        *,
+        contact_id: Optional[Any] = None,
+        contact: Optional[str] = None,
+        email: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> Optional[Contact]:
+        if contact_id not in (None, ""):
+            try:
+                resolved_id = int(contact_id)
+            except (TypeError, ValueError):
+                resolved_id = None
+            if resolved_id is not None:
+                row = (
+                    self.db.query(Contact)
+                    .filter(Contact.user_id == self.user_id, Contact.id == resolved_id)
+                    .first()
+                )
+                if row:
+                    return row
+
+        email_norm = self._resolve_contact_email(contact=contact, email=email, name=name)
+        if email_norm:
+            return (
+                self.db.query(Contact)
+                .filter(Contact.user_id == self.user_id, func.lower(Contact.email) == email_norm)
+                .first()
+            )
+        return None
+
+    def _find_unique_contact_by_exact_name(self, lookup: str) -> Optional[Contact]:
+        token = " ".join(str(lookup or "").split()).strip()
+        if not token:
+            return None
+        rows = (
+            self.db.query(Contact)
+            .filter(
+                Contact.user_id == self.user_id,
+                func.lower(Contact.name) == token.lower(),
+            )
+            .limit(2)
+            .all()
+        )
+        if len(rows) != 1:
+            return None
+        return rows[0]
+
+    def _resolve_contact_and_brief(self, params: Dict[str, Any]) -> tuple[Optional[Contact], Optional[Dict[str, Any]]]:
+        contact = self._resolve_contact_record(
+            contact_id=params.get("contact_id"),
+            contact=params.get("contact"),
+            email=params.get("email"),
+            name=params.get("name"),
+        )
+        if not contact:
+            return None, None
+        brief = ContactBriefService(self.db, user_id=self.user_id).get_contact_brief(contact.id, consumer="chat_tool")
+        if not brief:
+            return contact, None
+        return contact, brief
 
     def _resolve_entity_ref(self, entity_type: str, identifier: Optional[str]) -> Optional[str]:
         query = " ".join(str(identifier or "").split()).strip().lstrip("@/")
@@ -1380,33 +2023,222 @@ class ChatToolRegistry:
             return None
 
     def _serialize_context_entry(self, row: ContextEntry) -> Dict[str, Any]:
+        source_resolved = self._context_entry_source_resolved(
+            entity_type=row.entity_type,
+            entity_id=row.entity_id,
+        )
         return {
             "id": row.id,
             "type": row.type,
             "content": row.content,
             "entity_type": row.entity_type,
             "entity_id": row.entity_id,
+            "source_resolved": source_resolved,
+            "source_availability_note": self._context_entry_source_availability_note(
+                entity_type=row.entity_type,
+                source_resolved=source_resolved,
+            ),
             "created_by": row.created_by,
             "created_at": row.created_at.isoformat() if row.created_at else None,
-            "importance_level": row.importance_level,
             "status": row.status,
             "expires_at": row.expires_at.isoformat() if row.expires_at else None,
         }
 
+    def _context_entry_source_resolved(self, *, entity_type: Optional[str], entity_id: Optional[str]) -> Optional[bool]:
+        normalized_type = " ".join(str(entity_type or "").split()).strip().lower()
+        normalized_id = " ".join(str(entity_id or "").split()).strip()
+        if normalized_type in {"", "global", "executive"}:
+            return None
+        if not normalized_id:
+            return None
+        if normalized_type == "contact":
+            query = self.db.query(Contact).filter(Contact.user_id == self.user_id)
+            if normalized_id.isdigit():
+                return query.filter(Contact.id == int(normalized_id)).first() is not None
+            return query.filter(func.lower(Contact.email) == normalized_id.lower()).first() is not None
+        if normalized_type == "thread":
+            if (
+                self.db.query(Message.id)
+                .filter(Message.user_id == self.user_id, Message.thread_id == normalized_id)
+                .first()
+                is not None
+            ):
+                return True
+            if (
+                self.db.query(ThreadState.id)
+                .filter(ThreadState.user_id == self.user_id, ThreadState.thread_id == normalized_id)
+                .first()
+                is not None
+            ):
+                return True
+            return (
+                self.db.query(EntityReference.id)
+                .filter(
+                    EntityReference.user_id == self.user_id,
+                    EntityReference.entity_type == "thread",
+                    EntityReference.ref == normalized_id,
+                )
+                .first()
+            ) is not None
+        if normalized_type == "message":
+            query = self.db.query(Message.id).filter(Message.user_id == self.user_id)
+            if normalized_id.isdigit() and query.filter(Message.id == int(normalized_id)).first() is not None:
+                return True
+            return query.filter(
+                or_(Message.message_id == normalized_id, Message.external_message_id == normalized_id)
+            ).first() is not None
+        if normalized_type == "event":
+            query = self.db.query(CalendarEvent.id).filter(CalendarEvent.user_id == self.user_id)
+            if normalized_id.isdigit() and query.filter(CalendarEvent.id == int(normalized_id)).first() is not None:
+                return True
+            if query.filter(CalendarEvent.external_event_id == normalized_id).first() is not None:
+                return True
+            return (
+                self.db.query(EntityReference.id)
+                .filter(
+                    EntityReference.user_id == self.user_id,
+                    EntityReference.entity_type == "event",
+                    EntityReference.ref == normalized_id,
+                )
+                .first()
+            ) is not None
+        if normalized_type == "task":
+            if not normalized_id.isdigit():
+                return False
+            return (
+                self.db.query(Task.id)
+                .filter(Task.user_id == self.user_id, Task.id == int(normalized_id))
+                .first()
+            ) is not None
+        return None
+
+    def _context_entry_source_availability_note(
+        self,
+        *,
+        entity_type: Optional[str],
+        source_resolved: Optional[bool],
+    ) -> Optional[str]:
+        if source_resolved is not False:
+            return None
+        normalized_type = " ".join(str(entity_type or "").split()).strip().lower()
+        if normalized_type == "thread":
+            return "The source thread is no longer present in the inbox."
+        if normalized_type == "message":
+            return "The source message is no longer present in the inbox."
+        if normalized_type == "event":
+            return "The source event is no longer present on the calendar."
+        if normalized_type == "task":
+            return "The source task is no longer present."
+        if normalized_type == "contact":
+            return "The linked contact is no longer present."
+        return "The original source is no longer present."
+
+    def _serialize_contact_brief(self, contact: Contact, brief: Dict[str, Any]) -> Dict[str, Any]:
+        summary = brief.get("summary") or {}
+        return {
+            "contact_id": contact.id,
+            "contact_email": (contact.email or "").strip().lower() or None,
+            "contact_name": self._sanitize_prompt_contact_text(contact.name, field="contact.name", contact_id=contact.id),
+            "contact": {
+                "id": contact.id,
+                "name": self._sanitize_prompt_contact_text(contact.name, field="contact.name", contact_id=contact.id),
+                "email": contact.email,
+                "role": self._sanitize_prompt_contact_text(contact.role, field="contact.role", contact_id=contact.id),
+                "organization": self._sanitize_prompt_contact_text(contact.organization, field="contact.organization", contact_id=contact.id),
+                "category": self._sanitize_prompt_contact_text(contact.category, field="contact.category", contact_id=contact.id),
+            },
+            "summary": {
+                "headline": self._sanitize_prompt_contact_text(summary.get("headline"), field="brief.headline", contact_id=contact.id),
+                "manual_notes": self._sanitize_prompt_contact_text(summary.get("manual_notes"), field="brief.manual_notes", contact_id=contact.id),
+                "preferred_tone": self._sanitize_prompt_contact_text(summary.get("preferred_tone"), field="brief.preferred_tone", contact_id=contact.id),
+                "relationship_notes": self._sanitize_prompt_contact_list(summary.get("relationship_notes") or [], field="brief.relationship_note", contact_id=contact.id),
+            },
+            "preferences": [
+                {
+                    "id": item.get("id"),
+                    "content": self._sanitize_prompt_contact_text(item.get("content"), field="brief.preference", contact_id=contact.id),
+                }
+                for item in (brief.get("preferences") or [])[:4]
+            ],
+            "commitments": [
+                {
+                    "id": item.get("id"),
+                    "title": self._sanitize_prompt_contact_text(item.get("title"), field="brief.commitment", contact_id=contact.id),
+                    "status": item.get("status"),
+                    "due_at": item.get("due_at").isoformat() if hasattr(item.get("due_at"), "isoformat") else item.get("due_at"),
+                }
+                for item in (brief.get("commitments") or [])[:4]
+            ],
+            "decisions": [
+                {
+                    "id": item.get("id"),
+                    "decision": self._sanitize_prompt_contact_text(item.get("decision"), field="brief.decision", contact_id=contact.id),
+                    "created_at": item.get("created_at").isoformat() if hasattr(item.get("created_at"), "isoformat") else item.get("created_at"),
+                }
+                for item in (brief.get("decisions") or [])[:4]
+            ],
+            "recent_interactions": [
+                {
+                    "id": item.get("id"),
+                    "subject": self._sanitize_prompt_contact_text(item.get("subject"), field="brief.interaction_subject", contact_id=contact.id),
+                    "summary": self._sanitize_prompt_contact_text(item.get("summary"), field="brief.interaction_summary", contact_id=contact.id),
+                    "occurred_at": item.get("occurred_at").isoformat() if hasattr(item.get("occurred_at"), "isoformat") else item.get("occurred_at"),
+                    "thread_id": item.get("thread_id"),
+                }
+                for item in (brief.get("recent_interactions") or [])[:4]
+            ],
+            "signals": [
+                {
+                    "type": item.get("type"),
+                    "message": self._sanitize_prompt_contact_text(item.get("message"), field="brief.signal", contact_id=contact.id),
+                    "severity": item.get("severity"),
+                }
+                for item in (brief.get("signals") or [])[:4]
+            ],
+        }
+
+    def _sanitize_prompt_contact_text(self, value: Any, *, field: str, contact_id: int) -> Optional[str]:
+        text = str(value or "")
+        if not text:
+            return None
+        result = sanitize_with_detection(text)
+        if result.patterns_detected:
+            logger.warning(
+                "contact_tool_payload_sanitized contact_id=%s field=%s patterns=%s",
+                contact_id,
+                field,
+                result.patterns_detected,
+            )
+        cleaned = " ".join(result.sanitized_text.split()).strip()
+        return cleaned or None
+
+    def _sanitize_prompt_contact_list(self, values: List[Any], *, field: str, contact_id: int) -> List[str]:
+        cleaned: List[str] = []
+        for value in values:
+            item = self._sanitize_prompt_contact_text(value, field=field, contact_id=contact_id)
+            if item:
+                cleaned.append(item)
+        return cleaned
+
+    def _iso_value(self, value: Any) -> Optional[str]:
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        text = str(value or "").strip()
+        return text or None
+
     def _filter_context_entries(self, entries: List[Dict[str, Any]], include_non_active: bool) -> List[Dict[str, Any]]:
         """Filter out expired or non-active entries unless explicitly allowed."""
         now = datetime.now(timezone.utc)
-        governed_statuses = {"active", "resolved", "stale", "archived"}
+        governed_statuses = {"active", "resolved", "stale", "archived", "forgotten"}
         filtered: List[Dict[str, Any]] = []
         for entry in entries or []:
             status = (entry.get("status") or "active").lower()
-            expires_at = entry.get("expires_at")
-            if expires_at:
-                try:
-                    if datetime.fromisoformat(expires_at) < now:
-                        continue
-                except Exception:
-                    pass
+            if not is_expiry_retrievable(
+                entry_type=entry.get("type"),
+                expires_at=entry.get("expires_at"),
+                now=now,
+            ):
+                continue
             if status not in governed_statuses:
                 filtered.append(entry)
             elif status == "active" or include_non_active:

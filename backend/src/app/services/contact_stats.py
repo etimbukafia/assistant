@@ -1,8 +1,8 @@
 """
 Contact statistics service.
 
-Updates ContactContext metadata when user interactions occur.
-Used for relationship-based email filtering (Layer 3).
+Updates legacy ContactContext-derived metrics when user interactions occur.
+Canonical relationship intelligence belongs in Contact and ContextEntry.
 """
 import logging
 from datetime import datetime, timezone
@@ -11,6 +11,56 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 logger = logging.getLogger(__name__)
+
+
+def _find_legacy_contact_context(
+    db: Session,
+    *,
+    user_id: str,
+    contact_email: str,
+):
+    from app.data.models import ContactContext
+
+    return db.query(ContactContext).filter(
+        ContactContext.user_id == user_id,
+        ContactContext.contact_email == contact_email,
+    ).first()
+
+
+def _get_or_create_legacy_contact_context(
+    db: Session,
+    *,
+    user_id: str,
+    contact_email: str,
+):
+    """
+    Only create legacy ContactContext rows for contacts already represented
+    canonically, or when a legacy row already exists.
+    """
+    from app.data.models import Contact, ContactContext
+
+    existing = _find_legacy_contact_context(
+        db,
+        user_id=user_id,
+        contact_email=contact_email,
+    )
+    if existing:
+        return existing
+
+    canonical_contact = db.query(Contact.id).filter(
+        Contact.user_id == user_id,
+        Contact.email.isnot(None),
+        func.lower(Contact.email) == contact_email,
+    ).first()
+    if not canonical_contact:
+        return None
+
+    contact = ContactContext(
+        user_id=user_id,
+        contact_email=contact_email,
+    )
+    db.add(contact)
+    return contact
 
 
 def update_reply_rate(
@@ -28,7 +78,7 @@ def update_reply_rate(
     Returns:
         Updated reply_rate (0.0 - 1.0), or None if no data
     """
-    from app.data.models import ContactContext, ThreadState
+    from app.data.models import ThreadState
 
     contact_email = contact_email.lower()
 
@@ -47,11 +97,12 @@ def update_reply_rate(
 
     reply_rate = stats.replied / stats.total
 
-    # Update or create ContactContext
-    contact = db.query(ContactContext).filter(
-        ContactContext.user_id == user_id,
-        ContactContext.contact_email == contact_email,
-    ).first()
+    # Update legacy derived metadata only when a canonical contact exists
+    contact = _get_or_create_legacy_contact_context(
+        db,
+        user_id=user_id,
+        contact_email=contact_email,
+    )
 
     if contact:
         metadata = contact.contact_metadata or {}
@@ -59,18 +110,8 @@ def update_reply_rate(
         metadata["reply_rate_updated_at"] = datetime.now(timezone.utc).isoformat()
         contact.contact_metadata = metadata
         contact.updated_at = datetime.now(timezone.utc)
-    else:
-        # Create new contact context
-        contact = ContactContext(
-            user_id=user_id,
-            contact_email=contact_email,
-            contact_metadata={
-                "message_count": stats.total,
-                "reply_rate": round(reply_rate, 3),
-                "reply_rate_updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        db.add(contact)
+        metadata.setdefault("message_count", stats.total)
+        contact.contact_metadata = metadata
 
     db.commit()
 
@@ -124,14 +165,13 @@ def increment_message_count(
 
     Called when a new message is received from this contact.
     """
-    from app.data.models import ContactContext
-
     contact_email = contact_email.lower()
 
-    contact = db.query(ContactContext).filter(
-        ContactContext.user_id == user_id,
-        ContactContext.contact_email == contact_email,
-    ).first()
+    contact = _get_or_create_legacy_contact_context(
+        db,
+        user_id=user_id,
+        contact_email=contact_email,
+    )
 
     if contact:
         metadata = contact.contact_metadata or {}
@@ -139,15 +179,5 @@ def increment_message_count(
         metadata["last_interaction_at"] = datetime.now(timezone.utc).isoformat()
         contact.contact_metadata = metadata
         contact.updated_at = datetime.now(timezone.utc)
-    else:
-        contact = ContactContext(
-            user_id=user_id,
-            contact_email=contact_email,
-            contact_metadata={
-                "message_count": 1,
-                "last_interaction_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        db.add(contact)
 
     db.commit()

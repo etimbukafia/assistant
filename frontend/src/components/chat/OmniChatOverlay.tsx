@@ -3,7 +3,7 @@
 import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { usePathname } from "next/navigation"
-import { ArrowUp, MessageSquare, X } from "lucide-react"
+import { ArrowUp, MessageSquare, Plus, X } from "lucide-react"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
@@ -28,12 +28,27 @@ function mentionToneClass(kind: "contact" | "thread" | "event" | "task" | "memor
 export function OmniChatOverlay() {
     const { isOpen, setIsOpen, mode } = useChatContext()
     const { currentSessionId, sendMessage, createSession, isSending, isCreating } = useChat()
-    const { data: messages, pendingActions } = useChatMessages(currentSessionId)
+    const pathname  = usePathname()
+    const isChatSurfaceRoute =
+        pathname === "/chat" ||
+        pathname.startsWith("/dashboard/chat") ||
+        pathname === "/login" ||
+        pathname.startsWith("/auth")
+    const { data: messages, pendingActions } = useChatMessages(isChatSurfaceRoute ? null : currentSessionId)
 
     const [inputValue, setInputValue] = React.useState("")
     const scrollRef = React.useRef<HTMLDivElement>(null)
     const inputRef  = React.useRef<HTMLTextAreaElement>(null)
-    const pathname  = usePathname()
+    const adjustComposerHeight = React.useCallback(() => {
+        const el = inputRef.current
+        if (!el) return
+        const minPx = 40
+        const maxPx = 220
+        el.style.height = "auto"
+        const next = Math.min(Math.max(el.scrollHeight, minPx), maxPx)
+        el.style.height = `${next}px`
+        el.style.overflowY = el.scrollHeight > maxPx ? "auto" : "hidden"
+    }, [])
 
     const {
         listboxId,
@@ -61,6 +76,10 @@ export function OmniChatOverlay() {
             scrollRef.current.scrollIntoView({ behavior: "smooth" })
         }
     }, [messages, pendingActions, isSending])
+
+    React.useEffect(() => {
+        adjustComposerHeight()
+    }, [inputValue, adjustComposerHeight])
 
     // Focus input as soon as the panel is open
     React.useEffect(() => {
@@ -124,18 +143,38 @@ export function OmniChatOverlay() {
     const handleComposerKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         onInputKeyDown(e)
         if (e.defaultPrevented) return
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault()
+            const target = e.currentTarget
+            const start = target.selectionStart ?? target.value.length
+            const end = target.selectionEnd ?? start
+            setInputValue((prev) => `${prev.slice(0, start)}\n${prev.slice(end)}`)
+            requestAnimationFrame(() => {
+                inputRef.current?.focus()
+                inputRef.current?.setSelectionRange(start + 1, start + 1)
+                adjustComposerHeight()
+            })
+            return
+        }
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault()
             void submitCurrentMessage()
         }
-    }, [onInputKeyDown, submitCurrentMessage])
+    }, [onInputKeyDown, submitCurrentMessage, adjustComposerHeight])
 
-    if (
-        pathname === "/chat" ||
-        pathname.startsWith("/dashboard/chat") ||
-        pathname === "/login" ||
-        pathname.startsWith("/auth")
-    ) return null
+    const handleCreateNewSession = React.useCallback(async () => {
+        if (isSending || isCreating) return
+        try {
+            await createSession({ mode })
+            setInputValue("")
+            clearMentionState()
+            inputRef.current?.focus()
+        } catch {
+            toast.error("Couldn't start a new session right now.")
+        }
+    }, [clearMentionState, createSession, isCreating, isSending, mode])
+
+    if (isChatSurfaceRoute) return null
 
     return (
         <DialogPrimitive.Root open={isOpen} onOpenChange={setIsOpen}>
@@ -143,7 +182,7 @@ export function OmniChatOverlay() {
             {/* ── FAB trigger — Peony, bottom-right ── */}
             <DialogPrimitive.Trigger asChild>
                 <button
-                    aria-label={isOpen ? "Close chat" : "Open Teeks chat"}
+                    aria-label={isOpen ? "Close memory reflection" : "Open Memory Reflection Space"}
                     className={cn(
                         "fixed bottom-6 right-6 z-50",
                         "h-14 w-14 rounded-full",
@@ -196,8 +235,8 @@ export function OmniChatOverlay() {
                         "duration-200",
                     )}
                 >
-                    <DialogPrimitive.Title className="sr-only">Teeks chat</DialogPrimitive.Title>
-                    <DialogPrimitive.Description className="sr-only">Quick chat with your AI assistant</DialogPrimitive.Description>
+                    <DialogPrimitive.Title className="sr-only">Memory Reflection Space</DialogPrimitive.Title>
+                    <DialogPrimitive.Description className="sr-only">Quick memory reflection with Teeks</DialogPrimitive.Description>
 
                     {/* ── Header ── */}
                     <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 flex-shrink-0">
@@ -207,29 +246,32 @@ export function OmniChatOverlay() {
                                 <span className="font-playfair font-bold text-[13px] text-white leading-none">T</span>
                             </span>
                             <span className="font-playfair font-semibold text-[16px] text-foreground tracking-tight">
-                                Teeks
-                            </span>
-                            {/* Mode pill — Brass for action, Sage for reflection */}
-                            <span className={cn(
-                                "text-[10px] font-bold uppercase tracking-[1px] font-inter px-2 py-0.5 rounded-full",
-                                mode === "action"
-                                    ? "bg-[#A07850]/10 text-[#A07850]"
-                                    : "bg-[#4D7C0F]/10 text-[#4D7C0F]"
-                            )}>
-                                {mode === "action" ? "Action" : "Reflect"}
+                                Memory Reflection
                             </span>
                         </div>
-                        <button
-                            type="button"
-                            onClick={() => setIsOpen(false)}
-                            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                            aria-label="Close"
-                        >
-                            <X size={16} strokeWidth={1.8} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                            <button
+                                type="button"
+                                onClick={() => void handleCreateNewSession()}
+                                disabled={isCreating || isSending}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-border/70 px-2.5 py-1.5 text-[11px] font-medium font-inter text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40"
+                                aria-label="Create new memory reflection session"
+                            >
+                                <Plus size={13} strokeWidth={2} />
+                                New space
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setIsOpen(false)}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                                aria-label="Close"
+                            >
+                                <X size={16} strokeWidth={1.8} />
+                            </button>
+                        </div>
                     </div>
 
-                    {/* ── Messages ── */}
+                    {/* Messages */}
                     <ScrollArea className="flex-1 px-4 py-4">
                         <div className="flex flex-col gap-3 min-h-full">
 
@@ -244,20 +286,27 @@ export function OmniChatOverlay() {
                                         })}
                                     </p>
                                     <p className="font-playfair text-[20px] font-semibold text-foreground tracking-tight leading-snug">
-                                        What can I<br />help you with?
+                                        What do you want to<br />remember or verify?
                                     </p>
                                 </div>
                             )}
 
-                            {messages?.map((msg) => (
-                                <div key={msg.id} className="flex flex-col">
-                                    <MessageBubble
-                                        role={msg.role}
-                                        content={msg.content}
-                                        timestamp={msg.created_at}
-                                    />
-                                </div>
-                            ))}
+                            {messages?.map((msg) => {
+                                const normalizedRoleRaw = String(msg.role || "").trim().toLowerCase()
+                                const normalizedRole =
+                                    normalizedRoleRaw === "assistant" || normalizedRoleRaw === "system"
+                                        ? normalizedRoleRaw
+                                        : "user"
+                                return (
+                                    <div key={msg.id} className="flex flex-col">
+                                        <MessageBubble
+                                            role={normalizedRole}
+                                            content={msg.content}
+                                            timestamp={msg.created_at}
+                                        />
+                                    </div>
+                                )
+                            })}
 
                             {/* Three-dot typing indicator — never a spinner */}
                             {(isSending || isCreating) && (
@@ -337,17 +386,18 @@ export function OmniChatOverlay() {
                                             ? `${listboxId}-option-${activeSuggestionIndex}`
                                             : undefined
                                     }
-                                    placeholder="Ask Teeks?"
+                                    placeholder="Ask about a person, capture, approval, preference, or prior discussion"
                                     value={inputValue}
                                     rows={1}
                                     onChange={(e) => {
                                         const value = e.target.value
                                         const cursor = e.target.selectionStart ?? value.length
                                         onInputChange(value, cursor)
+                                        requestAnimationFrame(adjustComposerHeight)
                                     }}
                                     onKeyDown={handleComposerKeyDown}
                                     disabled={isSending || isCreating}
-                                    className="min-h-[40px] max-h-32 text-[13px] leading-5 bg-background/80 border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 font-inter resize-none overflow-y-auto"
+                                    className="min-h-[40px] text-[13px] leading-5 bg-background/80 border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 font-inter resize-none overflow-y-auto"
                                 />
 
                                 {/* Mention suggestions */}

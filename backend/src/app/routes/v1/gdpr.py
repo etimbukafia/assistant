@@ -7,29 +7,29 @@ from app.data.models import (
     Message, Task, TaskReminder, SchedulingSuggestion,
     CalendarEvent, AgentActivityLog,
     PrincipalMemory, DecisionPattern, ContactContext,
-    UserSettings, GmailAccount, OutlookAccount, TaskQueue, UITelemetryEvent
+    UserSettings, GmailAccount, OutlookAccount, TaskQueue, UITelemetryEvent,
+    ThreadState, Contact, ContextEntry, DiaryEntryLink, EntityReference,
+    BillingEvent, WebhookLog, WebhookDelivery, ChatModelCallMetric,
 )
+from app.security.auth import AuthenticatedUser, get_current_user
 
 router = APIRouter(prefix="/user", tags=["User & GDPR"])
 
 @router.get("/export")
-def export_user_data(db: Session = Depends(get_db_for_user)):
+def export_user_data(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+):
     """
     GDPR Data Export - Export all user data as JSON.
 
-    Exports:
-    - Messages (with decrypted bodies where available)
-    - Tasks
-    - Scheduling suggestions
-    - Calendar events
-    - Memory (preferences, patterns, contacts)
-    - Settings
-    - Agent activity logs
+    Exports the user's full workspace state, including canonical
+    contact-centric relationship intelligence.
     """
 
     export_data = {
         "export_timestamp": datetime.now(timezone.utc).isoformat(),
-        "export_version": "1.0",
+        "export_version": "1.1",
     }
 
     # Messages with decrypted bodies
@@ -134,6 +134,100 @@ def export_user_data(db: Session = Depends(get_db_for_user)):
         for c in db.query(ContactContext).all()
     ]
 
+    export_data["contacts"] = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "email": c.email,
+            "role": c.role,
+            "organization": c.organization,
+            "notes": c.notes,
+            "category": c.category,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        }
+        for c in db.query(Contact).all()
+    ]
+
+    export_data["thread_states"] = [
+        {
+            "id": t.id,
+            "thread_id": t.thread_id,
+            "summary": t.summary,
+            "open_tasks": t.open_tasks,
+            "decisions": t.decisions,
+            "participants": t.participants,
+            "last_action": t.last_action,
+            "last_action_by": t.last_action_by,
+            "last_action_at": t.last_action_at.isoformat() if t.last_action_at else None,
+            "needs_reply": t.needs_reply,
+            "last_outbound_at": t.last_outbound_at.isoformat() if t.last_outbound_at else None,
+            "action_points": t.action_points,
+            "message_count": t.message_count,
+            "first_message_id": t.first_message_id,
+            "last_message_id": t.last_message_id,
+            "subject": t.subject,
+            "contact_id": t.contact_id,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        }
+        for t in db.query(ThreadState).all()
+    ]
+
+    export_data["context_entries"] = [
+        {
+            "id": e.id,
+            "type": e.type,
+            "content": e.content,
+            "entity_type": e.entity_type,
+            "entity_id": e.entity_id,
+            "linked_to": e.linked_to,
+            "created_by": e.created_by,
+            "status": e.status,
+            "expires_at": e.expires_at.isoformat() if e.expires_at else None,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+            "updated_at": e.updated_at.isoformat() if e.updated_at else None,
+            "links": [
+                {
+                    "id": link.id,
+                    "entity_type": link.entity_type,
+                    "entity_id": link.entity_id,
+                    "display_name": link.display_name,
+                    "source": getattr(link, "source", "user"),
+                    "created_at": link.created_at.isoformat() if link.created_at else None,
+                }
+                for link in e.links
+            ],
+        }
+        for e in db.query(ContextEntry).all()
+    ]
+
+    export_data["diary_entry_links"] = [
+        {
+            "id": link.id,
+            "entry_id": link.entry_id,
+            "entity_type": link.entity_type,
+            "entity_id": link.entity_id,
+            "display_name": link.display_name,
+            "source": getattr(link, "source", "user"),
+            "created_at": link.created_at.isoformat() if link.created_at else None,
+        }
+        for link in db.query(DiaryEntryLink).all()
+    ]
+
+    export_data["entity_references"] = [
+        {
+            "id": ref.id,
+            "entity_type": ref.entity_type,
+            "display_name": ref.display_name,
+            "ref": ref.ref,
+            "notes": ref.notes,
+            "created_at": ref.created_at.isoformat() if ref.created_at else None,
+            "updated_at": ref.updated_at.isoformat() if ref.updated_at else None,
+        }
+        for ref in db.query(EntityReference).all()
+    ]
+
     # Agent activity logs
     export_data["agent_activity_logs"] = [
         {
@@ -153,11 +247,80 @@ def export_user_data(db: Session = Depends(get_db_for_user)):
             "event_name": t.event_name,
             "event_payload": t.event_payload,
             "page_path": t.page_path,
-            "session_id": t.session_id,
             "client_ts": t.client_ts.isoformat() if t.client_ts else None,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         }
         for t in db.query(UITelemetryEvent).all()
+    ]
+
+    export_data["billing_events"] = [
+        {
+            "id": e.id,
+            "provider": e.provider,
+            "delivery_id": e.delivery_id,
+            "event_type": e.event_type,
+            "customer_id": e.customer_id,
+            "subscription_id": e.subscription_id,
+            "invoice_id": e.invoice_id,
+            "handled": e.handled,
+            "error": e.error,
+            "payload": e.payload,
+            "received_at": e.received_at.isoformat() if e.received_at else None,
+            "processed_at": e.processed_at.isoformat() if e.processed_at else None,
+        }
+        for e in db.query(BillingEvent).filter(BillingEvent.user_id == user.user_id).all()
+    ]
+
+    export_data["webhook_logs"] = [
+        {
+            "id": row.id,
+            "source": row.source,
+            "event_type": row.event_type,
+            "processed": row.processed,
+            "error": row.error,
+            "user_id": row.user_id,
+            "provider_customer_id": row.provider_customer_id,
+            "subject_ref": row.subject_ref,
+            "received_at": row.received_at.isoformat() if row.received_at else None,
+        }
+        for row in db.query(WebhookLog).filter(WebhookLog.user_id == user.user_id).all()
+    ]
+
+    export_data["webhook_deliveries"] = [
+        {
+            "id": row.id,
+            "source": row.source,
+            "delivery_id": row.delivery_id,
+            "event_type": row.event_type,
+            "user_id": row.user_id,
+            "provider_customer_id": row.provider_customer_id,
+            "subject_ref": row.subject_ref,
+            "processed_at": row.processed_at.isoformat() if row.processed_at else None,
+        }
+        for row in db.query(WebhookDelivery).filter(WebhookDelivery.user_id == user.user_id).all()
+    ]
+
+    export_data["chat_model_call_metrics"] = [
+        {
+            "id": row.id,
+            "model": row.model,
+            "provider": row.provider,
+            "path": row.path,
+            "latency_ms": row.latency_ms,
+            "prompt_chars": row.prompt_chars,
+            "response_chars": row.response_chars,
+            "input_tokens": row.input_tokens,
+            "output_tokens": row.output_tokens,
+            "total_tokens": row.total_tokens,
+            "repeated_prefix_chars": row.repeated_prefix_chars,
+            "repeated_prefix_rate": row.repeated_prefix_rate,
+            "tool_definitions_count": row.tool_definitions_count,
+            "tool_calls_count": row.tool_calls_count,
+            "success": row.success,
+            "error_type": row.error_type,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in db.query(ChatModelCallMetric).filter(ChatModelCallMetric.user_id == user.user_id).all()
     ]
 
     # Settings
@@ -199,6 +362,7 @@ def export_user_data(db: Session = Depends(get_db_for_user)):
 @router.delete("/delete")
 def delete_user_data(
     confirm: bool = False,
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db_for_user)
 ):
     """
@@ -207,7 +371,7 @@ def delete_user_data(
     Requires confirm=true query parameter as safety check.
     This deletes ALL user data including UserSettings.
 
-    Use /auth/gmail/revoke to delete data while keeping settings.
+    Use /auth/gmail/revoke to delete provider data while keeping settings.
     """
     if not confirm:
         raise HTTPException(
@@ -225,6 +389,23 @@ def delete_user_data(
         deletion_summary["calendar_events"] = db.query(CalendarEvent).delete()
         deletion_summary["agent_logs"] = db.query(AgentActivityLog).delete()
         deletion_summary["ui_telemetry_events"] = db.query(UITelemetryEvent).delete()
+        deletion_summary["chat_model_call_metrics"] = db.query(ChatModelCallMetric).filter(
+            ChatModelCallMetric.user_id == user.user_id
+        ).delete()
+        deletion_summary["billing_events"] = db.query(BillingEvent).filter(
+            BillingEvent.user_id == user.user_id
+        ).delete()
+        deletion_summary["webhook_logs"] = db.query(WebhookLog).filter(
+            WebhookLog.user_id == user.user_id
+        ).delete()
+        deletion_summary["webhook_deliveries"] = db.query(WebhookDelivery).filter(
+            WebhookDelivery.user_id == user.user_id
+        ).delete()
+        deletion_summary["diary_entry_links"] = db.query(DiaryEntryLink).delete()
+        deletion_summary["context_entries"] = db.query(ContextEntry).delete()
+        deletion_summary["entity_references"] = db.query(EntityReference).delete()
+        deletion_summary["thread_states"] = db.query(ThreadState).delete()
+        deletion_summary["contacts"] = db.query(Contact).delete()
         deletion_summary["messages"] = db.query(Message).delete()
         deletion_summary["principal_memory"] = db.query(PrincipalMemory).delete()
         deletion_summary["decision_patterns"] = db.query(DecisionPattern).delete()

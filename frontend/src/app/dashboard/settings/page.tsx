@@ -25,23 +25,32 @@ import {
 import { useSettings } from "@/hooks/useSettings";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
+import { ENABLE_MICROSOFT_UI } from "@/config/featureFlags";
+import { ENABLE_REMINDERS_UI } from "@/config/featureFlags";
 import { toast } from "sonner";
 import { supabase } from "@/utils/supabase/client";
 import { exportUserData, revokeGmailAccess, deleteAllData } from "@/services/privacy";
 import { disconnectProvider } from "@/services/microsoft";
 import {
+    cancelSubscription,
     changePlan,
     createCreditTopupCheckout,
+    getBillingPlanOptions,
+    getBillingSubscription,
     getCreditStatus,
     getBillingPortalUrl,
+    listBillingInvoices,
     previewPlanChange,
+    type BillingPlanOptionsResponse,
+    type BillingInvoiceItem,
+    type BillingSubscriptionResponse,
     type PlanChangePreviewResponse,
 } from "@/services/billing";
 import type { NotificationPreferences, ReminderPreferences } from "@/services/settings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Tab = "personal" | "executive" | "general" | "integrations" | "account" | "privacy";
+type Tab = "personal" | "executive" | "general" | "integrations" | "account" | "billing" | "privacy";
 
 const TABS: { id: Tab; label: string }[] = [
     { id: "personal",     label: "Personal" },
@@ -49,6 +58,7 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "general",      label: "General" },
     { id: "integrations", label: "Integrations" },
     { id: "account",      label: "Account" },
+    { id: "billing",      label: "Billing" },
     { id: "privacy",      label: "Privacy" },
 ];
 
@@ -203,15 +213,26 @@ export default function SettingsPage() {
 
     // Account tab
     const [selectedBillingCycle, setSelectedBillingCycle] = useState<"monthly" | "annual">("annual");
+    const [planOptions, setPlanOptions] = useState<BillingPlanOptionsResponse | null>(null);
+    const [isPlanDialogOpen, setIsPlanDialogOpen] = useState(false);
     const [planPreview, setPlanPreview] = useState<PlanChangePreviewResponse | null>(null);
     const [planPreviewLoading, setPlanPreviewLoading] = useState(false);
     const [planPreviewError, setPlanPreviewError] = useState<string | null>(null);
     const [planChangeBusy, setPlanChangeBusy] = useState(false);
     const [portalBusy, setPortalBusy] = useState(false);
+    const [subscriptionData, setSubscriptionData] = useState<BillingSubscriptionResponse | null>(null);
+    const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+    const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+    const [invoices, setInvoices] = useState<BillingInvoiceItem[]>([]);
+    const [invoicesLoading, setInvoicesLoading] = useState(false);
+    const [invoicesError, setInvoicesError] = useState<string | null>(null);
+    const [cancelBusy, setCancelBusy] = useState(false);
     const [creditStatus, setCreditStatus] = useState<{
         credits_used: number;
         credits_limit: number;
         credits_remaining: number;
+        percentage_used: number;
+        period_start: string | null;
     } | null>(null);
     const [creditStatusLoading, setCreditStatusLoading] = useState(false);
     const [creditStatusError, setCreditStatusError] = useState<string | null>(null);
@@ -312,6 +333,36 @@ export default function SettingsPage() {
         });
     };
 
+    const formatDateShort = (value?: string | null) => {
+        if (!value) return "—";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return value;
+        return date.toLocaleDateString(undefined, {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+        });
+    };
+
+    const formatMoneyFromMinor = (minor?: number | null, currency = "USD") => {
+        const amount = (minor ?? 0) / 100;
+        return new Intl.NumberFormat(undefined, {
+            style: "currency",
+            currency: currency || "USD",
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(amount);
+    };
+
+    const formatUsd = (value?: number | null) => {
+        return new Intl.NumberFormat(undefined, {
+            style: "currency",
+            currency: "USD",
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(value ?? 0);
+    };
+
     const saveRole = (selected: string, otherText: string) => {
         const value = selected === "Other" ? (otherText.trim() || null) : (selected || null);
         updateSetting("role", value);
@@ -349,7 +400,7 @@ export default function SettingsPage() {
     };
 
     const handleConnectChoice = (provider: "google" | "microsoft") => {
-        if (currentProvider !== "none" && currentProvider !== provider) {
+        if (ENABLE_MICROSOFT_UI && currentProvider !== "none" && currentProvider !== provider) {
             setConnectPending(provider);
             return;
         }
@@ -362,7 +413,7 @@ export default function SettingsPage() {
         try {
             await disconnectProvider(currentProvider === "google" ? "google" : "microsoft");
             await refreshProfile();
-            toast.success(`${currentProvider === "google" ? "Google" : "Microsoft"} disconnected`);
+            toast.success("Account disconnected");
             setDisconnectConfirmOpen(false);
         } catch (err: any) {
             toast.error(extractError(err, "Could not disconnect. Please try again."));
@@ -371,31 +422,145 @@ export default function SettingsPage() {
         }
     };
 
-    const loadPlanPreview = async (targetCycle: "monthly" | "annual") => {
+    const loadSubscriptionData = async () => {
         if (settings?.subscription_tier !== "pro") return;
+        setSubscriptionLoading(true);
+        setSubscriptionError(null);
+        try {
+            const data = await getBillingSubscription();
+            setSubscriptionData(data);
+            if (data.current_cycle === "monthly" || data.current_cycle === "annual") {
+                setSelectedBillingCycle(data.current_cycle);
+            }
+        } catch (err: any) {
+            setSubscriptionData(null);
+            setSubscriptionError(extractError(err, "Couldn't load subscription details right now."));
+        } finally {
+            setSubscriptionLoading(false);
+        }
+    };
+
+    const loadInvoices = async () => {
+        if (settings?.subscription_tier !== "pro") return;
+        setInvoicesLoading(true);
+        setInvoicesError(null);
+        try {
+            const data = await listBillingInvoices(10);
+            setInvoices(data.invoices || []);
+        } catch (err: any) {
+            setInvoices([]);
+            setInvoicesError(extractError(err, "Couldn't load invoices right now."));
+        } finally {
+            setInvoicesLoading(false);
+        }
+    };
+
+    const loadPlanPreview = async (
+        targetCycle: "monthly" | "annual",
+        currentCycle?: "monthly" | "annual" | null
+    ) => {
+        if (settings?.subscription_tier !== "pro") return;
+        if (targetCycle !== "monthly" && targetCycle !== "annual") return;
         setPlanPreviewLoading(true);
         setPlanPreviewError(null);
         try {
-            const preview = await previewPlanChange({ target_cycle: targetCycle });
+            const preview = await previewPlanChange({
+                target_cycle: targetCycle,
+                current_cycle: currentCycle ?? undefined,
+            });
             setPlanPreview(preview);
         } catch (err: any) {
             setPlanPreview(null);
-            setPlanPreviewError(extractError(err, "Couldn't load plan change details right now."));
+            const message = extractError(err, "Couldn't load plan change details right now.");
+            if (message === "Field required") {
+                setPlanPreviewError("Couldn't preview billing cycle changes right now. Please try again.");
+                return;
+            }
+            if (message.includes("Requested plan is not configured")) {
+                setPlanPreviewError("Billing cycle switch is not configured yet. Add the missing plan in billing settings.");
+                return;
+            }
+            if (message.includes("No active subscription to change")) {
+                setPlanPreviewError("No active billing subscription found to preview changes.");
+                return;
+            }
+            setPlanPreviewError(message);
         } finally {
             setPlanPreviewLoading(false);
         }
     };
 
+    const loadPlanOptions = async (): Promise<BillingPlanOptionsResponse | null> => {
+        if (settings?.subscription_tier !== "pro") {
+            setPlanOptions(null);
+            return null;
+        }
+        try {
+            const data = await getBillingPlanOptions();
+            setPlanOptions(data);
+            setSelectedBillingCycle((current) => (current === data.default_cycle ? current : data.default_cycle));
+            return data;
+        } catch {
+            setPlanOptions(null);
+            return null;
+        }
+    };
+
     useEffect(() => {
-        if (activeTab !== "account") return;
+        if (activeTab !== "billing") return;
         if (settings?.subscription_tier !== "pro") {
             setPlanPreview(null);
             setPlanPreviewError(null);
             setPlanPreviewLoading(false);
+            setSubscriptionData(null);
+            setSubscriptionError(null);
+            setSubscriptionLoading(false);
+            setInvoices([]);
+            setInvoicesError(null);
+            setInvoicesLoading(false);
+            setPlanOptions(null);
+            setIsPlanDialogOpen(false);
             return;
         }
-        void loadPlanPreview(selectedBillingCycle);
-    }, [activeTab, selectedBillingCycle, settings?.subscription_tier]);
+        void loadSubscriptionData();
+        void loadInvoices();
+    }, [activeTab, settings?.subscription_tier]);
+
+    useEffect(() => {
+        if (activeTab !== "billing" || !isPlanDialogOpen) return;
+        if (settings?.subscription_tier !== "pro") {
+            setPlanOptions(null);
+            return;
+        }
+
+        let alive = true;
+        (async () => {
+            const options = await loadPlanOptions();
+            if (!alive || !options) return;
+
+            const cycles = options.available_cycles || [];
+            if (cycles.length < 2) {
+                setPlanPreview(null);
+                setPlanPreviewError("No alternate billing cycle is available for this account yet.");
+                return;
+            }
+
+            const resolvedTarget = cycles.includes(selectedBillingCycle)
+                ? selectedBillingCycle
+                : (options.default_cycle ?? cycles[0]);
+
+            if (resolvedTarget !== selectedBillingCycle) {
+                setSelectedBillingCycle(resolvedTarget);
+            }
+
+            const resolvedCurrent = options.current_cycle ?? subscriptionData?.current_cycle ?? null;
+            await loadPlanPreview(resolvedTarget, resolvedCurrent);
+        })();
+
+        return () => {
+            alive = false;
+        };
+    }, [activeTab, isPlanDialogOpen, selectedBillingCycle, settings?.subscription_tier, subscriptionData?.current_cycle]);
 
     const loadCreditStatus = async () => {
         if (settings?.subscription_tier !== "pro") return;
@@ -407,17 +572,19 @@ export default function SettingsPage() {
                 credits_used: status.credits_used,
                 credits_limit: status.credits_limit,
                 credits_remaining: status.credits_remaining,
+                percentage_used: status.percentage_used,
+                period_start: status.period_start,
             });
         } catch (err: any) {
             setCreditStatus(null);
-            setCreditStatusError(err?.response?.data?.detail || "Couldn't load credit status right now.");
+            setCreditStatusError(extractError(err, "Couldn't load credit status right now."));
         } finally {
             setCreditStatusLoading(false);
         }
     };
 
     useEffect(() => {
-        if (activeTab !== "account") return;
+        if (activeTab !== "billing") return;
         if (settings?.subscription_tier !== "pro") {
             setCreditStatus(null);
             setCreditStatusError(null);
@@ -442,7 +609,10 @@ export default function SettingsPage() {
             });
             toast.success(response.message);
             await refreshProfile();
+            await loadSubscriptionData();
+            await loadInvoices();
             await loadPlanPreview(selectedBillingCycle);
+            setIsPlanDialogOpen(false);
         } catch (err: any) {
             toast.error(extractError(err, "Couldn't update your plan right now."));
         } finally {
@@ -478,9 +648,25 @@ export default function SettingsPage() {
             });
             window.location.href = response.checkout_url;
         } catch (err: any) {
-            toast.error(err?.response?.data?.detail || "Couldn't start checkout for extra credits.");
+            toast.error(extractError(err, "Couldn't start checkout for extra credits."));
         } finally {
             setTopupBusy(false);
+        }
+    };
+
+    const handleCancelPlan = async () => {
+        if (cancelBusy) return;
+        setCancelBusy(true);
+        try {
+            const result = await cancelSubscription();
+            toast.success(result.message || "Cancellation scheduled for your next renewal.");
+            await refreshProfile();
+            await loadSubscriptionData();
+            await loadInvoices();
+        } catch (err: any) {
+            toast.error(extractError(err, "Couldn't cancel your plan right now."));
+        } finally {
+            setCancelBusy(false);
         }
     };
 
@@ -537,6 +723,37 @@ export default function SettingsPage() {
 
     const planLabel = settings?.subscription_tier === "pro" ? "Pro" : "Trial";
     const daysLeft  = settings?.days_remaining ?? 0;
+    const currentCycle = (subscriptionData?.current_cycle || selectedBillingCycle) === "annual" ? "Annual" : "Monthly";
+    const availableCycles = (planOptions?.available_cycles?.length ? planOptions.available_cycles : ["monthly", "annual"]) as Array<"monthly" | "annual">;
+    const renewsOn = formatDateShort(subscriptionData?.renews_at || subscriptionData?.expires_at);
+    const hasRenewDate = renewsOn !== "—";
+    const usagePercent = creditStatus
+        ? Math.max(0, Math.min(100, creditStatus.percentage_used))
+        : 0;
+    const baseIncludedUsd = settings?.subscription_tier === "pro" ? 5 : 1;
+    const usedUsd = creditStatus?.credits_used ?? 0;
+    const limitUsd = creditStatus?.credits_limit ?? baseIncludedUsd;
+    const extraPurchasedUsd = Math.max(0, limitUsd - baseIncludedUsd);
+    const extraUsedUsd = Math.max(0, usedUsd - baseIncludedUsd);
+    const extraRemainingUsd = Math.max(0, extraPurchasedUsd - extraUsedUsd);
+    const extraPercent = extraPurchasedUsd > 0
+        ? Math.max(0, Math.min(100, (extraUsedUsd / extraPurchasedUsd) * 100))
+        : 0;
+
+    const GoogleLogo = () => (
+        <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z" fill="#4285F4" />
+        </svg>
+    );
+
+    const MicrosoftLogo = () => (
+        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="2" y="2" width="9" height="9" fill="#F25022" />
+            <rect x="13" y="2" width="9" height="9" fill="#7FBA00" />
+            <rect x="2" y="13" width="9" height="9" fill="#00A4EF" />
+            <rect x="13" y="13" width="9" height="9" fill="#FFB900" />
+        </svg>
+    );
 
     if (isLoading) {
         return (
@@ -547,22 +764,7 @@ export default function SettingsPage() {
     }
 
     // ── Shared SVGs ───────────────────────────────────────────────────────────
-    const GoogleLogo = () => (
-        <svg width="16" height="16" viewBox="0 0 48 48">
-            <path d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z" fill="#4285F4" />
-            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-        </svg>
-    );
-    const MicrosoftLogo = () => (
-        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="2" y="2" width="9" height="9" fill="#F25022" />
-            <rect x="13" y="2" width="9" height="9" fill="#7FBA00" />
-            <rect x="2" y="13" width="9" height="9" fill="#00A4EF" />
-            <rect x="13" y="13" width="9" height="9" fill="#FFB900" />
-        </svg>
-    );
+    
 
     return (
         <div className="max-w-2xl mx-auto">
@@ -738,30 +940,6 @@ export default function SettingsPage() {
                 <div className="space-y-5">
 
                     <Section>
-                        <SectionLabel>AI & Automation</SectionLabel>
-                        <Row
-                            label="Auto-approve tasks"
-                            description="Add AI-detected tasks to your list without manual review"
-                            control={
-                                <Switch
-                                    checked={settings?.auto_approve_tasks ?? false}
-                                    onCheckedChange={(v) => updateSetting("auto_approve_tasks", v)}
-                                />
-                            }
-                        />
-                        <Row
-                            label="Quick reply from task"
-                            description="Enable AI-drafted replies directly from task cards"
-                            control={
-                                <Switch
-                                    checked={settings?.enable_quick_reply_from_task ?? false}
-                                    onCheckedChange={(v) => updateSetting("enable_quick_reply_from_task", v)}
-                                />
-                            }
-                        />
-                    </Section>
-
-                    <Section>
                         <SectionLabel>Task Detection</SectionLabel>
                         <Pad>
                             <p className="text-[12px] text-muted-foreground font-inter mb-3">
@@ -864,35 +1042,37 @@ export default function SettingsPage() {
                         />
                     </Section>
 
-                    <Section>
-                        <SectionLabel>Reminders</SectionLabel>
-                        <Row
-                            label="Enable reminders"
-                            description="Allow Teeks to send you task and follow-up reminders"
-                            control={
-                                <Switch
-                                    checked={reminderPref.enabled ?? false}
-                                    onCheckedChange={(v) => setReminderPref("enabled", v)}
-                                />
-                            }
-                        />
-                        <Pad>
-                            <p className="text-[12px] text-muted-foreground font-inter mb-2">
-                                Default reminder time
-                            </p>
-                            <Input
-                                type="time"
-                                defaultValue={reminderPref.default_time || "09:00"}
-                                onBlur={(e) => {
-                                    if (e.target.value !== reminderPref.default_time) {
-                                        setReminderPref("default_time", e.target.value);
-                                        toast.success("Reminder time updated");
-                                    }
-                                }}
-                                className="h-9 w-36 text-[13px] bg-background border-border focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30"
+                    {ENABLE_REMINDERS_UI && (
+                        <Section>
+                            <SectionLabel>Reminders</SectionLabel>
+                            <Row
+                                label="Enable reminders"
+                                description="Allow Teeks to send you task and follow-up reminders"
+                                control={
+                                    <Switch
+                                        checked={reminderPref.enabled ?? false}
+                                        onCheckedChange={(v) => setReminderPref("enabled", v)}
+                                    />
+                                }
                             />
-                        </Pad>
-                    </Section>
+                            <Pad>
+                                <p className="text-[12px] text-muted-foreground font-inter mb-2">
+                                    Default reminder time
+                                </p>
+                                <Input
+                                    type="time"
+                                    defaultValue={reminderPref.default_time || "09:00"}
+                                    onBlur={(e) => {
+                                        if (e.target.value !== reminderPref.default_time) {
+                                            setReminderPref("default_time", e.target.value);
+                                            toast.success("Reminder time updated");
+                                        }
+                                    }}
+                                    className="h-9 w-36 text-[13px] bg-background border-border focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30"
+                                />
+                            </Pad>
+                        </Section>
+                    )}
                 </div>
             )}
 
@@ -924,25 +1104,26 @@ export default function SettingsPage() {
                             )}
                         </div>
 
-                        {/* Outlook */}
-                        <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-4">
-                            <div className="flex items-center gap-3">
-                                <Mail size={15} className="text-muted-foreground flex-shrink-0" />
-                                <div>
-                                    <p className="text-[13px] font-medium text-foreground font-inter">Outlook</p>
-                                    <p className="text-[12px] text-muted-foreground font-inter">Email sync and task extraction</p>
+                        {ENABLE_MICROSOFT_UI && (
+                            <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-4">
+                                <div className="flex items-center gap-3">
+                                    <Mail size={15} className="text-muted-foreground flex-shrink-0" />
+                                    <div>
+                                        <p className="text-[13px] font-medium text-foreground font-inter">Outlook</p>
+                                        <p className="text-[12px] text-muted-foreground font-inter">Email sync and task extraction</p>
+                                    </div>
                                 </div>
+                                {settings?.outlook_connected ? (
+                                    <span className="flex items-center gap-1.5 text-[12px] font-medium text-primary font-inter">
+                                        <CheckCircle2 size={13} /> Connected
+                                    </span>
+                                ) : (
+                                    <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground font-inter">
+                                        <XCircle size={13} /> Not connected
+                                    </span>
+                                )}
                             </div>
-                            {settings?.outlook_connected ? (
-                                <span className="flex items-center gap-1.5 text-[12px] font-medium text-primary font-inter">
-                                    <CheckCircle2 size={13} /> Connected
-                                </span>
-                            ) : (
-                                <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground font-inter">
-                                    <XCircle size={13} /> Not connected
-                                </span>
-                            )}
-                        </div>
+                        )}
 
                         {/* Actions */}
                         <div className="px-5 py-4 flex items-center gap-2">
@@ -955,76 +1136,90 @@ export default function SettingsPage() {
                                     >
                                         Disconnect {currentProvider === "google" ? "Google" : "Microsoft"}
                                     </button>
-                                    <Dialog open={connectOpen} onOpenChange={(open) => { if (!open) setConnectPending(null); setConnectOpen(open); }}>
-                                        <DialogTrigger asChild>
-                                            <button
-                                                type="button"
-                                                className="h-8 px-3 rounded-lg border border-border text-[12px] font-medium text-muted-foreground font-inter hover:text-foreground hover:border-foreground/40 transition-colors"
-                                            >
-                                                Switch provider
-                                            </button>
-                                        </DialogTrigger>
-                                        {/* connect dialog content below */}
-                                        <DialogContent className="sm:max-w-md">
-                                            <DialogHeader>
-                                                <DialogTitle className="font-playfair text-[18px] font-semibold">
+                                    {ENABLE_MICROSOFT_UI && (
+                                        <Dialog open={connectOpen} onOpenChange={(open) => { if (!open) setConnectPending(null); setConnectOpen(open); }}>
+                                            <DialogTrigger asChild>
+                                                <button
+                                                    type="button"
+                                                    className="h-8 px-3 rounded-lg border border-border text-[12px] font-medium text-muted-foreground font-inter hover:text-foreground hover:border-foreground/40 transition-colors"
+                                                >
                                                     Switch provider
-                                                </DialogTitle>
-                                                <DialogDescription className="text-[13px] text-muted-foreground font-inter pt-1 leading-relaxed">
-                                                    Choose the provider you want Teeks to use.
-                                                </DialogDescription>
-                                                <div className="pt-2">
-                                                    <span className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-[11px] font-medium text-muted-foreground font-inter">
-                                                        Current:{" "}
-                                                        <span className="text-foreground">
-                                                            {currentProvider === "google" ? "Google" : currentProvider === "microsoft" ? "Microsoft" : "Not connected"}
+                                                </button>
+                                            </DialogTrigger>
+                                            <DialogContent className="sm:max-w-md">
+                                                <DialogHeader>
+                                                    <DialogTitle className="font-playfair text-[18px] font-semibold">
+                                                        Switch provider
+                                                    </DialogTitle>
+                                                    <DialogDescription className="text-[13px] text-muted-foreground font-inter pt-1 leading-relaxed">
+                                                        Choose the provider you want Teeks to use.
+                                                    </DialogDescription>
+                                                    <div className="pt-2">
+                                                        <span className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-[11px] font-medium text-muted-foreground font-inter">
+                                                            Current:{" "}
+                                                            <span className="text-foreground">
+                                                                {currentProvider === "google" ? "Google" : currentProvider === "microsoft" ? "Microsoft" : "Not connected"}
+                                                            </span>
                                                         </span>
-                                                    </span>
-                                                </div>
-                                            </DialogHeader>
-                                            {connectPending ? (
-                                                <div className="space-y-4 pt-2">
-                                                    <p className="text-[13px] text-foreground font-inter">
-                                                        Connecting {connectPending === "google" ? "Google" : "Microsoft"} will disconnect your current provider.
-                                                    </p>
-                                                    <DialogFooter className="gap-2">
-                                                        <button onClick={() => setConnectPending(null)} className="px-4 py-2 text-[13px] font-medium rounded border border-border">Back</button>
-                                                        <button
-                                                            onClick={() => void startProviderConnect(connectPending)}
-                                                            disabled={connectBusy}
-                                                            className="px-4 py-2 text-[13px] font-medium rounded bg-foreground text-background disabled:opacity-60"
-                                                        >
-                                                            {connectBusy ? "Switching..." : "Continue"}
+                                                    </div>
+                                                </DialogHeader>
+                                                {connectPending ? (
+                                                    <div className="space-y-4 pt-2">
+                                                        <p className="text-[13px] text-foreground font-inter">
+                                                            Connecting {connectPending === "google" ? "Google" : "Microsoft"} will disconnect your current provider.
+                                                        </p>
+                                                        <DialogFooter className="gap-2">
+                                                            <button onClick={() => setConnectPending(null)} className="px-4 py-2 text-[13px] font-medium rounded border border-border">Back</button>
+                                                            <button
+                                                                onClick={() => void startProviderConnect(connectPending)}
+                                                                disabled={connectBusy}
+                                                                className="px-4 py-2 text-[13px] font-medium rounded bg-foreground text-background disabled:opacity-60"
+                                                            >
+                                                                {connectBusy ? "Switching..." : "Continue"}
+                                                            </button>
+                                                        </DialogFooter>
+                                                    </div>
+                                                ) : (
+                                                    <div className="space-y-3 pt-2">
+                                                        <button onClick={() => handleConnectChoice("google")} className="w-full flex items-center justify-between px-4 py-3 rounded-lg border border-border hover:border-foreground/40 transition-colors">
+                                                            <span className="flex items-center gap-3 text-[13px] font-medium font-inter">
+                                                                <GoogleLogo /> Google
+                                                            </span>
+                                                            {currentProvider === "google" && <span className="text-[11px] text-primary font-medium">Connected</span>}
                                                         </button>
-                                                    </DialogFooter>
-                                                </div>
-                                            ) : (
-                                                <div className="space-y-3 pt-2">
-                                                    <button onClick={() => handleConnectChoice("google")} className="w-full flex items-center justify-between px-4 py-3 rounded-lg border border-border hover:border-foreground/40 transition-colors">
-                                                        <span className="flex items-center gap-3 text-[13px] font-medium font-inter">
-                                                            <GoogleLogo /> Google
-                                                        </span>
-                                                        {currentProvider === "google" && <span className="text-[11px] text-primary font-medium">Connected</span>}
-                                                    </button>
-                                                    <button onClick={() => handleConnectChoice("microsoft")} className="w-full flex items-center justify-between px-4 py-3 rounded-lg border border-border hover:border-foreground/40 transition-colors">
-                                                        <span className="flex items-center gap-3 text-[13px] font-medium font-inter">
-                                                            <MicrosoftLogo /> Microsoft
-                                                        </span>
-                                                        {currentProvider === "microsoft" && <span className="text-[11px] text-primary font-medium">Connected</span>}
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </DialogContent>
-                                    </Dialog>
+                                                        <button onClick={() => handleConnectChoice("microsoft")} className="w-full flex items-center justify-between px-4 py-3 rounded-lg border border-border hover:border-foreground/40 transition-colors">
+                                                            <span className="flex items-center gap-3 text-[13px] font-medium font-inter">
+                                                                <MicrosoftLogo /> Microsoft
+                                                            </span>
+                                                            {currentProvider === "microsoft" && <span className="text-[11px] text-primary font-medium">Connected</span>}
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </DialogContent>
+                                        </Dialog>
+                                    )}
                                 </>
                             ) : (
+                                <button
+                                    type="button"
+                                    onClick={() => void handleConnectChoice("google")}
+                                    disabled={connectBusy}
+                                    className="h-8 px-3 rounded-lg bg-primary text-primary-foreground text-[12px] font-medium font-inter hover:bg-primary/90 transition-colors disabled:opacity-60"
+                                >
+                                    {connectBusy ? "Connecting..." : "Connect Google"}
+                                </button>
+                            )}
+                        </div>
+
+                        {ENABLE_MICROSOFT_UI && currentProvider === "none" && (
+                            <div className="px-5 pb-4">
                                 <Dialog open={connectOpen} onOpenChange={(open) => { if (!open) setConnectPending(null); setConnectOpen(open); }}>
                                     <DialogTrigger asChild>
                                         <button
                                             type="button"
-                                            className="h-8 px-3 rounded-lg bg-primary text-primary-foreground text-[12px] font-medium font-inter hover:bg-primary/90 transition-colors"
+                                            className="h-8 px-3 rounded-lg border border-border text-[12px] font-medium text-muted-foreground font-inter hover:text-foreground hover:border-foreground/40 transition-colors"
                                         >
-                                            Connect an account
+                                            Choose provider
                                         </button>
                                     </DialogTrigger>
                                     <DialogContent className="sm:max-w-md">
@@ -1050,8 +1245,8 @@ export default function SettingsPage() {
                                         </div>
                                     </DialogContent>
                                 </Dialog>
-                            )}
-                        </div>
+                            </div>
+                        )}
                     </Section>
 
                     {/* Calendar */}
@@ -1077,76 +1272,32 @@ export default function SettingsPage() {
                                 </span>
                             )}
                         </div>
-
-                        {/* Microsoft Calendar */}
-                        <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-4">
-                            <div className="flex items-center gap-3">
-                                <Calendar size={15} className="text-muted-foreground flex-shrink-0" />
-                                <div>
-                                    <p className="text-[13px] font-medium text-foreground font-inter">Microsoft Calendar</p>
-                                    <p className="text-[12px] text-muted-foreground font-inter">Meeting briefings and scheduling</p>
+                        {ENABLE_MICROSOFT_UI && (
+                            <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-4">
+                                <div className="flex items-center gap-3">
+                                    <Calendar size={15} className="text-muted-foreground flex-shrink-0" />
+                                    <div>
+                                        <p className="text-[13px] font-medium text-foreground font-inter">Microsoft Calendar</p>
+                                        <p className="text-[12px] text-muted-foreground font-inter">Meeting briefings and scheduling</p>
+                                    </div>
                                 </div>
+                                {settings?.outlook_connected ? (
+                                    <span className="flex items-center gap-1.5 text-[12px] font-medium text-primary font-inter">
+                                        <CheckCircle2 size={13} /> Connected
+                                    </span>
+                                ) : (
+                                    <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground font-inter">
+                                        <XCircle size={13} /> Not connected
+                                    </span>
+                                )}
                             </div>
-                            {settings?.outlook_connected ? (
-                                <span className="flex items-center gap-1.5 text-[12px] font-medium text-primary font-inter">
-                                    <CheckCircle2 size={13} /> Connected
-                                </span>
-                            ) : (
-                                <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground font-inter">
-                                    <XCircle size={13} /> Not connected
-                                </span>
-                            )}
+                        )}
+                        <div className="px-5 py-4 border-t border-border">
+                            <p className="text-[12px] text-muted-foreground font-inter">
+                                Calendar sync is tied to your connected {ENABLE_MICROSOFT_UI ? "provider account" : "Google account"}.
+                            </p>
                         </div>
 
-                        {/* Meeting Briefings */}
-                        <Row
-                            label="Auto-generate briefings"
-                            description="Prepare context, attendees, and notes before scheduled meetings"
-                            control={
-                                <Switch
-                                    checked={settings?.auto_briefing_enabled ?? false}
-                                    onCheckedChange={(v) => updateSetting("auto_briefing_enabled", v)}
-                                />
-                            }
-                        />
-                        <Pad>
-                            <p className="text-[12px] text-muted-foreground font-inter mb-2">
-                                Generate briefing this long before the meeting
-                            </p>
-                            <select
-                                value={settings?.briefing_hours_before ?? 2}
-                                onChange={(e) => updateSetting("briefing_hours_before", Number(e.target.value))}
-                                className="h-9 rounded-lg border border-border bg-background px-3 text-[13px] text-foreground font-inter focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/30 transition-colors"
-                            >
-                                <option value={1}>1 hour before</option>
-                                <option value={2}>2 hours before</option>
-                                <option value={4}>4 hours before</option>
-                                <option value={8}>8 hours before</option>
-                                <option value={24}>24 hours before</option>
-                            </select>
-                        </Pad>
-                    </Section>
-
-                    {/* Default Calendar */}
-                    <Section>
-                        <SectionLabel>Default Calendar</SectionLabel>
-                        <Pad>
-                            <p className="text-[12px] text-muted-foreground font-inter mb-2">
-                                Calendar ID where new events are created. Leave blank to use your primary calendar.
-                            </p>
-                            <Input
-                                defaultValue={settings?.default_calendar_id || ""}
-                                onBlur={(e) => {
-                                    const v = e.target.value.trim() || null;
-                                    if (v !== (settings?.default_calendar_id ?? null)) {
-                                        updateSetting("default_calendar_id", v);
-                                        toast.success("Default calendar updated");
-                                    }
-                                }}
-                                placeholder="primary"
-                                className="h-9 text-[13px] bg-background border-border focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30"
-                            />
-                        </Pad>
                     </Section>
 
                     {/* Disconnect confirmation dialog */}
@@ -1213,127 +1364,120 @@ export default function SettingsPage() {
                     </Section>
 
                     <Section>
+                        <Row
+                            label="Sign out all devices"
+                            description="Revoke all active sessions across every device"
+                            onClick={handleSignOutAll}
+                            destructive
+                        />
+                    </Section>
+                </div>
+            )}
+
+            {/* ── Privacy ──────────────────────────────────────────────────── */}
+
+            {/* Billing */}
+            {activeTab === "billing" && (
+                <div className="space-y-5">
+                    <Section>
                         <SectionLabel>Billing</SectionLabel>
                         {settings?.subscription_tier === "pro" ? (
                             <Pad>
-                                <div className="space-y-3">
-                                    <p className="text-[12px] text-muted-foreground font-inter">
-                                        Select billing cycle
-                                    </p>
-                                    <div className="inline-flex rounded-lg border border-border p-1 bg-background">
-                                        <button
-                                            type="button"
-                                            onClick={() => setSelectedBillingCycle("monthly")}
-                                            className={cn(
-                                                "px-3 py-1.5 rounded-md text-xs font-medium font-inter transition-colors",
-                                                selectedBillingCycle === "monthly"
-                                                    ? "bg-primary text-primary-foreground"
-                                                    : "text-muted-foreground hover:bg-muted/60"
-                                            )}
-                                        >
-                                            Monthly
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setSelectedBillingCycle("annual")}
-                                            className={cn(
-                                                "px-3 py-1.5 rounded-md text-xs font-medium font-inter transition-colors",
-                                                selectedBillingCycle === "annual"
-                                                    ? "bg-primary text-primary-foreground"
-                                                    : "text-muted-foreground hover:bg-muted/60"
-                                            )}
-                                        >
-                                            Annual
-                                        </button>
-                                    </div>
-
-                                    <div className="rounded-lg border border-border bg-muted/20 p-3">
-                                        {planPreviewLoading ? (
-                                            <div className="flex items-center gap-2 text-[12px] text-muted-foreground font-inter">
-                                                <Loader2 size={13} className="animate-spin" />
-                                                Loading plan details...
-                                            </div>
-                                        ) : planPreviewError ? (
-                                            <p className="text-[12px] text-destructive font-inter">{planPreviewError}</p>
-                                        ) : planPreview ? (
-                                            <div className="space-y-1.5">
-                                                <p className="text-[12px] text-foreground font-medium font-inter">
-                                                    {planPreview.message}
+                                <div className="space-y-5">
+                                    <div className="rounded-xl border border-border bg-background px-4 py-4">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <p className="text-[18px] font-semibold text-foreground font-inter">Pro plan</p>
+                                                <p className="text-[14px] text-foreground/90 font-inter mt-0.5">{currentCycle}</p>
+                                                <p className="text-[12px] text-muted-foreground font-inter mt-1">
+                                                    {subscriptionData?.status === "cancel_scheduled"
+                                                        ? (hasRenewDate ? `Your plan will end on ${renewsOn}.` : "Your end date will appear after billing sync.")
+                                                        : (hasRenewDate ? `Your subscription renews on ${renewsOn}.` : "Your renewal date will appear after billing sync.")}
                                                 </p>
-                                                {planPreview.current_cycle && (
-                                                    <p className="text-[11px] text-muted-foreground font-inter">
-                                                        Current cycle: {planPreview.current_cycle}
-                                                    </p>
-                                                )}
-                                                {planPreview.effective_at && (
-                                                    <p className="text-[11px] text-muted-foreground font-inter">
-                                                        Effective on: {formatEffectiveAt(planPreview.effective_at)}
-                                                    </p>
-                                                )}
                                             </div>
-                                        ) : (
-                                            <p className="text-[12px] text-muted-foreground font-inter">
-                                                Select a cycle to preview changes.
-                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsPlanDialogOpen(true)}
+                                                className="h-9 px-4 rounded-lg border border-border text-[13px] font-medium text-foreground font-inter hover:bg-muted/40 transition-colors"
+                                            >
+                                                Update plan
+                                            </button>
+                                        </div>
+                                        {subscriptionLoading && (
+                                            <p className="text-[12px] text-muted-foreground font-inter mt-3">Refreshing subscription details...</p>
+                                        )}
+                                        {subscriptionError && (
+                                            <p className="text-[12px] text-destructive font-inter mt-3">{subscriptionError}</p>
                                         )}
                                     </div>
 
-                                    <div className="flex flex-wrap gap-2">
-                                        <button
-                                            type="button"
-                                            onClick={handleApplyPlanChange}
-                                            disabled={
-                                                planChangeBusy ||
-                                                planPreviewLoading ||
-                                                !!planPreviewError ||
-                                                !planPreview ||
-                                                planPreview.change_direction === "lateral"
-                                            }
-                                            className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-[13px] font-medium font-inter hover:bg-primary/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                                        >
-                                            {planChangeBusy ? (
-                                                <span className="inline-flex items-center gap-2">
-                                                    <Loader2 size={13} className="animate-spin" />
-                                                    Updating...
-                                                </span>
-                                            ) : planPreview?.effective_timing === "next_cycle" ? (
-                                                "Schedule change"
-                                            ) : (
-                                                "Apply now"
-                                            )}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleOpenBillingPortal}
-                                            disabled={portalBusy}
-                                            className="h-9 px-4 rounded-lg border border-border text-[13px] font-medium text-foreground font-inter hover:bg-muted/40 transition-colors disabled:opacity-60"
-                                        >
-                                            {portalBusy ? "Opening..." : "Manage payment method"}
-                                        </button>
+                                    <div className="border-t border-border pt-5">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <p className="text-[30px] font-semibold text-foreground font-inter leading-none">
+                                                    {formatUsd(usedUsd)} spent
+                                                </p>
+                                                <p className="text-[13px] text-muted-foreground font-inter mt-2">
+                                                    Resets {hasRenewDate ? renewsOn : "after billing sync"}
+                                                </p>
+                                            </div>
+                                            <p className="text-[22px] font-semibold text-foreground font-inter leading-none">
+                                                {Math.round(usagePercent)}% used
+                                            </p>
+                                        </div>
+                                        <div className="mt-4 h-3 rounded-full bg-muted overflow-hidden">
+                                            <div
+                                                className="h-full bg-primary transition-all duration-300"
+                                                style={{ width: `${usagePercent}%` }}
+                                            />
+                                        </div>
+                                        <p className="text-[12px] text-muted-foreground font-inter mt-2">
+                                            {Math.round(usedUsd * 100)} / {Math.round(limitUsd * 100)} credits used
+                                        </p>
+                                        {creditStatusError && (
+                                            <p className="text-[12px] text-destructive font-inter mt-2">{creditStatusError}</p>
+                                        )}
+                                        {creditStatusLoading && (
+                                            <div className="flex items-center gap-2 mt-2 text-[12px] text-muted-foreground font-inter">
+                                                <Loader2 size={13} className="animate-spin" />
+                                                Loading usage...
+                                            </div>
+                                        )}
                                     </div>
 
-                                    <div className="pt-2 border-t border-border/70 space-y-2">
-                                        <p className="text-[12px] text-muted-foreground font-inter">
-                                            Extra AI credits (power usage)
-                                        </p>
-                                        <div className="rounded-lg border border-border bg-muted/20 p-3">
-                                            {creditStatusLoading ? (
-                                                <div className="flex items-center gap-2 text-[12px] text-muted-foreground font-inter">
-                                                    <Loader2 size={13} className="animate-spin" />
-                                                    Loading credit status...
-                                                </div>
-                                            ) : creditStatusError ? (
-                                                <p className="text-[12px] text-destructive font-inter">{creditStatusError}</p>
-                                            ) : creditStatus ? (
-                                                <div className="space-y-1 text-[12px] font-inter">
-                                                    <p className="text-foreground">Available: {Math.round(creditStatus.credits_remaining * 100)} credits</p>
-                                                    <p className="text-muted-foreground">Used: {Math.round(creditStatus.credits_used * 100)} / {Math.round(creditStatus.credits_limit * 100)} credits</p>
-                                                </div>
-                                            ) : (
-                                                <p className="text-[12px] text-muted-foreground font-inter">No credit data available.</p>
-                                            )}
+                                    <div className="border-t border-border pt-5">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <p className="text-[18px] font-semibold text-foreground font-inter">Extra usage</p>
+                                                <p className="text-[12px] text-muted-foreground font-inter mt-1">
+                                                    Buy extra credits if you need more capacity this cycle.
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleBuyExtraCredits}
+                                                disabled={topupBusy}
+                                                className="h-9 px-4 rounded-lg border border-border text-[13px] font-medium text-foreground font-inter hover:bg-muted/40 transition-colors disabled:opacity-60"
+                                            >
+                                                {topupBusy ? "Starting..." : "Buy extra usage"}
+                                            </button>
                                         </div>
-                                        <div className="flex flex-wrap items-center gap-2">
+                                        <div className="mt-4 flex items-center justify-between gap-3">
+                                            <p className="text-[28px] font-semibold text-foreground font-inter leading-none">
+                                                {formatUsd(extraRemainingUsd)}
+                                            </p>
+                                            <p className="text-[12px] text-muted-foreground font-inter">Current balance</p>
+                                        </div>
+                                        <div className="mt-4 h-2.5 rounded-full bg-muted overflow-hidden">
+                                            <div
+                                                className="h-full bg-primary/80 transition-all duration-300"
+                                                style={{ width: `${extraPercent}%` }}
+                                            />
+                                        </div>
+                                        <p className="text-[12px] text-muted-foreground font-inter mt-2">
+                                            {Math.round(extraPercent)}% of purchased extra usage consumed
+                                        </p>
+                                        <div className="flex flex-wrap items-center gap-2 mt-3">
                                             {[5, 10, 25].map((amt) => (
                                                 <button
                                                     key={amt}
@@ -1357,19 +1501,115 @@ export default function SettingsPage() {
                                                 onChange={(e) => setTopupAmountUsd(Math.max(5, Number(e.target.value) || 5))}
                                                 className="h-8 w-24 text-[12px] bg-background border-border"
                                             />
-                                            <button
-                                                type="button"
-                                                onClick={handleBuyExtraCredits}
-                                                disabled={topupBusy}
-                                                className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-[12px] font-medium font-inter hover:bg-primary/90 transition-colors disabled:opacity-60"
-                                            >
-                                                {topupBusy ? "Starting..." : `Buy ${topupAmountUsd * 100} credits`}
-                                            </button>
                                         </div>
-                                        <p className="text-[11px] text-muted-foreground font-inter">
+                                        <p className="text-[11px] text-muted-foreground font-inter mt-2">
                                             $1 = 100 credits. Minimum top-up is $5.
                                         </p>
                                     </div>
+
+                                    <div className="border-t border-border pt-5 space-y-3">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <p className="text-[18px] font-semibold text-foreground font-inter">Payment</p>
+                                                <p className="text-[12px] text-muted-foreground font-inter mt-1">
+                                                    Manage payment method and open invoice links.
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleOpenBillingPortal}
+                                                disabled={portalBusy}
+                                                className="h-9 px-4 rounded-lg border border-border text-[13px] font-medium text-foreground font-inter hover:bg-muted/40 transition-colors disabled:opacity-60"
+                                            >
+                                                {portalBusy ? "Opening..." : "Update"}
+                                            </button>
+                                        </div>
+                                        {subscriptionData?.status === "past_due" && (
+                                            <p className="text-[12px] text-amber-700 font-inter">
+                                                Payment is overdue. Update your payment method to avoid interruption.
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    <div className="border-t border-border pt-5">
+                                        <p className="text-[18px] font-semibold text-foreground font-inter mb-3">Invoices</p>
+                                        {invoicesLoading ? (
+                                            <div className="flex items-center gap-2 text-[12px] text-muted-foreground font-inter">
+                                                <Loader2 size={13} className="animate-spin" />
+                                                Loading invoices...
+                                            </div>
+                                        ) : invoicesError ? (
+                                            <p className="text-[12px] text-destructive font-inter">{invoicesError}</p>
+                                        ) : invoices.length === 0 ? (
+                                            <p className="text-[12px] text-muted-foreground font-inter">No invoices yet.</p>
+                                        ) : (
+                                            <div className="overflow-x-auto rounded-lg border border-border">
+                                                <table className="min-w-full text-[13px] font-inter">
+                                                    <thead className="bg-muted/35">
+                                                        <tr>
+                                                            <th className="text-left px-3 py-2 text-muted-foreground font-medium">Date</th>
+                                                            <th className="text-left px-3 py-2 text-muted-foreground font-medium">Total</th>
+                                                            <th className="text-left px-3 py-2 text-muted-foreground font-medium">Status</th>
+                                                            <th className="text-left px-3 py-2 text-muted-foreground font-medium">Actions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {invoices.map((invoice) => (
+                                                            <tr key={invoice.invoice_id} className="border-t border-border/70">
+                                                                <td className="px-3 py-2 text-foreground">{formatDateShort(invoice.issued_at)}</td>
+                                                                <td className="px-3 py-2 text-foreground">
+                                                                    {formatMoneyFromMinor(invoice.total_minor, invoice.currency)}
+                                                                </td>
+                                                                <td className="px-3 py-2">
+                                                                    <span className={cn(
+                                                                        "inline-flex items-center gap-1.5",
+                                                                        invoice.status === "Overdue" ? "text-amber-700" : "text-foreground"
+                                                                    )}>
+                                                                        {invoice.status === "Overdue" && <XCircle size={14} />}
+                                                                        {invoice.status}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-3 py-2">
+                                                                    {invoice.action_url ? (
+                                                                        <a
+                                                                            href={invoice.action_url}
+                                                                            target="_blank"
+                                                                            rel="noopener noreferrer"
+                                                                            className="text-primary hover:text-primary/85 underline underline-offset-2"
+                                                                        >
+                                                                            {invoice.action_label || "View"}
+                                                                        </a>
+                                                                    ) : (
+                                                                        <span className="text-muted-foreground">N/A</span>
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="border-t border-border pt-5">
+                                        <p className="text-[18px] font-semibold text-foreground font-inter mb-2">Cancellation</p>
+                                        <p className="text-[12px] text-muted-foreground font-inter mb-3">
+                                            Cancellation takes effect at the end of your current billing cycle.
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={handleCancelPlan}
+                                            disabled={cancelBusy || subscriptionData?.status === "cancel_scheduled"}
+                                            className="h-9 px-4 rounded-lg bg-destructive text-white text-[13px] font-medium font-inter hover:bg-destructive/90 transition-colors disabled:opacity-60"
+                                        >
+                                            {cancelBusy
+                                                ? "Cancelling..."
+                                                : subscriptionData?.status === "cancel_scheduled"
+                                                    ? "Cancellation scheduled"
+                                                    : "Cancel plan"}
+                                        </button>
+                                    </div>
+
                                 </div>
                             </Pad>
                         ) : (
@@ -1388,18 +1628,115 @@ export default function SettingsPage() {
                         )}
                     </Section>
 
-                    <Section>
-                        <Row
-                            label="Sign out all devices"
-                            description="Revoke all active sessions across every device"
-                            onClick={handleSignOutAll}
-                            destructive
-                        />
-                    </Section>
+                    <Dialog open={isPlanDialogOpen} onOpenChange={setIsPlanDialogOpen}>
+                        <DialogContent className="sm:max-w-md">
+                            <DialogHeader>
+                                <DialogTitle>Update plan</DialogTitle>
+                                <DialogDescription>
+                                    Change your Pro billing cycle.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-3">
+                                <div className="inline-flex rounded-lg border border-border p-1 bg-background">
+                                    {availableCycles.includes("monthly") && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedBillingCycle("monthly")}
+                                            className={cn(
+                                                "px-3 py-1.5 rounded-md text-xs font-medium font-inter transition-colors",
+                                                selectedBillingCycle === "monthly"
+                                                    ? "bg-primary text-primary-foreground"
+                                                    : "text-muted-foreground hover:bg-muted/60"
+                                            )}
+                                        >
+                                            Monthly
+                                        </button>
+                                    )}
+                                    {availableCycles.includes("annual") && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedBillingCycle("annual")}
+                                            className={cn(
+                                                "px-3 py-1.5 rounded-md text-xs font-medium font-inter transition-colors",
+                                                selectedBillingCycle === "annual"
+                                                    ? "bg-primary text-primary-foreground"
+                                                    : "text-muted-foreground hover:bg-muted/60"
+                                            )}
+                                        >
+                                            Annual
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                                    {planPreviewLoading ? (
+                                        <div className="flex items-center gap-2 text-[12px] text-muted-foreground font-inter">
+                                            <Loader2 size={13} className="animate-spin" />
+                                            Loading plan details...
+                                        </div>
+                                    ) : planPreviewError ? (
+                                        <p className="text-[12px] text-destructive font-inter">{planPreviewError}</p>
+                                    ) : planPreview ? (
+                                        <div className="space-y-1.5">
+                                            <p className="text-[12px] text-foreground font-medium font-inter">
+                                                {planPreview.message}
+                                            </p>
+                                            {planPreview.current_cycle && (
+                                                <p className="text-[11px] text-muted-foreground font-inter">
+                                                    Current cycle: {planPreview.current_cycle}
+                                                </p>
+                                            )}
+                                            {planPreview.effective_at && (
+                                                <p className="text-[11px] text-muted-foreground font-inter">
+                                                    Effective on: {formatEffectiveAt(planPreview.effective_at)}
+                                                </p>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <p className="text-[12px] text-muted-foreground font-inter">
+                                            Select a cycle to preview changes.
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                            <DialogFooter>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsPlanDialogOpen(false)}
+                                    className="h-9 px-4 rounded-lg border border-border text-[13px] font-medium text-foreground font-inter hover:bg-muted/40 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleApplyPlanChange}
+                                    disabled={
+                                        planChangeBusy ||
+                                        planPreviewLoading ||
+                                        availableCycles.length < 2 ||
+                                        !!planPreviewError ||
+                                        !planPreview ||
+                                        planPreview.change_direction === "lateral"
+                                    }
+                                    className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-[13px] font-medium font-inter hover:bg-primary/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                    {planChangeBusy ? (
+                                        <span className="inline-flex items-center gap-2">
+                                            <Loader2 size={13} className="animate-spin" />
+                                            Updating...
+                                        </span>
+                                    ) : planPreview?.effective_timing === "next_cycle" ? (
+                                        "Schedule change"
+                                    ) : (
+                                        "Apply cycle change"
+                                    )}
+                                </button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+
                 </div>
             )}
 
-            {/* ── Privacy ──────────────────────────────────────────────────── */}
             {activeTab === "privacy" && (
                 <div className="space-y-5">
 

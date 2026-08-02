@@ -5,15 +5,18 @@ Provider-agnostic billing endpoints backed by the configured billing provider.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from urllib.parse import urlparse
 from typing import Literal
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
-from app.data.models import BillingEvent, BillingPlan, BillingSubscription, TaskQueue, UserSettings
+from app.data.models import ApiIdempotencyKey, BillingEvent, BillingInvoice, BillingPlan, BillingSubscription, TaskQueue, UserSettings
 from app.infra.config import Settings, get_settings
 from app.infra.database import get_db
 from app.security.auth import (
@@ -33,7 +36,7 @@ from app.services.billing_provider import (
 from app.services.billing_ledger import ensure_configured_plans, sync_subscription_snapshot_from_settings
 from app.services.dunning import apply_failure_state, clear_dunning_state, is_failure_event, is_recovery_event, notify_stage
 from app.jobs.queue import enqueue_task
-from core.llm.token_tracking import get_user_usage_summary
+from core.llm.token_tracking import get_usage_breakdown, get_user_usage_summary
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
@@ -62,6 +65,11 @@ def _validate_return_url(url: str, settings: Settings) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(status_code=400, detail="Invalid return URL")
+    hostname = (parsed.hostname or "").lower()
+    is_localhost = hostname in {"localhost", "127.0.0.1", "::1"}
+    enforce_https = settings.FORCE_HTTPS or settings.ENV in {"staging", "production"}
+    if enforce_https and not is_localhost and parsed.scheme != "https":
+        raise HTTPException(status_code=400, detail="Return URL must use https")
 
     allowed_origins = _allowed_return_origins(settings)
     if not allowed_origins:
@@ -70,6 +78,83 @@ def _validate_return_url(url: str, settings: Settings) -> None:
     url_origin = f"{parsed.scheme}://{parsed.netloc}"
     if allowed_origins and url_origin not in allowed_origins:
         raise HTTPException(status_code=400, detail="Return URL origin not allowed")
+
+
+def _canonical_request_hash(payload: dict) -> str:
+    normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _reserve_or_replay_idempotency(
+    *,
+    db: Session,
+    user_id: str,
+    route_key: str,
+    request: Request,
+    payload: dict,
+    settings: Settings,
+) -> tuple[dict | None, ApiIdempotencyKey | None]:
+    key = (request.headers.get("Idempotency-Key") or "").strip()
+    if not key:
+        if settings.BILLING_REQUIRE_IDEMPOTENCY_KEY:
+            raise HTTPException(status_code=400, detail="Missing Idempotency-Key header")
+        return None, None
+
+    request_hash = _canonical_request_hash(payload)
+    now = datetime.now(timezone.utc)
+
+    existing = db.query(ApiIdempotencyKey).filter(
+        ApiIdempotencyKey.user_id == user_id,
+        ApiIdempotencyKey.route_key == route_key,
+        ApiIdempotencyKey.idempotency_key == key,
+    ).first()
+
+    if existing:
+        expires_at = existing.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if expires_at < now:
+            db.delete(existing)
+            db.flush()
+        else:
+            if existing.request_hash != request_hash:
+                raise HTTPException(status_code=409, detail="Idempotency-Key reuse with different payload")
+            if existing.response_body is not None and existing.response_status >= 200:
+                return existing.response_body, None
+            raise HTTPException(status_code=409, detail="A request with this Idempotency-Key is already in progress")
+
+    ttl_seconds = max(60, int(settings.BILLING_IDEMPOTENCY_TTL_SECONDS or 86400))
+    record = ApiIdempotencyKey(
+        user_id=user_id,
+        route_key=route_key,
+        idempotency_key=key,
+        request_hash=request_hash,
+        response_status=0,
+        response_body=None,
+        expires_at=now + timedelta(seconds=ttl_seconds),
+    )
+    db.add(record)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        winner = db.query(ApiIdempotencyKey).filter(
+            ApiIdempotencyKey.user_id == user_id,
+            ApiIdempotencyKey.route_key == route_key,
+            ApiIdempotencyKey.idempotency_key == key,
+        ).first()
+        if winner and winner.response_body is not None and winner.response_status >= 200:
+            return winner.response_body, None
+        raise HTTPException(status_code=409, detail="A request with this Idempotency-Key is already in progress")
+    return None, record
+
+
+def _store_idempotency_response(record: ApiIdempotencyKey | None, *, status_code: int, response_body: dict) -> None:
+    if record is None:
+        return
+    record.response_status = int(status_code)
+    record.response_body = response_body
 
 
 def _format_amount_for_copy(amount: float | None, currency: str | None) -> str | None:
@@ -254,6 +339,14 @@ class SubscriptionResponse(BaseModel):
     trial_ends_at: str | None = None
     expires_at: str | None = None
     days_remaining: int
+    current_cycle: Literal["monthly", "annual"] | None = None
+    renews_at: str | None = None
+
+
+class PlanOptionsResponse(BaseModel):
+    available_cycles: list[Literal["monthly", "annual"]]
+    current_cycle: Literal["monthly", "annual"] | None = None
+    default_cycle: Literal["monthly", "annual"] = "monthly"
 
 
 @router.get("/subscription", response_model=SubscriptionResponse)
@@ -273,6 +366,27 @@ def get_subscription(
     except Exception:
         db.rollback()
 
+    current_cycle, period_end, _subscription = _resolve_current_cycle_and_period_end(
+        db,
+        settings_row=settings,
+        provider=billing.provider,
+        app_settings=get_settings(),
+        requested_current_cycle=None,
+    )
+
+    # Fallback when billing snapshots are still catching up.
+    if settings.subscription_tier == "pro" and period_end is None:
+        fallback_cycle = current_cycle or "monthly"
+        anchor = settings.credits_period_start or datetime.now(timezone.utc)
+        if fallback_cycle == "annual":
+            period_end = anchor + timedelta(days=365)
+        else:
+            period_end = anchor + timedelta(days=30)
+        if current_cycle is None:
+            current_cycle = fallback_cycle
+
+    renews_at = period_end.isoformat() if period_end else None
+
     return SubscriptionResponse(
         tier=settings.subscription_tier or "trial",
         status=settings.subscription_status or "trialing",
@@ -280,12 +394,71 @@ def get_subscription(
         trial_ends_at=settings.trial_ends_at.isoformat() if settings.trial_ends_at else None,
         expires_at=settings.subscription_expires_at.isoformat() if settings.subscription_expires_at else None,
         days_remaining=settings.days_remaining,
+        current_cycle=current_cycle if current_cycle in {"monthly", "annual"} else None,
+        renews_at=renews_at,
+    )
+
+
+@router.get("/plan-options", response_model=PlanOptionsResponse)
+def get_plan_options(
+    settings: UserSettings = Depends(get_user_settings),
+    db: Session = Depends(get_db_for_user),
+    billing: BillingProvider = Depends(get_billing_provider),
+):
+    ensure_configured_plans(db, provider=billing.provider)
+    app_settings = get_settings()
+
+    available_cycles: list[Literal["monthly", "annual"]] = []
+    if billing.provider == "dodo":
+        monthly_id = app_settings.DODO_PRODUCT_ID_MONTHLY or app_settings.DODO_PRODUCT_ID
+        annual_id = app_settings.DODO_PRODUCT_ID_ANNUAL
+        if monthly_id:
+            available_cycles.append("monthly")
+        if annual_id:
+            available_cycles.append("annual")
+    else:
+        plans = (
+            db.query(BillingPlan)
+            .filter(
+                BillingPlan.provider == billing.provider,
+                BillingPlan.is_active == True,  # noqa: E712
+                BillingPlan.billing_interval.in_(["monthly", "annual"]),
+            )
+            .all()
+        )
+        intervals = {str(p.billing_interval or "").lower() for p in plans}
+        if "monthly" in intervals:
+            available_cycles.append("monthly")
+        if "annual" in intervals:
+            available_cycles.append("annual")
+
+    if not available_cycles:
+        available_cycles = ["monthly"]
+
+    current_cycle, _, _ = _resolve_current_cycle_and_period_end(
+        db,
+        settings_row=settings,
+        provider=billing.provider,
+        app_settings=app_settings,
+        requested_current_cycle=None,
+    )
+    if current_cycle not in available_cycles:
+        current_cycle = None
+    default_cycle: Literal["monthly", "annual"] = (
+        current_cycle if current_cycle in {"monthly", "annual"} else available_cycles[0]
+    )
+
+    return PlanOptionsResponse(
+        available_cycles=available_cycles,
+        current_cycle=current_cycle,
+        default_cycle=default_cycle,
     )
 
 
 @router.post("/checkout", response_model=CheckoutResponse)
 def create_checkout(
     request: CheckoutRequest,
+    request_http: Request,
     user: AuthenticatedUser = Depends(get_current_user),
     settings: UserSettings = Depends(get_user_settings),
     app_settings: Settings = Depends(get_settings),
@@ -299,6 +472,21 @@ def create_checkout(
 
     _validate_return_url(request.success_url, app_settings)
     _validate_return_url(request.cancel_url, app_settings)
+    replay, idem = _reserve_or_replay_idempotency(
+        db=db,
+        user_id=settings.user_id,
+        route_key="billing.checkout",
+        request=request_http,
+        payload={
+            "success_url": request.success_url,
+            "cancel_url": request.cancel_url,
+            "plan_cycle": request.plan_cycle,
+            "provider": billing.provider,
+        },
+        settings=app_settings,
+    )
+    if replay is not None:
+        return CheckoutResponse(**replay)
 
     checkout_url = billing.create_checkout_session(
         settings_row=settings,
@@ -312,13 +500,16 @@ def create_checkout(
     if not checkout_url:
         raise HTTPException(status_code=500, detail="Failed to create checkout session")
 
+    response_body = {"checkout_url": checkout_url}
+    _store_idempotency_response(idem, status_code=200, response_body=response_body)
     db.commit()
-    return CheckoutResponse(checkout_url=checkout_url)
+    return CheckoutResponse(**response_body)
 
 
 @router.post("/credits/top-up/checkout", response_model=CreditTopupCheckoutResponse)
 def create_credit_topup_checkout(
     request: CreditTopupCheckoutRequest,
+    request_http: Request,
     user: AuthenticatedUser = Depends(get_current_user),
     settings: UserSettings = Depends(get_user_settings),
     app_settings: Settings = Depends(get_settings),
@@ -347,6 +538,21 @@ def create_credit_topup_checkout(
 
     _validate_return_url(request.success_url, app_settings)
     _validate_return_url(request.cancel_url, app_settings)
+    replay, idem = _reserve_or_replay_idempotency(
+        db=db,
+        user_id=settings.user_id,
+        route_key="billing.credits.topup.checkout",
+        request=request_http,
+        payload={
+            "success_url": request.success_url,
+            "cancel_url": request.cancel_url,
+            "amount_usd": amount_usd,
+            "provider": billing.provider,
+        },
+        settings=app_settings,
+    )
+    if replay is not None:
+        return CreditTopupCheckoutResponse(**replay)
 
     checkout_url, error = billing.create_credit_topup_checkout(
         settings_row=settings,
@@ -359,20 +565,24 @@ def create_credit_topup_checkout(
     if error or not checkout_url:
         raise HTTPException(status_code=400, detail=error or "Unable to create top-up checkout")
 
-    db.commit()
     credits_to_add = amount_usd * 100
-    return CreditTopupCheckoutResponse(
-        checkout_url=checkout_url,
-        amount_usd=amount_usd,
-        credits_to_add=credits_to_add,
-        message=f"You'll add {credits_to_add} credits after payment confirmation.",
-    )
+    response_body = {
+        "checkout_url": checkout_url,
+        "amount_usd": amount_usd,
+        "credits_to_add": credits_to_add,
+        "message": f"You'll add {credits_to_add} credits after payment confirmation.",
+    }
+    _store_idempotency_response(idem, status_code=200, response_body=response_body)
+    db.commit()
+    return CreditTopupCheckoutResponse(**response_body)
 
 
 @router.post("/cancel")
 def cancel_subscription(
+    request_http: Request,
     user: AuthenticatedUser = Depends(get_current_user),
     settings: UserSettings = Depends(get_user_settings),
+    app_settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db_for_user),
     billing: BillingProvider = Depends(get_billing_provider),
 ):
@@ -380,6 +590,16 @@ def cancel_subscription(
         raise HTTPException(status_code=503, detail="Billing service not available")
 
     ensure_configured_plans(db, provider=billing.provider)
+    replay, idem = _reserve_or_replay_idempotency(
+        db=db,
+        user_id=settings.user_id,
+        route_key="billing.cancel",
+        request=request_http,
+        payload={"provider": billing.provider},
+        settings=app_settings,
+    )
+    if replay is not None:
+        return replay
 
     ok, error = billing.cancel_subscription(
         settings_row=settings,
@@ -395,11 +615,13 @@ def cancel_subscription(
         settings_row=settings,
         provider=billing.provider,
     )
-    db.commit()
-    return {
+    response_body = {
         "success": True,
         "message": "You're all set. Cancellation is scheduled for the end of your current billing period.",
     }
+    _store_idempotency_response(idem, status_code=200, response_body=response_body)
+    db.commit()
+    return response_body
 
 
 @router.post("/plan-change/preview", response_model=PlanChangePreviewResponse)
@@ -476,7 +698,9 @@ def preview_plan_change(
 @router.post("/plan-change", response_model=PlanChangeResponse)
 def change_plan(
     request: PlanChangeRequest,
+    request_http: Request,
     settings: UserSettings = Depends(get_user_settings),
+    app_settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db_for_user),
     billing: BillingProvider = Depends(get_billing_provider),
 ):
@@ -484,6 +708,20 @@ def change_plan(
         raise HTTPException(status_code=503, detail="Billing service not available")
 
     ensure_configured_plans(db, provider=billing.provider)
+    replay, idem = _reserve_or_replay_idempotency(
+        db=db,
+        user_id=settings.user_id,
+        route_key="billing.plan.change",
+        request=request_http,
+        payload={
+            "provider": billing.provider,
+            "target_cycle": request.target_cycle,
+            "current_cycle": request.current_cycle,
+        },
+        settings=app_settings,
+    )
+    if replay is not None:
+        return PlanChangeResponse(**replay)
 
     current_cycle, period_end, subscription = _resolve_current_cycle_and_period_end(
         db,
@@ -495,15 +733,18 @@ def change_plan(
     direction = _classify_plan_change(current_cycle, request.target_cycle)
 
     if direction == "lateral":
-        return PlanChangeResponse(
-            success=True,
-            current_cycle=current_cycle,
-            change_direction=direction,
-            effective_timing="immediate",
-            amount_due_today=0.0,
-            currency="USD",
-            message="You're already on this billing cycle. No changes needed.",
-        )
+        response_body = {
+            "success": True,
+            "current_cycle": current_cycle,
+            "change_direction": direction,
+            "effective_timing": "immediate",
+            "amount_due_today": 0.0,
+            "currency": "USD",
+            "message": "You're already on this billing cycle. No changes needed.",
+        }
+        _store_idempotency_response(idem, status_code=200, response_body=response_body)
+        db.commit()
+        return PlanChangeResponse(**response_body)
 
     if direction == "downgrade":
         if billing.provider != "dodo":
@@ -549,17 +790,19 @@ def change_plan(
             }
             subscription.provider_metadata = meta
 
+        response_body = {
+            "success": True,
+            "current_cycle": current_cycle,
+            "change_direction": direction,
+            "effective_timing": "next_cycle",
+            "effective_at": effective_at,
+            "amount_due_today": 0.0,
+            "currency": "USD",
+            "message": f"Downgrade scheduled for {effective_at}. Your current plan stays active until renewal.",
+        }
+        _store_idempotency_response(idem, status_code=200, response_body=response_body)
         db.commit()
-        return PlanChangeResponse(
-            success=True,
-            current_cycle=current_cycle,
-            change_direction=direction,
-            effective_timing="next_cycle",
-            effective_at=effective_at,
-            amount_due_today=0.0,
-            currency="USD",
-            message=f"Downgrade scheduled for {effective_at}. Your current plan stays active until renewal.",
-        )
+        return PlanChangeResponse(**response_body)
 
     preview, preview_error = billing.preview_plan_change(settings_row=settings, target_cycle=request.target_cycle, db=db)
     if preview_error or preview is None:
@@ -570,24 +813,25 @@ def change_plan(
         raise HTTPException(status_code=400, detail=error or "Unable to change plan")
 
     sync_subscription_snapshot_from_settings(db, settings_row=settings, provider=billing.provider)
-    db.commit()
-
     amount_due, currency = _extract_amount_and_currency(preview)
     display_amount = _format_amount_for_copy(amount_due, currency)
     if display_amount:
         message = f"You'll be charged {display_amount} today. Your new plan starts immediately."
     else:
         message = "Your plan changes immediately. Any prorated difference is applied today."
+    response_body = {
+        "success": True,
+        "current_cycle": current_cycle,
+        "change_direction": direction,
+        "effective_timing": "immediate",
+        "message": message,
+        "amount_due_today": amount_due,
+        "currency": currency,
+    }
+    _store_idempotency_response(idem, status_code=200, response_body=response_body)
+    db.commit()
 
-    return PlanChangeResponse(
-        success=True,
-        current_cycle=current_cycle,
-        change_direction=direction,
-        effective_timing="immediate",
-        message=message,
-        amount_due_today=amount_due,
-        currency=currency,
-    )
+    return PlanChangeResponse(**response_body)
 
 
 @router.get("/portal-url", response_model=PortalResponse)
@@ -619,13 +863,70 @@ class TokenUsageResponse(BaseModel):
     total_cost_usd: float
 
 
+class TokenUsageProviderSummary(BaseModel):
+    provider: str
+    request_count: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost_usd: float
+
+
+class TokenUsageBreakdownItem(BaseModel):
+    provider: str
+    model: str
+    operation: str
+    request_count: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost_usd: float
+    billable: bool
+
+
+class AdminTokenUsageBreakdownResponse(BaseModel):
+    days: int
+    generated_at: str
+    filters: dict
+    total_requests: int
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+    providers: list[TokenUsageProviderSummary]
+    breakdown: list[TokenUsageBreakdownItem]
+
+
 @router.get("/token-usage", response_model=TokenUsageResponse)
 def get_token_usage(
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    usage = get_user_usage_summary(db, user.id)
+    usage = get_user_usage_summary(db, user.user_id)
     return TokenUsageResponse(**usage)
+
+
+@router.get("/admin/token-usage", response_model=AdminTokenUsageBreakdownResponse)
+def get_admin_token_usage(
+    days: int = 30,
+    user_id: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    operation: str | None = None,
+    limit: int = 50,
+    _admin: AuthenticatedUser = Depends(require_admin_user),
+    db: Session = Depends(get_db),
+):
+    return AdminTokenUsageBreakdownResponse(
+        **get_usage_breakdown(
+            db,
+            days=days,
+            user_id=user_id,
+            provider=provider,
+            model=model,
+            operation=operation,
+            limit=limit,
+        )
+    )
 
 
 class CreditStatusResponse(BaseModel):
@@ -638,19 +939,49 @@ class CreditStatusResponse(BaseModel):
     tier: str
 
 
+class BillingInvoiceItemResponse(BaseModel):
+    invoice_id: int
+    provider_invoice_id: str | None = None
+    issued_at: str | None = None
+    total_minor: int | None = None
+    currency: str = "USD"
+    status: str
+    action_label: str | None = None
+    action_url: str | None = None
+
+
+class BillingInvoicesResponse(BaseModel):
+    invoices: list[BillingInvoiceItemResponse]
+
+
 @router.get("/credits", response_model=CreditStatusResponse)
 def get_credit_status(
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from app.services.credits import get_credit_status
+    from app.services.credits import get_credit_status, get_credit_limit_for_tier
 
     settings = db.query(UserSettings).filter(
-        UserSettings.user_id == user.id
+        UserSettings.user_id == user.user_id
     ).first()
 
     if not settings:
         raise HTTPException(status_code=404, detail="User settings not found")
+
+    # Self-heal older rows so billing UI always has a sane denominator.
+    repaired = False
+    if settings.credits_limit is None or settings.credits_limit <= 0:
+        settings.credits_limit = get_credit_limit_for_tier(settings.subscription_tier or "trial")
+        repaired = True
+    if settings.credits_used is None or settings.credits_used < 0:
+        settings.credits_used = 0.0
+        repaired = True
+    if settings.credits_period_start is None:
+        settings.credits_period_start = datetime.now(timezone.utc)
+        repaired = True
+    if repaired:
+        db.commit()
+        db.refresh(settings)
 
     status = get_credit_status(settings)
 
@@ -663,6 +994,63 @@ def get_credit_status(
         period_start=status["period_start"],
         tier=status["tier"],
     )
+
+
+@router.get("/invoices", response_model=BillingInvoicesResponse)
+def list_billing_invoices(
+    limit: int = 20,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db_for_user),
+    billing: BillingProvider = Depends(get_billing_provider),
+):
+    safe_limit = max(1, min(limit, 100))
+    rows = (
+        db.query(BillingInvoice)
+        .filter(
+            BillingInvoice.user_id == user.user_id,
+            BillingInvoice.provider == billing.provider,
+        )
+        .order_by(BillingInvoice.created_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+
+    invoices: list[BillingInvoiceItemResponse] = []
+    for row in rows:
+        normalized_status = (row.status or "open").lower()
+        if normalized_status == "paid":
+            status = "Paid"
+        elif normalized_status in {"failed", "uncollectible"}:
+            status = "Overdue"
+        elif normalized_status == "open" and (row.amount_remaining_minor or 0) > 0:
+            status = "Overdue"
+        else:
+            status = normalized_status.replace("_", " ").title()
+
+        action_url = row.hosted_invoice_url or row.invoice_pdf_url
+        action_label = None
+        if action_url:
+            action_label = "Pay" if status == "Overdue" else "View"
+
+        issued_at = (
+            row.period_end
+            or row.paid_at
+            or row.created_at
+        )
+        invoices.append(
+            BillingInvoiceItemResponse(
+                invoice_id=row.id,
+                provider_invoice_id=row.provider_invoice_id,
+                issued_at=issued_at.isoformat() if issued_at else None,
+                total_minor=row.amount_due_minor or row.amount_paid_minor or 0,
+                currency=(row.currency or "USD").upper(),
+                status=status,
+                action_label=action_label,
+                action_url=action_url,
+            )
+        )
+
+    return BillingInvoicesResponse(invoices=invoices)
 
 
 class ReplayBillingEventResponse(BaseModel):
@@ -692,13 +1080,16 @@ def replay_billing_event(
             "raw_event_type": event_row.event_type,
             "delivery_id": event_row.delivery_id,
             "customer_id": event_row.customer_id,
-            "customer_email": event_row.customer_email,
             "subscription_id": event_row.subscription_id,
+            "invoice_id": event_row.invoice_id,
+            "product_ids": [],
             "raw": payload.get("raw") if isinstance(payload.get("raw"), dict) else payload,
         }
 
     normalized_event = deserialize_billing_event(normalized)
     user_row = get_user_for_billing_event(db, normalized_event)
+    if not user_row and event_row.user_id:
+        user_row = db.query(UserSettings).filter(UserSettings.user_id == event_row.user_id).first()
     handled = apply_billing_event(db, normalized_event)
     if user_row:
         if is_recovery_event(normalized_event):

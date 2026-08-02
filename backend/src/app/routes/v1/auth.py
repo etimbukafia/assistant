@@ -11,13 +11,32 @@ from sqlalchemy import or_
 from app.infra.config import get_settings, Settings
 from app.security.auth import get_db_for_user, get_current_user, AuthenticatedUser
 from app.security.auth import get_settings as get_app_settings # Watch out for name collision with config.get_settings
+from app.security.privacy_utils import mask_email
 from app.integrations.gmail import GmailClient, get_gmail_client
 from app.security.encryption import encrypt_token
-from app.data.models import GmailAccount, OutlookAccount, UserSettings
+from app.data.models import GmailAccount, OutlookAccount, UserSettings, WebhookDelivery, WebhookLog
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+def _clear_provider_webhook_audit(db: Session, *, user_id: str, provider: str) -> None:
+    if provider == "google":
+        sources = ("gmail", "calendar")
+    elif provider == "microsoft":
+        sources = ("outlook",)
+    else:
+        return
+
+    db.query(WebhookLog).filter(
+        WebhookLog.user_id == user_id,
+        WebhookLog.source.in_(sources),
+    ).delete(synchronize_session=False)
+    db.query(WebhookDelivery).filter(
+        WebhookDelivery.user_id == user_id,
+        WebhookDelivery.source.in_(sources),
+    ).delete(synchronize_session=False)
 
 
 def _infer_token_expiry(token: str) -> datetime | None:
@@ -163,7 +182,7 @@ def connect_gmail_with_provider_token(
     Verifies all required scopes were granted. Returns 403 if any are missing.
     """
     try:
-        logger.info(f"Gmail connect request for user={user.user_id}, email={request.email}")
+        logger.info("Gmail connect request for user=%s email=%s", user.user_id, mask_email(request.email))
         settings = _get_or_create_settings(db, user)
         _enforce_single_provider(settings, "google")
 
@@ -197,7 +216,7 @@ def connect_gmail_with_provider_token(
         # Verify we can access the Gmail API
         profile = service.users().getProfile(userId='me').execute()
         verified_email = profile.get('emailAddress')
-        logger.info(f"Gmail API verified, email={verified_email}")
+        logger.info("Gmail API verified email=%s", mask_email(verified_email))
 
         if not verified_email:
             raise HTTPException(
@@ -240,7 +259,7 @@ def connect_gmail_with_provider_token(
             account.refresh_token = encrypted_refresh_token
             account.token_expiry = token_expiry
             account.updated_at = datetime.now(timezone.utc)
-            logger.info(f"Updated existing GmailAccount for {verified_email}")
+            logger.info("Updated existing GmailAccount for %s", mask_email(verified_email))
         else:
             # Create new
             account = GmailAccount(
@@ -251,12 +270,12 @@ def connect_gmail_with_provider_token(
                 token_expiry=token_expiry
             )
             db.add(account)
-            logger.info(f"Creating new GmailAccount for {verified_email}")
+            logger.info("Creating new GmailAccount for %s", mask_email(verified_email))
 
         # Mark provider as connected (MVP single-provider mode)
         settings.connected_provider = "google"
         db.commit()
-        logger.info(f"GmailAccount committed successfully for user={user.user_id}, email={verified_email}")
+        logger.info("GmailAccount committed successfully for user=%s email=%s", user.user_id, mask_email(verified_email))
 
         # Set up Google Calendar push notifications (non-fatal if it fails)
         try:
@@ -294,7 +313,7 @@ def connect_gmail_with_provider_token(
                     account.last_history_id = str(gmail_watch.get("historyId", ""))
                     db.commit()
             else:
-                logger.warning("Gmail watch setup did not return a response for %s", verified_email)
+                logger.warning("Gmail watch setup did not return a response for %s", mask_email(verified_email))
         except Exception as watch_err:
             logger.warning("Gmail watch setup failed for user=%s: %s", user.user_id, watch_err, exc_info=True)
 
@@ -322,7 +341,7 @@ def connect_microsoft_with_provider_token(
     Stores credentials for Outlook email + Calendar access.
     """
     try:
-        logger.info("Microsoft connect request for user=%s, email=%s", user.user_id, request.email)
+        logger.info("Microsoft connect request for user=%s email=%s", user.user_id, mask_email(request.email))
         settings = _get_or_create_settings(db, user)
         _enforce_single_provider(settings, "microsoft")
 
@@ -443,7 +462,7 @@ def gmail_callback(
         from app.services.gmail_watch import setup_watch
         watch_result = setup_watch(gmail_client)
         if not watch_result:
-            logger.warning("Gmail watch setup did not return a response for %s", email_address)
+            logger.warning("Gmail watch setup did not return a response for %s", mask_email(email_address))
         if watch_result:
             # Store initial history ID for webhook processing
             from app.data.models import GmailAccount
@@ -489,11 +508,12 @@ def revoke_gmail_auth(
     db: Session = Depends(get_db_for_user)
 ):
     """
-    Revoke Gmail authentication and delete ALL user data.
+    Revoke Gmail authentication and delete all provider-derived user data.
 
     This performs a complete data deletion:
     - All Messages and related data (Tasks, Reminders, Scheduling, etc.)
-    - Memory data (PrincipalMemory, DecisionPattern, ContactContext)
+    - Canonical relationship intelligence (Contacts, ThreadState, ContextEntry, EntityReference)
+    - Legacy memory data (PrincipalMemory, DecisionPattern, ContactContext)
     - Agent activity logs
     - Calendar events
     - Gmail account credentials
@@ -504,7 +524,8 @@ def revoke_gmail_auth(
     from app.data.models import (
         GmailAccount, Message, Task, TaskQueue,
         PrincipalMemory, DecisionPattern, ContactContext,
-        CalendarEvent, AgentActivityLog, SchedulingSuggestion
+        CalendarEvent, AgentActivityLog, SchedulingSuggestion,
+        ThreadState, Contact, ContextEntry, DiaryEntryLink, EntityReference,
     )
 
     settings = _get_or_create_settings(db, user)
@@ -512,6 +533,11 @@ def revoke_gmail_auth(
     # Gather scoped IDs for safe deletes when user_id isn't present
     message_ids_subq = db.query(Message.id).filter(Message.user_id == user.user_id).subquery()
     task_ids_subq = db.query(Task.id).filter(Task.user_id == user.user_id).subquery()
+    context_entry_ids_subq = (
+        db.query(ContextEntry.id)
+        .filter(ContextEntry.user_id == user.user_id)
+        .subquery()
+    )
 
     # 1. Delete dependent data first (scoped by user)
     db.query(Task).filter(Task.user_id == user.user_id).delete(synchronize_session=False)
@@ -522,12 +548,20 @@ def revoke_gmail_auth(
         (AgentActivityLog.related_message_id.in_(message_ids_subq)) |
         (AgentActivityLog.related_task_id.in_(task_ids_subq))
     ).delete(synchronize_session=False)
+    db.query(DiaryEntryLink).filter(
+        DiaryEntryLink.entry_id.in_(context_entry_ids_subq)
+    ).delete(synchronize_session=False)
 
     # 2. Delete main data (scoped by user)
+    db.query(ContextEntry).filter(ContextEntry.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(EntityReference).filter(EntityReference.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(ThreadState).filter(ThreadState.user_id == user.user_id).delete(synchronize_session=False)
+    db.query(Contact).filter(Contact.user_id == user.user_id).delete(synchronize_session=False)
     db.query(Message).filter(Message.user_id == user.user_id).delete(synchronize_session=False)
     db.query(PrincipalMemory).filter(PrincipalMemory.user_id == user.user_id).delete(synchronize_session=False)
     db.query(DecisionPattern).filter(DecisionPattern.user_id == user.user_id).delete(synchronize_session=False)
     db.query(ContactContext).filter(ContactContext.user_id == user.user_id).delete(synchronize_session=False)
+    _clear_provider_webhook_audit(db, user_id=user.user_id, provider="google")
 
     # 3. Delete account credentials (scoped by user)
     db.query(GmailAccount).filter(
@@ -586,6 +620,7 @@ def disconnect_provider(
             logger.warning("Failed to stop Calendar watches: %s", e)
 
         db.query(GmailAccount).filter(GmailAccount.user_id == user.user_id).delete(synchronize_session=False)
+        _clear_provider_webhook_audit(db, user_id=user.user_id, provider="google")
         # Clear calendar settings to avoid syncing after disconnect
         settings.calendar_ids = []
         settings.default_calendar_id = None
@@ -598,6 +633,7 @@ def disconnect_provider(
             logger.warning("Failed to stop Outlook subscriptions: %s", e)
 
         db.query(OutlookAccount).filter(OutlookAccount.user_id == user.user_id).delete(synchronize_session=False)
+        _clear_provider_webhook_audit(db, user_id=user.user_id, provider="microsoft")
         settings.calendar_ids = []
         settings.default_calendar_id = None
 

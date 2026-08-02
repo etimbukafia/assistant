@@ -41,13 +41,13 @@
 ## 5) Chat: Tool Use + Gating
 - [✅ ] Greeting (`hi`) does not trigger context/tool calls
 - [✅ ] Simple self-contained request avoids unnecessary retrieval
-- [ ] Mention-referenced request (`@thread`, `@contact`, `@event`) allows tool use
-- [ ] Mention presence does not force tool calls when response is already self-contained
-- [ ] No-mention draft request returns a normal LLM draft (no tool path)
-- [ ] `draft_email` tool is used only when references/context make it necessary
-- [ ] `generate_meeting_brief` tool is used when meeting/event context is required
-- [ ] Tool failures return human-safe response (no provider/internal wording)
-- [ ] `chat_context_trace` logs accurate `tool_records` and `action_records`
+- [ ✅] Mention-referenced request (`@thread`, `@contact`, `@event`) allows tool use
+- [ ✅] Mention presence does not force tool calls when response is already self-contained
+- [✅ ] No-mention draft request returns a normal LLM draft (no tool path)
+- [ ✅] `draft_email` tool is used only when references/context make it necessary
+- [✅ ] `generate_meeting_brief` tool is used when meeting/event context is required
+- [✅ ] Tool failures return human-safe response (no provider/internal wording)
+- [✅ ] `chat_context_trace` logs accurate `tool_records` and `action_records`
 
 ## 6) Chat: Multi-Action + DAG Planner
 - [ ] One message with 6+ action requests is decomposed into atomic sub-requests
@@ -64,47 +64,47 @@
 - [ ] Low-risk ambiguity proceeds without unnecessary blocking
 
 ## 7) Cache Invalidation
-- [ ] Update thread-scoped entry invalidates:
-- [ ] `thread_cache`
-- [ ] warm scope `thread:*`
-- [ ] hot session fragments for that thread
-- [ ] Update event-scoped entry invalidates:
-- [ ] `calendar_cache`
-- [ ] warm scope `event:*`
-- [ ] hot session fragments for that event
-- [ ] Update contact-scoped entry invalidates warm/hot contact scopes
-- [ ] Update message-scoped entry invalidates warm/hot message scopes
-- [ ] Update assistant/executive preferences invalidates profile warm snapshot
+- [ ✅] Update thread-scoped entry invalidates:
+- [ ✅] `thread_cache`
+- [ ✅] warm scope `thread:*`
+- [ ✅] hot session fragments for that thread
+- [ ✅] Update event-scoped entry invalidates:
+- [ ✅] `calendar_cache`
+- [ ✅] warm scope `event:*`
+- [ ✅] hot session fragments for that event
+- [ ✅] Update contact-scoped entry invalidates warm/hot contact scopes
+- [ ✅] Update message-scoped entry invalidates warm/hot message scopes
+- [ ✅] Update assistant/executive preferences invalidates profile warm snapshot
 
 ## 8) Error Handling + Logs
-- [ ] If Gemini unavailable (503), user sees task-specific natural fallback
-- [ ] Async job failure message is human-safe
-- [ ] Logs include:
-- [ ] `chat_request` (route)
-- [ ] `chat_mentions_resolved` (service)
-- [ ] `chat_context_trace` (orchestrator)
-- [ ] No raw stack traces returned in API response body
+- [ ✅] If Gemini unavailable (503), user sees task-specific natural fallback
+- [ ✅] Async job failure message is human-safe
+- [ ✅] Logs include:
+- [ ✅] `chat_request` (route)
+- [ ✅] `chat_mentions_resolved` (service)
+- [ ✅] `chat_context_trace` (orchestrator)
+- [✅ ] No raw stack traces returned in API response body
 
 ## 9) UI/UX Regression
-- [ ] Chat page remains command-surface style and responsive (desktop/mobile)
-- [ ] Inbox and Calendar tabs are unchanged and still functional
-- [ ] Diary page is create-first (no dense entity browser list)
-- [ ] Conflict and validation toasts appear for diary forms
-- [ ] Mention dropdown keyboard navigation (up/down/enter/escape) works
+- [✅ ] Chat page remains command-surface style and responsive (desktop/mobile)
+- [✅ ] Inbox and Calendar tabs are unchanged and still functional
+- [✅ ] Diary page is create-first (no dense entity browser list)
+- [✅ ] Conflict and validation toasts appear for diary forms
+- [✅ ] Mention dropdown keyboard navigation (up/down/enter/escape) works
 
 ## 10) Data Integrity
-- [ ] `context_entries.entity_type` only uses allowed values
-- [ ] `context_entries.status` only uses allowed values
-- [ ] `contacts` uniqueness enforced on `(user_id, email)`
-- [ ] `entity_references` uniqueness enforced on `(user_id, entity_type, display_name)` and `(user_id, entity_type, ref)`
+- [✅ ] `context_entries.entity_type` only uses allowed values
+- [✅ ] `context_entries.status` only uses allowed values
+- [✅ ] `contacts` uniqueness enforced on `(user_id, email)`
+- [✅ ] `entity_references` uniqueness enforced on `(user_id, entity_type, display_name)` and `(user_id, entity_type, ref)`
 - [ ] No cross-user data leakage in mentions, context tools, or diary endpoints
 
 ## 11) Smoke Scenarios
-- [ ] Draft reply for `@thread` + `@contact`
-- [ ] Generate meeting brief for `@event`
-- [ ] Ask “What changed since yesterday for @contact?”
-- [ ] Ask “What did we decide on @thread?”
-- [ ] Create diary memory, then verify it is used by a follow-up chat request
+- [✅ ] Draft reply for `@thread` + `@contact`
+- [✅ ] Generate meeting brief for `@event`
+- [✅ ] Ask “What changed since yesterday for @contact?”
+- [✅ ] Ask “What did we decide on @thread?”
+- [✅ ] Create diary memory, then verify it is used by a follow-up chat request
 
 ---
 
@@ -353,3 +353,102 @@
 - [ ] `backend/tests/unit/test_chat_approval_intent.py` passes
 - [ ] `backend/tests/unit/test_chat_dag_executor.py` passes
 - [ ] `backend/tests/integration/test_chat_plan_dag_approval_execution.py` passes
+
+---
+
+## 17) Dunning QA Playbook (Dodo + UI)
+
+### 17a) Preconditions
+- [ ] `BILLING_PROVIDER=dodo` and `DODO_WEBHOOK_SECRET` are set in backend env
+- [ ] Test user is `subscription_tier=pro`, `subscription_status=active`, and has `dodo_customer_id`
+- [ ] `GET /v1/settings/` shows:
+- [ ] `dunning_active=false`
+- [ ] `dunning_deadline_at=null`
+- [ ] `dunning_attempt_count=0`
+- [ ] `dunning_suspended_at=null`
+
+### 17b) Webhook Payload Cases (exact) and Expected State
+- [ ] **Case 1: first payment failure starts dunning**
+- [ ] Send `POST /v1/webhooks/billing` with valid Dodo signature and payload:
+```json
+{
+  "type": "invoice.payment_failed",
+  "data": {
+    "customer_id": "cust_test_123",
+    "customer": { "email": "user@example.com" },
+    "subscription_id": "sub_test_123",
+    "status": "past_due"
+  }
+}
+```
+- [ ] Expected API response: `{ "received": true, "handled": true, "queued": true, ... }`
+- [ ] Expected after worker processes:
+- [ ] `subscription_status=past_due`
+- [ ] `dunning_active=true`
+- [ ] `dunning_attempt_count=1`
+- [ ] `dunning_last_notified_stage=initial`
+- [ ] `dunning_deadline_at` is ~7 days from first failure
+- [ ] In-app billing notification row is created (`category=billing`)
+
+- [ ] **Case 2: duplicate delivery is idempotent**
+- [ ] Re-send same payload with the same `webhook-id`
+- [ ] Expected API response includes `duplicate=true`
+- [ ] Expected state unchanged (`dunning_attempt_count` does not increment)
+
+- [ ] **Case 3: additional failure increments attempts**
+- [ ] Send same failure payload with a new `webhook-id`
+- [ ] Expected:
+- [ ] `dunning_attempt_count` increments (`2`, then `3`, ...)
+- [ ] `dunning_active` remains `true`
+- [ ] no duplicate "initial" stage notification
+
+- [ ] **Case 4: recovery clears dunning**
+- [ ] Send payload:
+```json
+{
+  "type": "invoice.paid",
+  "data": {
+    "customer_id": "cust_test_123",
+    "customer": { "email": "user@example.com" },
+    "subscription_id": "sub_test_123",
+    "status": "active"
+  }
+}
+```
+- [ ] Expected:
+- [ ] `subscription_status=active`
+- [ ] `dunning_active=false`
+- [ ] `dunning_deadline_at=null`
+- [ ] `dunning_attempt_count=0`
+- [ ] `dunning_suspended_at=null`
+
+- [ ] **Case 5: suspension when unresolved at deadline**
+- [ ] Keep user in dunning and advance time to/past deadline (or set `dunning_deadline_at` in DB to past), then run `check_dunning_status`
+- [ ] Expected:
+- [ ] final reminder sent once (`dunning_last_notified_stage=final`)
+- [ ] `dunning_suspended_at` is set
+- [ ] protected endpoints return `402` with `error=payment_update_required`
+
+### 17c) UI Banner Transition Checks
+- [ ] **No dunning**: no billing banner shown in dashboard layout
+- [ ] **Active dunning, not suspended**: amber calm banner shows "Payment update needed to keep Pro active"
+- [ ] **Active dunning, suspended**: banner copy switches to "Pro is paused until payment is updated"
+- [ ] Banner CTA opens billing portal via `GET /v1/billing/portal-url`
+- [ ] After successful recovery webhook (`invoice.paid` or `payment.succeeded`), banner disappears on next profile refresh
+
+### 17d) Dunning Copy + UX Guardrails
+- [ ] No scary suspension text is shown before deadline
+- [ ] No "account suspended" urgency language before final state
+- [ ] Copy remains calm and action-oriented ("Update payment method")
+- [ ] User can continue to access app during active dunning window until suspension timestamp is set
+
+### 17e) Dunning Data Integrity + Audit
+- [ ] `webhook_deliveries` has one row per unique `(source, delivery_id)`
+- [ ] `webhook_logs` has `source=dodo` entries for handled and rejected webhook attempts
+- [ ] `billing_events` capture normalized event type and payload
+- [ ] `billing_payment_attempts` records failed/succeeded attempts as events arrive
+- [ ] `billing_invoices` records invoice lifecycle changes as events arrive
+
+### 17f) Optional Fast QA Path (without live webhook signing)
+- [ ] Use `POST /v1/billing/admin/events/{event_id}/replay` (admin) to replay stored billing events
+- [ ] Verify replay updates dunning state exactly like webhook processing

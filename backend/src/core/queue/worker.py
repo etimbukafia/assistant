@@ -80,7 +80,7 @@ class Worker:
 
             # Get handler for this task type
             handler = self.handlers.get(task_type)
-
+ 
             if handler is None:
                 # Unknown task type - check if there's a default handler
                 handler = self.handlers.get("_default")

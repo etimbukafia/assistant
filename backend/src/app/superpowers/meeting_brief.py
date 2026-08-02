@@ -8,7 +8,13 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.data.models import CalendarEvent, ContextEntry, EntityReference
+from app.data.models import CalendarEvent, Contact, ContextEntry, EntityReference
+from app.security.prompt_sanitizer import sanitize_with_detection
+from app.services.contact_brief import ContactBriefService
+from app.services.context_memory_policy import (
+    apply_historical_expiry_retrieval_filter,
+    apply_memory_retrieval_filter,
+)
 
 
 class MeetingBriefService:
@@ -45,10 +51,11 @@ class MeetingBriefService:
 
         decisions = [entry.content for entry in entries if entry.type == "decision"][:5]
         commitments = [entry.content for entry in entries if entry.type == "commitment"][:5]
-        risks = [entry.content for entry in entries if entry.type in {"risks", "relationships"}][:5]
-        open_items = [entry.content for entry in entries if entry.type in {"commitment", "risks"}][:6]
+        risks = [entry.content for entry in entries if entry.type == "risk"][:5]
+        open_items = [entry.content for entry in entries if entry.type in {"commitment", "risk"}][:6]
         agenda = self._derive_agenda(event.title, decisions, commitments, risks)
         participants = self._participants(event.participants, participant_ids or [])
+        participant_briefs = self._build_participant_briefs(participants)
 
         summary = (
             f"{event.title}: {len(decisions)} decisions, "
@@ -61,7 +68,6 @@ class MeetingBriefService:
                 "content": entry.content,
                 "entity_type": entry.entity_type,
                 "entity_id": entry.entity_id,
-                "importance_level": entry.importance_level,
                 "status": entry.status,
                 "expires_at": entry.expires_at.isoformat() if entry.expires_at else None,
             }
@@ -77,6 +83,7 @@ class MeetingBriefService:
             "commitments": commitments,
             "risks": risks,
             "open_items": open_items,
+            "participant_briefs": participant_briefs,
             "context_entries": context_payload,
             "start_at": event.start_time.isoformat() if event.start_time else None,
             "end_at": event.end_time.isoformat() if event.end_time else None,
@@ -147,14 +154,14 @@ class MeetingBriefService:
         return f"event:{event.id}"
 
     def _event_entries(self, event_ref: str, include_recent_context: bool) -> List[ContextEntry]:
-        now = datetime.now(timezone.utc)
         query = self.db.query(ContextEntry).filter(
             ContextEntry.user_id == self.user_id,
             ContextEntry.entity_type == "event",
             ContextEntry.entity_id == event_ref,
-            ContextEntry.status == "active",
-            ((ContextEntry.expires_at.is_(None)) | (ContextEntry.expires_at >= now)),
-        ).order_by(ContextEntry.importance_level.desc(), ContextEntry.created_at.desc()).limit(30)
+        )
+        query = apply_memory_retrieval_filter(query, allowed_statuses=("active", "resolved", "stale"))
+        query = apply_historical_expiry_retrieval_filter(query)
+        query = query.order_by(ContextEntry.created_at.desc()).limit(30)
         entries = query.all()
         # Keep meeting briefs strictly event-scoped to avoid leaking unrelated global context.
         # include_recent_context is kept for forward compatibility with richer scoped fallbacks.
@@ -162,23 +169,99 @@ class MeetingBriefService:
             return entries
         return []
 
-    def _participants(self, participants_raw: Any, extra: List[str]) -> List[str]:
+    def _participants(self, participants_raw: Any, requested: List[str]) -> List[str]:
+        normalized_requested = {
+            token
+            for token in (self._normalize_lookup_token(value) for value in requested)
+            if token
+        }
         participants: List[str] = []
-        if isinstance(participants_raw, list):
-            for p in participants_raw:
-                if isinstance(p, str):
-                    val = p.strip()
-                    if val and val not in participants:
-                        participants.append(val)
-                elif isinstance(p, dict):
-                    val = (p.get("email") or p.get("name") or "").strip()
-                    if val and val not in participants:
-                        participants.append(val)
-        for value in extra:
-            cleaned = value.strip()
-            if cleaned and cleaned not in participants:
-                participants.append(cleaned)
+        if not isinstance(participants_raw, list):
+            return participants
+
+        for participant in participants_raw:
+            if normalized_requested and not self._participant_matches_requested(participant, normalized_requested):
+                continue
+            val = self._participant_display_value(participant)
+            if val and val not in participants:
+                participants.append(val)
         return participants
+
+    def _build_participant_briefs(self, participants: List[str]) -> List[Dict[str, Any]]:
+        if not participants:
+            return []
+
+        brief_service = ContactBriefService(self.db, user_id=self.user_id)
+        results: List[Dict[str, Any]] = []
+        for participant in participants[:6]:
+            contact = self._resolve_contact(participant)
+            if not contact:
+                continue
+            brief = brief_service.get_contact_brief(contact.id, consumer="meeting_brief")
+            if not brief:
+                continue
+            summary = brief.get("summary") or {}
+            results.append(
+                {
+                    "contact": {
+                        "id": contact.id,
+                        "name": self._sanitize_contact_text(contact.name),
+                        "role": self._sanitize_contact_text(contact.role),
+                        "organization": self._sanitize_contact_text(contact.organization),
+                    },
+                    "relationship_summary": self._sanitize_contact_text(summary.get("headline")),
+                    "preferred_tone": self._sanitize_contact_text(summary.get("preferred_tone")),
+                }
+            )
+        return results
+
+    def _resolve_contact(self, participant: str) -> Optional[Contact]:
+        lookup = self._normalize_lookup_token(participant)
+        if not lookup:
+            return None
+        if "@" in lookup:
+            return (
+                self.db.query(Contact)
+                .filter(
+                    Contact.user_id == self.user_id,
+                    func.lower(Contact.email) == lookup.lower(),
+                )
+                .first()
+            )
+        rows = (
+            self.db.query(Contact)
+            .filter(
+                Contact.user_id == self.user_id,
+                func.lower(Contact.name) == lookup.lower(),
+            )
+            .limit(2)
+            .all()
+        )
+        if len(rows) != 1:
+            return None
+        return rows[0]
+
+    def _participant_display_value(self, participant: Any) -> Optional[str]:
+        if isinstance(participant, str):
+            value = " ".join(participant.split()).strip()
+            return value or None
+        if isinstance(participant, dict):
+            value = " ".join(str(participant.get("email") or participant.get("name") or "").split()).strip()
+            return value or None
+        return None
+
+    def _normalize_lookup_token(self, value: Any) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    def _participant_matches_requested(self, participant: Any, requested: set[str]) -> bool:
+        if isinstance(participant, dict):
+            tokens = {
+                self._normalize_lookup_token(participant.get("email")),
+                self._normalize_lookup_token(participant.get("name")),
+            }
+            return any(token and token in requested for token in tokens)
+        token = self._normalize_lookup_token(participant)
+        return bool(token and token in requested)
 
     def _derive_agenda(
         self,
@@ -196,3 +279,19 @@ class MeetingBriefService:
             agenda.append("Discuss active risks and mitigations")
         agenda.append("Close with owners and deadlines")
         return agenda
+
+    def _sanitize_contact_text(self, value: Optional[str]) -> Optional[str]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        result = sanitize_with_detection(text)
+        cleaned = " ".join(result.sanitized_text.split()).strip()
+        return cleaned or None
+
+    def _sanitize_contact_list(self, values: List[Optional[str]]) -> List[str]:
+        cleaned: List[str] = []
+        for value in values:
+            item = self._sanitize_contact_text(value)
+            if item:
+                cleaned.append(item)
+        return cleaned

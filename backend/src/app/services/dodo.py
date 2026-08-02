@@ -9,6 +9,7 @@ import json
 import logging
 from functools import lru_cache
 from typing import Any, Optional
+from datetime import datetime, timezone
 
 import httpx
 
@@ -323,6 +324,7 @@ class DodoService:
             "webhook-signature": headers.get("webhook-signature", ""),
             "webhook-timestamp": headers.get("webhook-timestamp", ""),
         }
+        self._verify_timestamp_freshness(normalized_headers.get("webhook-timestamp"))
 
         try:
             verified = verifier.verify(raw_text, normalized_headers)
@@ -338,6 +340,36 @@ class DodoService:
 
         # Some SDK versions return typed objects. Fall back to raw payload.
         return json.loads(raw_text)
+
+    def _verify_timestamp_freshness(self, raw_timestamp: str | None) -> None:
+        """
+        Enforce bounded replay window for webhook deliveries.
+        Accepts unix epoch seconds or ISO timestamp.
+        """
+        max_age_seconds = max(0, int(self.settings.DODO_WEBHOOK_MAX_AGE_SECONDS or 0))
+        if max_age_seconds <= 0:
+            return
+        if not raw_timestamp:
+            raise ValueError("invalid_webhook_timestamp")
+
+        ts: datetime | None = None
+        token = str(raw_timestamp).strip()
+
+        try:
+            ts = datetime.fromtimestamp(float(token), tz=timezone.utc)
+        except Exception:
+            try:
+                ts = datetime.fromisoformat(token.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                else:
+                    ts = ts.astimezone(timezone.utc)
+            except Exception as exc:
+                raise ValueError("invalid_webhook_timestamp") from exc
+
+        age_seconds = abs((datetime.now(timezone.utc) - ts).total_seconds())
+        if age_seconds > max_age_seconds:
+            raise ValueError("stale_webhook_timestamp")
 
 
 @lru_cache

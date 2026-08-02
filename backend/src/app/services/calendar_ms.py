@@ -57,7 +57,9 @@ class MicrosoftCalendarService:
         self,
         calendar_ids: Optional[List[str]] = None,
         days_ahead: int = 7,
-    ) -> List[Dict[str, Any]]:
+        briefing_hours_before: int = 2,
+        enable_briefings: bool = True,
+    ) -> Dict[str, int]:
         from app.data.models import CalendarEvent
         from app.jobs.queue import enqueue_task
 
@@ -80,10 +82,15 @@ class MicrosoftCalendarService:
         created = 0
         updated = 0
         unchanged = 0
+        now = datetime.now(timezone.utc)
 
         def _schedule_briefing(event: CalendarEvent, start_time: datetime) -> Optional[datetime]:
-            briefing_time = start_time - timedelta(hours=1)
-            if briefing_time <= datetime.now(timezone.utc):
+            if not enable_briefings:
+                return None
+            if event.label != "meeting":
+                return None
+            briefing_time = start_time - timedelta(hours=briefing_hours_before)
+            if briefing_time <= now:
                 return None
             enqueue_task(
                 task_type="generate_briefing",
@@ -112,9 +119,16 @@ class MicrosoftCalendarService:
                     existing.participants = normalized["attendees"]
                     existing.timezone = normalized["timezone"]
                     existing.all_day = normalized.get("all_day", False)
-                    existing.last_synced_at = datetime.now(timezone.utc)
+                    if not existing.label:
+                        existing.label = self._classify_event_label(
+                            normalized["title"], normalized["description"], normalized["attendees"]
+                        )
+                    briefing_time = _schedule_briefing(existing, normalized["start_time"])
+                    existing.briefing_scheduled_for = briefing_time
+                    existing.last_synced_at = now
                     updated += 1
                 else:
+                    existing.last_synced_at = now
                     unchanged += 1
             else:
                 label = self._classify_event_label(
@@ -136,11 +150,12 @@ class MicrosoftCalendarService:
                     source="synced",
                     status="upcoming",
                     provider="microsoft",
-                    last_synced_at=datetime.now(timezone.utc),
+                    last_synced_at=now,
                 )
                 self.db.add(new_event)
                 self.db.flush()
-                _schedule_briefing(new_event, normalized["start_time"])
+                briefing_time = _schedule_briefing(new_event, normalized["start_time"])
+                new_event.briefing_scheduled_for = briefing_time
                 created += 1
 
         self.db.commit()

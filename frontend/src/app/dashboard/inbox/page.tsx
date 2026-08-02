@@ -5,9 +5,12 @@ import { InboxFeed } from "@/components/inbox/InboxFeed";
 import { ThreadDetailPanel } from "@/components/inbox/ThreadDetailPanel";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
+import { useSearchParams } from "next/navigation";
+import { ENABLE_MICROSOFT_UI } from "@/config/featureFlags";
 
 export default function InboxPage() {
     const { user, settings, gmailConnectError, microsoftConnectError } = useAuth();
+    const searchParams = useSearchParams();
     const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
     const [threadIds, setThreadIds] = useState<string[]>([]);
     const [view, setView] = useState<"inbox" | "archived">("inbox");
@@ -47,6 +50,13 @@ export default function InboxPage() {
     const handleClosePanel = useCallback(() => {
         setSelectedThreadId(null);
     }, []);
+
+    useEffect(() => {
+        const threadId = searchParams.get("threadId");
+        if (threadId) {
+            setSelectedThreadId(threadId);
+        }
+    }, [searchParams]);
 
     return (
         <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
@@ -98,9 +108,14 @@ export default function InboxPage() {
                     </div>
 
                     {settings !== null && !settings.initial_sync_completed && (
-                        (settings.connected_provider === "microsoft"
-                            ? settings.outlook_connected && !microsoftConnectError
-                            : settings.gmail_connected && !gmailConnectError
+                        (
+                            ENABLE_MICROSOFT_UI
+                                ? (
+                                    settings.connected_provider === "microsoft"
+                                        ? settings.outlook_connected && !microsoftConnectError
+                                        : settings.gmail_connected && !gmailConnectError
+                                )
+                                : (settings.gmail_connected && !gmailConnectError)
                         )
                     ) && (
                         <div className="mb-6 rounded-[8px] border border-primary/20 bg-primary/[0.04] px-4 py-3">

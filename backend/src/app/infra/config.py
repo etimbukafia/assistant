@@ -24,8 +24,13 @@ class Settings:
     
     # Google APIs
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_TRANSCRIPTION_MODEL: str = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
+    VOICE_CAPTURE_MAX_UPLOAD_BYTES: int = int(os.getenv("VOICE_CAPTURE_MAX_UPLOAD_BYTES", "10485760"))
 
     # Microsoft APIs
     MICROSOFT_CLIENT_ID: str = os.getenv("MICROSOFT_CLIENT_ID", "")
@@ -59,6 +64,7 @@ class Settings:
     DODO_CREDIT_TOPUP_UNIT_USD: int = int(os.getenv("DODO_CREDIT_TOPUP_UNIT_USD", "1"))
     DODO_MODE: str = os.getenv("DODO_MODE", "test_mode").lower()  # test_mode | live_mode
     DODO_BASE_URL: str = os.getenv("DODO_BASE_URL", "")
+    DODO_WEBHOOK_MAX_AGE_SECONDS: int = int(os.getenv("DODO_WEBHOOK_MAX_AGE_SECONDS", "300"))
 
     # Polar Billing (legacy/optional fallback)
     POLAR_ACCESS_TOKEN: str = os.getenv("POLAR_ACCESS_TOKEN", os.getenv("POLAR_API_KEY", ""))
@@ -69,6 +75,16 @@ class Settings:
     ENV: str = os.getenv("ENV", "development")  # development | staging | production
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
+    FORCE_HTTPS: bool = os.getenv("FORCE_HTTPS", "false").lower() == "true"
+
+    # LLM provider selection
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
+    LLM_EMAIL_PROVIDER: str = os.getenv("LLM_EMAIL_PROVIDER", "gemini").lower()
+    LLM_CHAT_PROVIDER: str = os.getenv("LLM_CHAT_PROVIDER", "gemini").lower()
+    LLM_DRAFT_PROVIDER: str = os.getenv("LLM_DRAFT_PROVIDER", os.getenv("LLM_CHAT_PROVIDER", "gemini")).lower()
+    LLM_EMAIL_MODEL: str = os.getenv("LLM_EMAIL_MODEL", "gemma-3-4b-it")
+    LLM_CHAT_MODEL: str = os.getenv("LLM_CHAT_MODEL", "gemini-2.5-flash-lite")
+    LLM_DRAFT_MODEL: str = os.getenv("LLM_DRAFT_MODEL", os.getenv("LLM_CHAT_MODEL", "gemini-2.5-flash-lite"))
 
     # Frontend
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -97,6 +113,16 @@ class Settings:
     DUNNING_WINDOW_DAYS: int = int(os.getenv("DUNNING_WINDOW_DAYS", "7"))
     DUNNING_EXPECTED_RETRIES: int = int(os.getenv("DUNNING_EXPECTED_RETRIES", "3"))
     DUNNING_MIDPOINT_DAY: int = int(os.getenv("DUNNING_MIDPOINT_DAY", "3"))
+    # Notification category switches
+    ENABLE_REMINDER_NOTIFICATIONS: bool = os.getenv("ENABLE_REMINDER_NOTIFICATIONS", "false").lower() == "true"
+    ENABLE_DIGEST_NOTIFICATIONS: bool = os.getenv("ENABLE_DIGEST_NOTIFICATIONS", "false").lower() == "true"
+    BILLING_REQUIRE_IDEMPOTENCY_KEY: bool = os.getenv("BILLING_REQUIRE_IDEMPOTENCY_KEY", "true").lower() == "true"
+    BILLING_IDEMPOTENCY_TTL_SECONDS: int = int(os.getenv("BILLING_IDEMPOTENCY_TTL_SECONDS", "86400"))
+    BILLING_EVENT_RETENTION_DAYS: int = int(os.getenv("BILLING_EVENT_RETENTION_DAYS", "90"))
+    WEBHOOK_LOG_RETENTION_DAYS: int = int(os.getenv("WEBHOOK_LOG_RETENTION_DAYS", "30"))
+    WEBHOOK_DELIVERY_RETENTION_DAYS: int = int(os.getenv("WEBHOOK_DELIVERY_RETENTION_DAYS", "30"))
+    UI_TELEMETRY_RETENTION_DAYS: int = int(os.getenv("UI_TELEMETRY_RETENTION_DAYS", "30"))
+    CHAT_METRICS_RETENTION_DAYS: int = int(os.getenv("CHAT_METRICS_RETENTION_DAYS", "30"))
 
     # Vault proposals (human review queue) - currently unhooked by default
     PROPOSALS_ENABLED: bool = os.getenv("PROPOSALS_ENABLED", "false").lower() == "true"
@@ -108,10 +134,21 @@ class Settings:
         Returns a list of missing required settings.
         """
         missing = []
-        required = ["GOOGLE_API_KEY", "ENCRYPTION_KEY"]
-        for key in required:
-            if not getattr(self, key):
-                missing.append(key)
+        if not self.ENCRYPTION_KEY:
+            missing.append("ENCRYPTION_KEY")
+
+        active_providers = {
+            self.LLM_PROVIDER,
+            self.LLM_EMAIL_PROVIDER,
+            self.LLM_CHAT_PROVIDER,
+            self.LLM_DRAFT_PROVIDER,
+        }
+
+        if "gemini" in active_providers and not (self.GEMINI_API_KEY or self.GOOGLE_API_KEY):
+            missing.append("GOOGLE_API_KEY or GEMINI_API_KEY")
+
+        if "anthropic" in active_providers and not self.ANTHROPIC_API_KEY:
+            missing.append("ANTHROPIC_API_KEY")
         return missing
 
 

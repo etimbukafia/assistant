@@ -44,6 +44,7 @@ class Message(Base):
     subject = Column(String)
     sender = Column(String)
     recipient = Column(String)
+    contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True)
     body = Column(Text)
     received_at = Column(DateTime)
     provider = Column(String, default="google", index=True)  # google | microsoft
@@ -255,7 +256,7 @@ class UserSettings(Base):
     exec_preferences = Column(Text, nullable=True)
 
     # Credit system (from migration 027)
-    credits_used = Column(Float, default=0.0)  # USD spent on Gemini models this period
+    credits_used = Column(Float, default=0.0)  # USD spent on billable AI models this period
     credits_limit = Column(Float, default=1.0)  # USD limit (1.0 trial, 5.0 pro)
     credits_period_start = Column(DateTime, nullable=True)  # When current billing period started
 
@@ -349,6 +350,45 @@ class UserSettings(Base):
             return 0
         now = datetime.now(timezone.utc)
         return max(0, (self.dunning_deadline_at - now).days)
+
+
+class AutomationUserSetting(Base):
+    """Per-user automation state for productized automations."""
+    __tablename__ = "automation_user_settings"
+    __table_args__ = (
+        UniqueConstraint("user_id", "automation_id", name="uq_automation_user_settings_user_automation"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    automation_id = Column(String, nullable=False, index=True)
+    configured = Column(Boolean, default=False, nullable=False)
+    enabled = Column(Boolean, default=False, nullable=False)
+    safety_mode = Column(String, nullable=False, default="review_required")
+    execution_mode = Column(String, nullable=False, default="manual")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class AutomationRun(Base):
+    """Execution log for automation previews and runs."""
+    __tablename__ = "automation_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    automation_id = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="completed", index=True)
+    trigger = Column(String, nullable=False, default="manual")
+    summary = Column(Text, nullable=True)
+    run_metadata = Column(JSON, default=dict)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
 class Task(Base):
@@ -695,8 +735,12 @@ class ThreadState(Base):
     """
     __tablename__ = "thread_states"
 
+    __table_args__ = (
+        UniqueConstraint("user_id", "thread_id", name="uq_thread_states_user_thread_id"),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
-    thread_id = Column(String, unique=True, nullable=False, index=True)
+    thread_id = Column(String, nullable=False, index=True)
     user_id = Column(String, index=True)
 
     # Thread summary - what the conversation is about
@@ -735,6 +779,7 @@ class ThreadState(Base):
 
     # Subject (from first message, for display)
     subject = Column(String, nullable=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
@@ -743,14 +788,18 @@ class ThreadState(Base):
 
 class ContactContext(Base):
     """
-    Lightweight per-contact metadata.
+    Legacy per-contact metadata.
 
-    Auto-stored: interaction frequency, last interaction, channel
-    Manual-only: relationship notes, contact category
+    Canonical relationship intelligence belongs in Contact and ContextEntry.
+    Keep this model only for backward-compatible derived metrics/manual metadata
+    that older filtering and vault flows still read.
+
+    Auto-stored: derived interaction frequency, last interaction, channel
+    Manual-only: legacy notes, contact category
 
     Rules:
     - No emotional inference
-    - No auto-written notes
+    - No auto-written relationship notes
     - If it contains an adjective about personality or intent, it's forbidden unless manually entered
     """
     __tablename__ = "contact_contexts"
@@ -791,22 +840,31 @@ class ContextEntry(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False, index=True)
-    type = Column(String, nullable=False, index=True)  # decision|commitment|preferences|risks|relationships
+    type = Column(String, nullable=False, index=True)  # decision|commitment|preference|risk|insight
     content = Column(Text, nullable=False)
+    raw_text = Column(Text, nullable=True)  # Original capture text before/alongside structured organization
+    input_source = Column(String, nullable=False, default="typed", server_default="typed", index=True)  # typed|voice
     entity_type = Column(String, nullable=False, index=True)  # global|contact|thread|message|event|task
     entity_id = Column(String, nullable=True, index=True)    # email for contacts, string ref for threads/events/messages/tasks
     linked_to = Column(String, nullable=True, index=True)    # display name of the primary linked entity (e.g. "Sarah Chen", "Q4 Review")
     created_by = Column(String, nullable=False, default="You")  # Teeks|You
-    importance_level = Column(String, nullable=False, default="normal", index=True)  # low|normal|high
-    status = Column(String, nullable=False, default="active", index=True)  # active|resolved|stale|archived
+    status = Column(String, nullable=False, default="active", index=True)  # active|resolved|stale|archived|forgotten
+    classification_status = Column(String, nullable=False, default="classified", index=True)  # pending|classified|user_corrected
+    classification_confidence = Column(Float, nullable=True)
+    classification_suggested_type = Column(String, nullable=True)
+    user_corrected = Column(Boolean, nullable=False, default=False, index=True)
     expires_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         CheckConstraint(
-            "type IN ('decision','commitment','preferences','risks','relationships')",
+            "type IN ('decision','commitment','preference','risk','insight')",
             name="ck_context_entries_type",
+        ),
+        CheckConstraint(
+            "input_source IN ('typed','voice')",
+            name="ck_context_entries_input_source",
         ),
         CheckConstraint(
             "entity_type IN ('global','contact','thread','message','event','task')",
@@ -817,12 +875,16 @@ class ContextEntry(Base):
             name="ck_context_entries_created_by",
         ),
         CheckConstraint(
-            "importance_level IN ('low','normal','high')",
-            name="ck_context_entries_importance_level",
+            "status IN ('active','resolved','stale','archived','forgotten')",
+            name="ck_context_entries_status",
         ),
         CheckConstraint(
-            "status IN ('active','resolved','stale','archived')",
-            name="ck_context_entries_status",
+            "classification_status IN ('pending','classified','user_corrected')",
+            name="ck_context_entries_classification_status",
+        ),
+        CheckConstraint(
+            "classification_suggested_type IS NULL OR classification_suggested_type IN ('decision','commitment','preference','risk','insight')",
+            name="ck_context_entries_classification_suggested_type",
         ),
         Index("ix_context_entries_user_entity", "user_id", "entity_type", "entity_id"),
         Index("ix_context_entries_user_type", "user_id", "type"),
@@ -840,6 +902,7 @@ class DiaryEntryLink(Base):
     entity_type = Column(String(50), nullable=False)   # contact|thread|message|event|task
     entity_id = Column(Text, nullable=False)            # email for contacts, ref for others
     display_name = Column(Text, nullable=False)         # @label shown to user
+    source = Column(String(20), nullable=False, default="user", server_default="user")  # user|teeks
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     entry = relationship("ContextEntry", back_populates="links")
@@ -1065,6 +1128,7 @@ class ChatPendingAction(Base):
     action_data = Column(JSON, nullable=False)  # Action-specific data
     status = Column(String, nullable=False, default="pending")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    reviewed_at = Column(DateTime, nullable=True)
 
     # Relationships
     session = relationship("ChatSession", back_populates="pending_actions")
@@ -1159,7 +1223,8 @@ class BillingSubscription(Base):
     current_period_end = Column(DateTime, nullable=True, index=True)
     cancel_at_period_end = Column(Boolean, default=False, index=True)
     canceled_at = Column(DateTime, nullable=True, index=True)
-    provider_metadata = Column(JSON, default=dict)
+    # DB column is `metadata` from migration 052; keep attribute as provider_metadata in app code.
+    provider_metadata = Column("metadata", JSON, default=dict)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
@@ -1189,7 +1254,8 @@ class BillingInvoice(Base):
     period_end = Column(DateTime, nullable=True, index=True)
     due_at = Column(DateTime, nullable=True, index=True)
     paid_at = Column(DateTime, nullable=True, index=True)
-    provider_metadata = Column(JSON, default=dict)
+    # DB column is `metadata` from migration 052; keep attribute as provider_metadata in app code.
+    provider_metadata = Column("metadata", JSON, default=dict)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), index=True)
 
@@ -1218,7 +1284,8 @@ class BillingPaymentAttempt(Base):
     failure_code = Column(String, nullable=True, index=True)
     failure_message = Column(Text, nullable=True)
     attempted_at = Column(DateTime, nullable=True, index=True)
-    provider_metadata = Column(JSON, default=dict)
+    # DB column is `metadata` from migration 052; keep attribute as provider_metadata in app code.
+    provider_metadata = Column("metadata", JSON, default=dict)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
@@ -1253,12 +1320,11 @@ class BillingEvent(Base):
     delivery_id = Column(String, nullable=True, index=True)
     event_type = Column(String, nullable=False, index=True)
     customer_id = Column(String, nullable=True, index=True)
-    customer_email = Column(String, nullable=True, index=True)
     subscription_id = Column(String, nullable=True, index=True)
     invoice_id = Column(String, nullable=True, index=True)
     handled = Column(Boolean, default=False, index=True)
     error = Column(Text, nullable=True)
-    payload = Column(JSON, default=dict)
+    payload = Column(JSON, default=dict)  # minimized normalized payload only; raw webhook bodies should not persist
     received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     processed_at = Column(DateTime, nullable=True, index=True)
 
@@ -1272,7 +1338,9 @@ class WebhookLog(Base):
     event_type = Column(String, nullable=False, index=True)    # e.g. "subscription.created", "gmail_push"
     processed = Column(Boolean, default=False)
     error = Column(Text, nullable=True)
-    customer_id = Column(String, nullable=True)                # Polar customer_id or email address
+    user_id = Column(String, nullable=True, index=True)
+    provider_customer_id = Column(String, nullable=True, index=True)
+    subject_ref = Column(String, nullable=True, index=True)
     received_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
@@ -1292,8 +1360,34 @@ class WebhookDelivery(Base):
     source = Column(String, nullable=False, index=True)  # "gmail" | "outlook" | "dodo" | "polar"
     delivery_id = Column(String, nullable=False, index=True)
     event_type = Column(String, nullable=True, index=True)
-    customer_id = Column(String, nullable=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    provider_customer_id = Column(String, nullable=True, index=True)
+    subject_ref = Column(String, nullable=True, index=True)
     processed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class ApiIdempotencyKey(Base):
+    """
+    Idempotency records for mutating API requests.
+
+    Enforces exactly-once semantics for repeated client retries using
+    Idempotency-Key headers on sensitive billing operations.
+    """
+    __tablename__ = "api_idempotency_keys"
+    __table_args__ = (
+        UniqueConstraint("user_id", "route_key", "idempotency_key", name="uq_api_idempotency_user_route_key"),
+        Index("ix_api_idempotency_expires", "expires_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    route_key = Column(String, nullable=False, index=True)
+    idempotency_key = Column(String, nullable=False, index=True)
+    request_hash = Column(String, nullable=False, index=True)
+    response_status = Column(Integer, nullable=False, default=0)
+    response_body = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
 
 
 class UITelemetryEvent(Base):
@@ -1306,7 +1400,6 @@ class UITelemetryEvent(Base):
     event_name = Column(String, nullable=False, index=True)
     event_payload = Column(JSON, default=dict)
     page_path = Column(String, nullable=True, index=True)
-    session_id = Column(String, nullable=True, index=True)
     client_ts = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
@@ -1331,7 +1424,7 @@ class ChatModelCallMetric(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False, index=True)
-    session_id = Column(String, nullable=False, index=True)
+    session_id = Column(String, nullable=False, index=True)  # pseudonymous session hash only
     model = Column(String, nullable=False, index=True)
     provider = Column(String, nullable=False, index=True)  # genai | orchestrator
     path = Column(String, nullable=False, index=True)  # native | fallback
@@ -1345,7 +1438,6 @@ class ChatModelCallMetric(Base):
 
     repeated_prefix_chars = Column(Integer, nullable=False, default=0)
     repeated_prefix_rate = Column(Float, nullable=False, default=0.0)
-    prompt_prefix_signature = Column(JSON, default=dict)
 
     tool_definitions_count = Column(Integer, nullable=False, default=0)
     tool_calls_count = Column(Integer, nullable=False, default=0)

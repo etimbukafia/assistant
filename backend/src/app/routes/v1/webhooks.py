@@ -10,7 +10,6 @@ POST /webhooks/polar    - Legacy alias for Polar billing webhook
 import base64
 import json
 import logging
-import hashlib
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status, Response
@@ -31,17 +30,39 @@ from app.infra.database import SessionLocal
 from app.integrations.gmail import GmailClient
 from app.integrations.outlook import OutlookClient
 from app.jobs.queue import queue_service
-from app.jobs.worker import handle_process_email_batch
+from app.jobs.worker import handle_process_email_batch, handle_emit_event_batch
+from app.security.privacy_utils import mask_email, mask_identifier, privacy_ref
 from app.security.encryption import encrypt_body
 from app.services.email_filter import EmailFilterService, FilterAction
+from app.services.contact_linking import ContactLinker
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 from app.services.billing_provider import (
     build_billing_provider,
+    get_user_for_billing_event,
     serialize_billing_event,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
+cache_coordinator = EntityCacheCoordinator()
+
+
+def _tenant_id() -> str:
+    return "default"
+
+
+def _invalidate_ingested_messages(db, messages: list[Message]) -> None:
+    for message in messages:
+        cache_coordinator.invalidate_message_related_contact(
+            db=db,
+            tenant_id=_tenant_id(),
+            user_id=message.user_id,
+            message_db_id=message.id,
+            thread_id=message.thread_id,
+            contact_id=message.contact_id,
+            message_scope_id=message.message_id,
+        )
 
 
 def _log_webhook_event(
@@ -49,7 +70,9 @@ def _log_webhook_event(
     event_type: str,
     processed: bool,
     error: str = None,
-    customer_id: str = None,
+    user_id: str = None,
+    provider_customer_id: str = None,
+    subject_ref: str = None,
 ) -> None:
     """Best-effort webhook audit logging."""
     log_db = SessionLocal()
@@ -60,7 +83,9 @@ def _log_webhook_event(
                 event_type=event_type,
                 processed=processed,
                 error=error,
-                customer_id=customer_id,
+                user_id=user_id,
+                provider_customer_id=provider_customer_id,
+                subject_ref=subject_ref,
             )
         )
         log_db.commit()
@@ -102,7 +127,9 @@ def _record_processed_delivery(
     source: str,
     delivery_id: str | None,
     event_type: str,
-    customer_id: str = None,
+    user_id: str = None,
+    provider_customer_id: str = None,
+    subject_ref: str = None,
 ) -> None:
     if not delivery_id:
         return
@@ -111,7 +138,9 @@ def _record_processed_delivery(
             source=source,
             delivery_id=delivery_id,
             event_type=event_type,
-            customer_id=customer_id,
+            user_id=user_id,
+            provider_customer_id=provider_customer_id,
+            subject_ref=subject_ref,
             processed_at=datetime.now(timezone.utc),
         )
     )
@@ -252,12 +281,18 @@ async def _process_billing_webhook(
             )
             return {"received": True, "handled": True, "duplicate": True}
 
+        billing_user = get_user_for_billing_event(db, event)
+        billing_user_id = billing_user.user_id if billing_user else None
+        billing_subject_ref = privacy_ref(event.customer_email)
+
         _record_processed_delivery(
             db=db,
             source=provider_name,
             delivery_id=event.delivery_id,
             event_type=event.event_type,
-            customer_id=event.customer_id or event.customer_email,
+            user_id=billing_user_id,
+            provider_customer_id=event.customer_id,
+            subject_ref=billing_subject_ref,
         )
 
         queue_service.enqueue(
@@ -275,7 +310,9 @@ async def _process_billing_webhook(
                 source=provider_name,
                 event_type=event.event_type,
                 processed=True,
-                customer_id=event.customer_id or event.customer_email,
+                user_id=billing_user_id,
+                provider_customer_id=event.customer_id,
+                subject_ref=billing_subject_ref,
             )
         )
         db.commit()
@@ -292,7 +329,15 @@ async def _process_billing_webhook(
     except Exception as exc:
         db.rollback()
         logger.error("Billing webhook enqueue failed: %s", exc, exc_info=True)
-        _log_webhook_event(provider_name, event.event_type, False, "enqueue_failed", customer_id=event.customer_id)
+        _log_webhook_event(
+            provider_name,
+            event.event_type,
+            False,
+            "enqueue_failed",
+            user_id=billing_user_id,
+            provider_customer_id=event.customer_id,
+            subject_ref=billing_subject_ref,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="billing_webhook_processing_failed",
@@ -374,15 +419,15 @@ async def handle_gmail_push(request: Request):
 
     logger.info(
         "Gmail webhook: notification for %s, historyId=%s, messageId=%s",
-        email_address,
+        mask_email(email_address),
         notification_history_id,
-        pubsub_message_id,
+        mask_identifier(pubsub_message_id),
     )
 
     db = SessionLocal()
     try:
         if _is_duplicate_delivery(db, "gmail", pubsub_message_id):
-            logger.info("Gmail webhook: duplicate delivery ignored messageId=%s", pubsub_message_id)
+            logger.info("Gmail webhook: duplicate delivery ignored messageId=%s", mask_identifier(pubsub_message_id))
             return {"status": "duplicate"}
 
         account = db.query(GmailAccount).filter(
@@ -390,7 +435,7 @@ async def handle_gmail_push(request: Request):
         ).first()
 
         if not account or not account.user_id:
-            logger.info("Gmail webhook: no linked account for %s", email_address)
+            logger.info("Gmail webhook: no linked account for %s", mask_email(email_address))
             return {"status": "ignored", "reason": "unknown_account"}
 
         user_id = account.user_id
@@ -404,10 +449,10 @@ async def handle_gmail_push(request: Request):
                 source="gmail",
                 delivery_id=pubsub_message_id,
                 event_type="gmail_push",
-                customer_id=email_address,
+                user_id=user_id,
             )
             db.commit()
-            logger.info("Gmail webhook: initialized history ID for %s", email_address)
+            logger.info("Gmail webhook: initialized history ID for user=%s", mask_identifier(user_id))
             return {"status": "initialized", "history_id": notification_history_id}
 
         try:
@@ -433,16 +478,18 @@ async def handle_gmail_push(request: Request):
                 source="gmail",
                 delivery_id=pubsub_message_id,
                 event_type="gmail_push",
-                customer_id=email_address,
+                user_id=user_id,
             )
             db.commit()
             return {"status": "ok", "new_messages": 0}
 
-        logger.info("Gmail webhook: %s new messages for %s", len(new_msg_ids), email_address)
+        logger.info("Gmail webhook: %s new messages for user=%s", len(new_msg_ids), mask_identifier(user_id))
 
         filter_service = EmailFilterService(db=db, user_id=user_id)
+        contact_linker = ContactLinker(db=db, user_id=user_id)
         synced_count = 0
         process_ids: list[int] = []
+        created_messages: list[Message] = []
 
         for gmail_msg_id in new_msg_ids:
             existing = db.query(Message).filter(
@@ -487,6 +534,11 @@ async def handle_gmail_push(request: Request):
                 subject=msg_data["subject"],
                 sender=msg_data["sender"],
                 recipient=msg_data["recipient"],
+                contact_id=contact_linker.resolve_message_contact_id(
+                    sender_value=msg_data["sender"],
+                    recipient_value=msg_data.get("recipient"),
+                    source="gmail_webhook",
+                ),
                 body=encrypt_body(msg_data["body"]),
                 body_encrypted=True,
                 received_at=msg_data["received_at"],
@@ -497,6 +549,8 @@ async def handle_gmail_push(request: Request):
 
             db.add(db_message)
             db.flush()
+            contact_linker.link_thread_state(db_message.thread_id, db_message.contact_id)
+            created_messages.append(db_message)
             synced_count += 1
 
             if filter_result.action == FilterAction.PROCESS:
@@ -517,6 +571,12 @@ async def handle_gmail_push(request: Request):
                 handler=handle_process_email_batch,
                 db=db,
             )
+            await queue_service.process_batch_now(
+                user_id=user_id,
+                task_type="emit_event",
+                handler=handle_emit_event_batch,
+                db=db,
+            )
 
         account.last_history_id = _max_history_id(
             account.last_history_id,
@@ -528,17 +588,18 @@ async def handle_gmail_push(request: Request):
             source="gmail",
             delivery_id=pubsub_message_id,
             event_type="gmail_push",
-            customer_id=email_address,
+            user_id=user_id,
         )
         db.commit()
+        _invalidate_ingested_messages(db, created_messages)
 
         logger.info(
-            "Gmail webhook: processed %s messages (%s for AI) for %s",
+            "Gmail webhook: processed %s messages (%s for AI) for user=%s",
             synced_count,
             len(process_ids),
-            email_address,
+            mask_identifier(user_id),
         )
-        _log_webhook_event("gmail", "gmail_push", True, customer_id=email_address)
+        _log_webhook_event("gmail", "gmail_push", True, user_id=user_id)
         return {"status": "ok", "new_messages": synced_count, "processed": len(process_ids)}
 
     except HTTPException:
@@ -546,12 +607,18 @@ async def handle_gmail_push(request: Request):
     except IntegrityError:
         db.rollback()
         # Delivery insert collision from retry/concurrency. Safe to ack.
-        logger.info("Gmail webhook: duplicate delivery race messageId=%s", pubsub_message_id)
+        logger.info("Gmail webhook: duplicate delivery race messageId=%s", mask_identifier(pubsub_message_id))
         return {"status": "duplicate"}
     except Exception as exc:
         db.rollback()
-        logger.error("Gmail webhook processing failed for %s: %s", email_address, exc, exc_info=True)
-        _log_webhook_event("gmail", "gmail_push", False, "processing_failed", customer_id=email_address)
+        logger.error("Gmail webhook processing failed for %s: %s", mask_email(email_address), exc, exc_info=True)
+        _log_webhook_event(
+            "gmail",
+            "gmail_push",
+            False,
+            "processing_failed",
+            user_id=user_id if 'user_id' in locals() else None,
+        )
         # Non-2xx so Pub/Sub retries transient failures.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -648,6 +715,8 @@ async def handle_outlook_push(request: Request):
 
     db = SessionLocal()
     try:
+        created_messages: list[Message] = []
+
         for notification in notifications:
             sub_id = notification.get("subscriptionId")
             resource = notification.get("resource")
@@ -692,6 +761,7 @@ async def handle_outlook_push(request: Request):
                 account.last_delta_token = delta.get("@odata.deltaLink", account.last_delta_token)
 
                 filter_service = EmailFilterService(db=db, user_id=user_id)
+                contact_linker = ContactLinker(db=db, user_id=user_id)
                 process_ids: list[int] = []
                 for msg in messages:
                     msg_id = msg.get("id")
@@ -724,6 +794,13 @@ async def handle_outlook_push(request: Request):
                         subject=subject,
                         sender=sender_email,
                         recipient=",".join([r.get("emailAddress", {}).get("address") for r in msg.get("toRecipients", [])]),
+                        contact_id=contact_linker.resolve_message_contact_id(
+                            sender_value=sender_email,
+                            recipient_value=",".join(
+                                [r.get("emailAddress", {}).get("address") for r in msg.get("toRecipients", [])]
+                            ),
+                            source="outlook_webhook",
+                        ),
                         body=encrypt_body(body_content),
                         body_encrypted=True,
                         received_at=datetime.fromisoformat(msg.get("receivedDateTime").replace("Z", "+00:00")) if msg.get("receivedDateTime") else datetime.now(timezone.utc),
@@ -734,6 +811,8 @@ async def handle_outlook_push(request: Request):
                     )
                     db.add(db_message)
                     db.flush()
+                    contact_linker.link_thread_state(db_message.thread_id, db_message.contact_id)
+                    created_messages.append(db_message)
                     if filter_result.action == FilterAction.PROCESS:
                         process_ids.append(db_message.id)
 
@@ -759,10 +838,12 @@ async def handle_outlook_push(request: Request):
                 source="outlook",
                 delivery_id=delivery_id,
                 event_type="outlook_push",
-                customer_id=str(user_id),
+                user_id=str(user_id),
             )
 
         db.commit()
+        if created_messages:
+            _invalidate_ingested_messages(db, created_messages)
         _log_webhook_event("outlook", "outlook_push", True)
         return {"status": "ok"}
 

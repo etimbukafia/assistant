@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Teeks — Palette Exploration</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ============================================================
+       PERMANENT INK PALETTE
+       ============================================================ */
+    :root {
+      --bg-base:        #F5F0E8; /* Ivory Paper          */
+      --bg-surface:     #FFFFFF; /* Card Surface         */
+      --bg-elevated:    #FFFFFF;
+
+      --accent-peony:   #C2185B; /* THE moment           */
+      --accent-brass:   #A07850; /* Warm secondary       */
+      --accent-sage:    #4D7C0F; /* Success / Reflection */
+      --accent-slate:   #334155; /* Precision / Links    */
+
+      --ink:            #18181B; /* Primary text         */
+      --stone:          #71717A; /* Secondary text       */
+      --mist:           #A1A1AA; /* Muted / placeholders */
+
+      --border:         #E4E0D8; /* Hairline              */
+      --border-strong:  #CCC8BF;
+
+      --carmine:        #9B1C1C; /* Urgent / Error        */
+      --user-bubble:    #C2185B; /* User message          */
+
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05);
+      --shadow-md: 0 4px 16px rgba(0,0,0,0.09), 0 2px 6px rgba(0,0,0,0.06);
+      --shadow-lg: 0 12px 40px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.07);
+    }
+
+    /* ============================================================
+       RESET & BASE
+       ============================================================ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #D8D3CB;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Inter', sans-serif;
+      gap: 40px;
+      flex-wrap: wrap;
+      padding: 40px 24px;
+    }
+
+    /* ============================================================
+       PHONE SHELL
+       ============================================================ */
+    .phone {
+      width: 375px;
+      height: 812px;
+      background: var(--bg-base);
+      border-radius: 52px;
+      box-shadow:
+        0 0 0 10px #1C1917,
+        0 32px 80px rgba(0,0,0,0.5);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    /* Status Bar */
+    .status-bar {
+      height: 44px;
+      background: var(--bg-surface);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .status-bar .time {
+      font-family: 'Inter', sans-serif;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .status-icons { display: flex; gap: 6px; align-items: center; }
+    .status-icons svg { fill: var(--ink); opacity: 0.85; }
+
+    /* ============================================================
+       SCREEN 1 — CONVERSATIONS LIST
+       ============================================================ */
+    .screen-header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 20px 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .screen-header h1 {
+      font-family: 'Playfair Display', serif;
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--ink);
+      letter-spacing: -0.3px;
+    }
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--accent-peony);
+      transition: background 0.15s;
+    }
+    .icon-btn:hover { background: rgba(194, 24, 91, 0.08); }
+
+    .list-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 16px 120px;
+    }
+    .list-area::-webkit-scrollbar { display: none; }
+
+    .list-section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--stone);
+      padding: 0 4px 10px;
+    }
+
+    .session-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      padding: 14px 14px;
+      gap: 14px;
+      cursor: pointer;
+      transition: box-shadow 0.18s, transform 0.12s;
+      box-shadow: var(--shadow-sm);
+    }
+    .session-card:hover {
+      box-shadow: var(--shadow-md);
+      transform: translateY(-1px);
+    }
+
+    .session-icon {
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .session-icon.action  { background: rgba(160, 120, 80, 0.12); }
+    .session-icon.reflect { background: rgba(77, 124, 15, 0.1); }
+
+    .session-detail { flex: 1; min-width: 0; }
+    .session-title {
+      font-size: 15px; font-weight: 500;
+      color: var(--ink);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-bottom: 3px;
+    }
+    .session-meta {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--stone);
+    }
+    .meta-dot {
+      width: 3px; height: 3px;
+      border-radius: 50%;
+      background: var(--mist);
+    }
+    .tag-action   { color: var(--accent-brass); font-weight: 600; }
+    .tag-reflect  { color: var(--accent-sage);  font-weight: 600; }
+    .tag-ephemeral { display: flex; align-items: center; gap: 3px; }
+
+    .delete-btn {
+      color: var(--mist); cursor: pointer; padding: 4px;
+      transition: color 0.15s;
+    }
+    .delete-btn:hover { color: var(--carmine); }
+
+    /* Urgent card */
+    .session-card.urgent {
+      border-left: 3px solid var(--carmine);
+    }
+
+    /* ============================================================
+       BOTTOM NAV
+       ============================================================ */
+    .bottom-nav {
+      height: 82px;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      padding: 0 20px 8px;
+      flex-shrink: 0;
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+    }
+    .nav-item {
+      display: flex; flex-direction: column;
+      align-items: center; gap: 4px;
+      cursor: pointer; opacity: 0.45;
+      transition: opacity 0.15s;
+    }
+    .nav-item.active { opacity: 1; }
+    .nav-item span {
+      font-size: 10px; font-weight: 600;
+      letter-spacing: 0.3px;
+      color: var(--ink);
+    }
+    .nav-item.active span { color: var(--accent-peony); }
+    .nav-item svg.active-icon { stroke: var(--accent-peony); }
+
+    /* ============================================================
+       SCREEN 2 — ACTIVE CHAT (OmniChat style)
+       ============================================================ */
+    .phone-2 .chat-header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .mode-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.7);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 12px; font-weight: 700;
+      letter-spacing: 0.5px;
+      color: var(--accent-peony);
+      transition: background 0.15s;
+    }
+    .mode-pill.reflect { color: var(--accent-sage); }
+    .mode-pill:hover   { background: #fff; }
+
+    .swap-icon { color: var(--mist); margin-left: 4px; }
+
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 16px;
+      display: flex; flex-direction: column; gap: 12px;
+      background: var(--bg-base);
+    }
+    .chat-messages::-webkit-scrollbar { display: none; }
+
+    .bubble-wrap { display: flex; }
+    .bubble-wrap.user   { justify-content: flex-end; }
+    .bubble-wrap.assist { justify-content: flex-start; }
+
+    .bubble {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-size: 14px; line-height: 20px;
+    }
+    .bubble.user {
+      background: var(--user-bubble);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .bubble.assist {
+      background: var(--bg-surface);
+      color: var(--ink);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* Action card inside assistant bubble */
+    .action-card {
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-top: 8px;
+      font-size: 13px;
+    }
+    .action-card-header {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; font-weight: 700;
+      letter-spacing: 0.8px; text-transform: uppercase;
+      color: var(--accent-peony);
+      margin-bottom: 6px;
+    }
+    .action-card p { color: var(--ink); line-height: 18px; }
+    .action-card-footer {
+      display: flex; gap: 8px; margin-top: 10px;
+    }
+    .btn-approve {
+      flex: 1; padding: 8px 0;
+      background: var(--accent-peony); color: #fff;
+      border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: filter 0.15s;
+    }
+    .btn-approve:hover { filter: brightness(1.1); }
+    .btn-dismiss {
+      flex: 1; padding: 8px 0;
+      background: transparent; color: var(--stone);
+      border: 1px solid var(--border); border-radius: 8px;
+      font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: border-color 0.15s;
+    }
+    .btn-dismiss:hover { border-color: var(--carmine); color: var(--carmine); }
+
+    .typing-indicator {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px; align-self: flex-start;
+    }
+    .dot-pulse { display: flex; gap: 4px; }
+    .dot-pulse span {
+      width: 6px; height: 6px;
+      border-radius: 50%; background: var(--accent-peony);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    .dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
+    .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes pulse {
+      0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+      40%           { opacity: 1;   transform: scale(1); }
+    }
+
+    /* Input bar */
+    .chat-input-bar {
+      padding: 12px 16px;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border);
+      display: flex; align-items: flex-end; gap: 10px;
+      flex-shrink: 0;
+    }
+    .chat-input {
+      flex: 1;
+      font-family: 'Inter', sans-serif;
+      font-size: 15px;
+      color: var(--ink);
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      resize: none;
+      outline: none;
+      min-height: 42px;
+      max-height: 100px;
+      line-height: 22px;
+      transition: border-color 0.15s;
+    }
+    .chat-input:focus { border-color: var(--accent-peony); }
+    .chat-input::placeholder { color: var(--mist); }
+
+    .send-btn {
+      width: 42px; height: 42px;
+      border-radius: 50%;
+      background: var(--accent-peony);
+      border: none; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(194,24,91,0.35);
+      transition: transform 0.1s, box-shadow 0.15s;
+    }
+    .send-btn:hover {
+      transform: scale(1.06);
+      box-shadow: 0 4px 16px rgba(194,24,91,0.45);
+    }
+
+    /* ============================================================
+       PALETTE CHIP STRIP (bottom of page)
+       ============================================================ */
+    .palette-strip {
+      display: flex;
+      gap: 0;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: var(--shadow-lg);
+      align-self: center;
+    }
+    .chip {
+      width: 56px; height: 80px;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: flex-end;
+      padding-bottom: 8px;
+    }
+    .chip span {
+      font-size: 9px; font-weight: 600;
+      letter-spacing: 0.3px;
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      color: rgba(255,255,255,0.75);
+      transform: rotate(180deg);
+    }
+    .chip.dark span { color: rgba(0,0,0,0.45); }
+
+    /* ============================================================
+       LEGEND PANEL
+       ============================================================ */
+    .legend {
+      width: 220px;
+      background: #fff;
+      border-radius: 20px;
+      padding: 24px 20px;
+      box-shadow: var(--shadow-lg);
+      align-self: flex-start;
+      margin-top: 40px;
+    }
+    .legend h2 {
+      font-family: 'Playfair Display', serif;
+      font-size: 18px; font-weight: 700;
+      color: var(--ink);
+      margin-bottom: 4px;
+    }
+    .legend .sub {
+      font-size: 11px; color: var(--stone);
+      letter-spacing: 0.5px; text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+    .swatch-row {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 12px;
+    }
+    .swatch {
+      width: 28px; height: 28px;
+      border-radius: 8px;
+      flex-shrink: 0;
+      border: 1px solid rgba(0,0,0,0.06);
+    }
+    .swatch-info .name  { font-size: 13px; font-weight: 600; color: var(--ink); }
+    .swatch-info .hex   { font-size: 11px; color: var(--stone); font-family: 'SF Mono', monospace; }
+    .swatch-info .role  { font-size: 10px; color: var(--mist); }
+
+    hr.divider {
+      border: none; border-top: 1px solid var(--border);
+      margin: 16px 0;
+    }
+
+    .label-caption {
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 1px; text-transform: uppercase;
+      color: var(--mist); margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============================================================
+       PHONE 1 — CONVERSATIONS LIST
+       ============================================================ -->
+  <div class="phone">
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <span class="time">9:41</span>
+      <div class="status-icons">
+        <svg width="16" height="12" viewBox="0 0 16 12"><rect x="0" y="3" width="3" height="9" rx="1"/><rect x="4.5" y="2" width="3" height="10" rx="1"/><rect x="9" y="0.5" width="3" height="11.5" rx="1"/><rect x="13.5" y="0.5" width="2.5" height="11.5" rx="1" opacity=".3"/></svg>
+        <svg width="15" height="12" viewBox="0 0 15 12"><path d="M7.5 2.5C9.8 2.5 11.9 3.4 13.4 4.9L14.8 3.5C12.9 1.7 10.3 0.5 7.5 0.5S2.1 1.7 0.2 3.5L1.6 4.9C3.1 3.4 5.2 2.5 7.5 2.5ZM7.5 6.5C8.9 6.5 10.2 7 11.1 7.9L12.5 6.5C11.2 5.3 9.4 4.5 7.5 4.5S3.8 5.3 2.5 6.5L3.9 7.9C4.8 7 6.1 6.5 7.5 6.5ZM7.5 10.5C8.3 10.5 9 10.8 9.6 11.3L7.5 13.5L5.4 11.3C6 10.8 6.7 10.5 7.5 10.5Z" fill-rule="evenodd"/></svg>
+        <svg width="25" height="12" viewBox="0 0 25 12"><rect x="0" y="0.5" width="22" height="11" rx="3.5" stroke="currentColor" stroke-opacity=".35" stroke-width="1" fill="none"/><rect x="23" y="3.5" width="2" height="5" rx="1" fill="currentColor" fill-opacity=".4"/><rect x="1" y="1.5" width="17" height="9" rx="2.5" fill="currentColor"/></svg>
+      </div>
+    </div>
+
+    <!-- Header -->
+    <div class="screen-header">
+      <h1>Conversations</h1>
+      <button class="icon-btn" title="New chat">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+    </div>
+
+    <!-- Sessions List -->
+    <div class="list-area">
+      <p class="list-section-label">Today</p>
+
+      <!-- Urgent card -->
+      <div class="session-card urgent">
+        <div class="session-icon action">
+          <svg width="20" height="20" fill="none" stroke="#9B1C1C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div class="session-detail">
+          <div class="session-title">Board deck — needs sign-off</div>
+          <div class="session-meta">
+            <span class="tag-action">Action</span>
+            <span class="meta-dot"></span>
+            <span>Today at 8:47 AM</span>
+          </div>
+        </div>
+        <div class="delete-btn">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+        </div>
+      </div>
+
+      <div class="session-card">
+        <div class="session-icon action">
+          <svg width="20" height="20" fill="none" stroke="#A07850" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </div>
+        <div class="session-detail">
+          <div class="session-title">Travel logistics — Vienna + Budapest</div>
+          <div class="session-meta">
+            <span class="tag-action">Action</span>
+            <span class="meta-dot"></span>
+            <span>Today at 10:12 AM</span>
+          </div>
+        </div>
+        <div class="delete-btn">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+        </div>
+      </div>
+
+      <div class="session-card">
+        <div class="session-icon reflect">
+          <svg width="20" height="20" fill="none" stroke="#4D7C0F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 8C8 10 5.9 16.17 3.82 19.11A1 1 0 004.9 20.5c2.09-.41 4.74-1.16 5.84-2.38C13.13 15.5 18 12 18 12l-1-4z"/><path d="M22 2s-4 2-2 8"/></svg>
+        </div>
+        <div class="session-detail">
+          <div class="session-title">End-of-week wind-down</div>
+          <div class="session-meta">
+            <span class="tag-reflect">Reflection</span>
+            <span class="meta-dot"></span>
+            <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 8 14"/></svg>
+            <span style="font-size:11px">Temporary</span>
+            <span class="meta-dot"></span>
+            <span>Today at 5:00 PM</span>
+          </div>
+        </div>
+        <div class="delete-btn">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+        </div>
+      </div>
+
+      <p class="list-section-label" style="margin-top:16px">Yesterday</p>
+
+      <div class="session-card">
+        <div class="session-icon action">
+          <svg width="20" height="20" fill="none" stroke="#A07850" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </div>
+        <div class="session-detail">
+          <div class="session-title">Draft reply — Marcus re: Q1 review</div>
+          <div class="session-meta">
+            <span class="tag-action">Action</span>
+            <span class="meta-dot"></span>
+            <span>Yesterday at 2:31 PM</span>
+          </div>
+        </div>
+        <div class="delete-btn">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+        </div>
+      </div>
+
+      <div class="session-card">
+        <div class="session-icon reflect">
+          <svg width="20" height="20" fill="none" stroke="#4D7C0F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 8C8 10 5.9 16.17 3.82 19.11A1 1 0 004.9 20.5c2.09-.41 4.74-1.16 5.84-2.38C13.13 15.5 18 12 18 12l-1-4z"/><path d="M22 2s-4 2-2 8"/></svg>
+        </div>
+        <div class="session-detail">
+          <div class="session-title">Mid-week check-in</div>
+          <div class="session-meta">
+            <span class="tag-reflect">Reflection</span>
+            <span class="meta-dot"></span>
+            <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 8 14"/></svg>
+            <span style="font-size:11px">Temporary</span>
+            <span class="meta-dot"></span>
+            <span>Yesterday at 6:22 PM</span>
+          </div>
+        </div>
+        <div class="delete-btn">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Nav -->
+    <div class="bottom-nav">
+      <div class="nav-item">
+        <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span>Today</span>
+      </div>
+      <div class="nav-item active">
+        <svg class="active-icon" width="22" height="22" fill="none" stroke="#C2185B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        <span>Chats</span>
+      </div>
+      <div class="nav-item">
+        <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span>Calendar</span>
+      </div>
+      <div class="nav-item">
+        <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        <span>Profile</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       PHONE 2 — ACTIVE CHAT SESSION
+       ============================================================ -->
+  <div class="phone phone-2" style="background: var(--bg-base);">
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <span class="time">9:41</span>
+      <div class="status-icons">
+        <svg width="16" height="12" viewBox="0 0 16 12"><rect x="0" y="3" width="3" height="9" rx="1"/><rect x="4.5" y="2" width="3" height="10" rx="1"/><rect x="9" y="0.5" width="3" height="11.5" rx="1"/><rect x="13.5" y="0.5" width="2.5" height="11.5" rx="1" opacity=".3"/></svg>
+        <svg width="25" height="12" viewBox="0 0 25 12"><rect x="0" y="0.5" width="22" height="11" rx="3.5" stroke="currentColor" stroke-opacity=".35" stroke-width="1" fill="none"/><rect x="23" y="3.5" width="2" height="5" rx="1" fill="currentColor" fill-opacity=".4"/><rect x="1" y="1.5" width="17" height="9" rx="2.5" fill="currentColor"/></svg>
+      </div>
+    </div>
+
+    <!-- Chat Header -->
+    <div class="chat-header">
+      <button class="icon-btn" style="color: var(--stone);" title="Back">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div class="mode-pill" id="mode-pill">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>ACTION</span>
+          <svg class="swap-icon" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="3" y1="4" x2="21" y2="21"/></svg>
+        </div>
+      </div>
+
+      <button class="icon-btn" style="color: var(--stone);" title="New session">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+    </div>
+
+    <!-- Messages -->
+    <div class="chat-messages">
+
+      <div class="bubble-wrap user">
+        <div class="bubble user">
+          Can you draft a reply to Marcus declining the Q1 review for Thursday? I'll be in Vienna.
+        </div>
+      </div>
+
+      <div class="bubble-wrap assist">
+        <div class="bubble assist">
+          Of course. Here's a draft — warm but clear.
+          <div class="action-card">
+            <div class="action-card-header">
+              <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+              Draft Email
+            </div>
+            <p style="font-size:12px; color:var(--stone); margin-bottom:4px;"><strong style="color:var(--ink)">To:</strong> Marcus Rein &nbsp;|&nbsp; <strong style="color:var(--ink)">Re:</strong> Q1 Review</p>
+            <p>Hi Marcus, thank you for the invite. I'll be travelling to Vienna Thursday — could we reschedule to the following week? Happy to confirm a slot that works for you.</p>
+            <div class="action-card-footer">
+              <button class="btn-approve">Send</button>
+              <button class="btn-dismiss">Edit</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bubble-wrap user">
+        <div class="bubble user">
+          Perfect. Also block my calendar for the flight — Thursday 6 AM to 10 AM.
+        </div>
+      </div>
+
+      <div class="bubble-wrap assist">
+        <div class="bubble assist">
+          Done. I'll create a calendar block for you.
+          <div class="action-card">
+            <div class="action-card-header">
+              <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              Create Event
+            </div>
+            <p><strong>✈ Vienna Flight</strong><br/>Thursday, Feb 27 · 6:00 AM – 10:00 AM<br/><span style="color:var(--stone)">Blocked — no notifications</span></p>
+            <div class="action-card-footer">
+              <button class="btn-approve">Confirm</button>
+              <button class="btn-dismiss">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Typing indicator -->
+      <div class="bubble-wrap assist typing-indicator">
+        <div class="dot-pulse">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Input Bar -->
+    <div class="chat-input-bar">
+      <textarea class="chat-input" rows="1" placeholder="How can I help you execute?"></textarea>
+      <button class="send-btn" title="Send">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       LEGEND PANEL
+       ============================================================ -->
+  <div class="legend">
+    <h2>Permanent Ink</h2>
+    <p class="sub">Proposed Palette · 2026</p>
+
+    <p class="label-caption">Background</p>
+    <div class="swatch-row">
+      <div class="swatch" style="background:#F5F0E8;"></div>
+      <div class="swatch-info">
+        <div class="name">Ivory Paper</div>
+        <div class="hex">#F5F0E8</div>
+        <div class="role">Base background</div>
+      </div>
+    </div>
+
+    <hr class="divider"/>
+    <p class="label-caption">Brand Moment</p>
+
+    <div class="swatch-row">
+      <div class="swatch" style="background:#C2185B;"></div>
+      <div class="swatch-info">
+        <div class="name">Peony</div>
+        <div class="hex">#C2185B</div>
+        <div class="role">Primary CTA · Send btn · Active tab</div>
+      </div>
+    </div>
+
+    <hr class="divider"/>
+    <p class="label-caption">Supporting Accents</p>
+
+    <div class="swatch-row">
+      <div class="swatch" style="background:#A07850;"></div>
+      <div class="swatch-info">
+        <div class="name">Brass</div>
+        <div class="hex">#A07850</div>
+        <div class="role">Action mode · Icons</div>
+      </div>
+    </div>
+    <div class="swatch-row">
+      <div class="swatch" style="background:#4D7C0F;"></div>
+      <div class="swatch-info">
+        <div class="name">Sage</div>
+        <div class="hex">#4D7C0F</div>
+        <div class="role">Reflection mode · Success</div>
+      </div>
+    </div>
+    <div class="swatch-row">
+      <div class="swatch" style="background:#334155;"></div>
+      <div class="swatch-info">
+        <div class="name">Deep Slate</div>
+        <div class="hex">#334155</div>
+        <div class="role">Links · Precision</div>
+      </div>
+    </div>
+    <div class="swatch-row">
+      <div class="swatch" style="background:#9B1C1C;"></div>
+      <div class="swatch-info">
+        <div class="name">Carmine</div>
+        <div class="hex">#9B1C1C</div>
+        <div class="role">Urgent · Error</div>
+      </div>
+    </div>
+
+    <hr class="divider"/>
+    <p class="label-caption">Typography</p>
+
+    <div class="swatch-row">
+      <div class="swatch" style="background:#18181B;"></div>
+      <div class="swatch-info">
+        <div class="name">Ink Black</div>
+        <div class="hex">#18181B</div>
+        <div class="role">Primary body</div>
+      </div>
+    </div>
+    <div class="swatch-row">
+      <div class="swatch" style="background:#71717A; border:none;"></div>
+      <div class="swatch-info">
+        <div class="name">Stone</div>
+        <div class="hex">#71717A</div>
+        <div class="role">Secondary text</div>
+      </div>
+    </div>
+    <div class="swatch-row">
+      <div class="swatch" style="background:#A1A1AA; border:none;"></div>
+      <div class="swatch-info">
+        <div class="name">Mist</div>
+        <div class="hex">#A1A1AA</div>
+        <div class="role">Placeholders · Muted</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Palette Strip -->
+  <div style="width:100%; display:flex; justify-content:center; margin-top:8px;">
+    <div class="palette-strip">
+      <div class="chip" style="background:#F5F0E8;"><span style="color:rgba(0,0,0,0.4)">IVORY</span></div>
+      <div class="chip" style="background:#18181B;"><span>INK</span></div>
+      <div class="chip" style="background:#C2185B;"><span>PEONY</span></div>
+      <div class="chip" style="background:#A07850;"><span>BRASS</span></div>
+      <div class="chip" style="background:#4D7C0F;"><span>SAGE</span></div>
+      <div class="chip" style="background:#334155;"><span>SLATE</span></div>
+      <div class="chip" style="background:#9B1C1C;"><span>CARMINE</span></div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -25,6 +25,37 @@ from app.infra.database import get_db
 router = APIRouter(prefix="/telemetry", tags=["Telemetry"])
 
 
+_EVENT_PAYLOAD_ALLOWLIST: dict[str, tuple[str, ...]] = {
+    "mention_selected": ("mention_type", "source"),
+    "chat_message_sent": ("has_mentions", "mention_count", "source"),
+    "chat_chip_clicked": ("chip_id", "prompt_length", "source"),
+    "chat_approval_sent": ("pending_count", "source"),
+    "chat_action_approved": ("pending_count", "source"),
+}
+
+
+def _sanitize_event_payload(event_name: str, payload: object) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+
+    allowed_keys = _EVENT_PAYLOAD_ALLOWLIST.get((event_name or "").strip())
+    if not allowed_keys:
+        return {}
+
+    sanitized: dict[str, object] = {}
+    for key in allowed_keys:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            sanitized[key] = value
+        elif isinstance(value, int):
+            sanitized[key] = max(0, value)
+        elif isinstance(value, float):
+            sanitized[key] = value
+        elif isinstance(value, str):
+            sanitized[key] = value.strip()[:120]
+    return sanitized
+
+
 @router.post("/events", response_model=TelemetryIngestResponse)
 def ingest_events(
     request: TelemetryBatchRequest,
@@ -42,9 +73,7 @@ def ingest_events(
         event_name = (evt.event_name or "").strip()[:120]
         if not event_name:
             continue
-        payload = evt.event_payload or {}
-        if isinstance(payload, dict) and len(payload) > 60:
-            payload = dict(list(payload.items())[:60])
+        payload = _sanitize_event_payload(event_name, evt.event_payload)
 
         client_ts = evt.client_ts
         if client_ts and client_ts < oldest_allowed:
@@ -65,7 +94,6 @@ def ingest_events(
             event_name=event_name,
             event_payload=payload,
             page_path=(evt.page_path or "")[:240] or None,
-            session_id=(evt.session_id or "")[:120] or None,
             client_ts=client_ts,
         )
         db.add(row)

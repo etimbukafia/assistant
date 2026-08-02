@@ -1,0 +1,144 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.dodopayments.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Introduction
+
+> The Dodo Payments API provides comprehensive endpoints for payment processing, subscription management, and digital product delivery. Our RESTful API follows industry standards with detailed responses for all operations.
+
+<Card title="SDKs & Libraries" icon="code" href="/developer-resources/dodo-payments-sdks">
+  Accelerate your integration by using official SDKs for <strong>TypeScript</strong>, <strong>Python</strong>, <strong>Go</strong>, <strong>PHP</strong>, <strong>Java</strong>, <strong>Kotlin</strong>, <strong>C#</strong>, <strong>Ruby</strong>, and <strong>React Native</strong>. These libraries simplify API requests, authentication, and error handling, letting you focus on building great payment experiences.
+</Card>
+
+## Environment URLs
+
+* **Test Mode**: [`https://test.dodopayments.com`](https://test.dodopayments.com)
+* **Live Mode**: [`https://live.dodopayments.com`](https://live.dodopayments.com)
+
+<Note>
+  Learn more about [Test Mode vs Live Mode](/miscellaneous/test-mode-vs-live-mode).
+</Note>
+
+## API Key Management and Authentication
+
+<Steps>
+  <Step title="Access API Keys">
+    Navigate to **Developer → API Keys** in your dashboard to manage your keys.
+  </Step>
+
+  <Step title="Generate a New Key">
+    Select **Add API Key**, provide a descriptive name, and configure write access:
+
+    * **Enable write access** (checked): Full read and write permissions for all API operations
+    * **Enable write access** (unchecked): Read-only access - can only fetch data (payments, subscriptions, customers, products). Cannot create or modify resources.
+
+    <Tip>
+      Uncheck "Enable write access" for dashboard integrations, analytics tools, and any system that only needs to view data without making changes.
+    </Tip>
+  </Step>
+
+  <Step title="Store Your Key Securely">
+    Copy the generated key immediately and ensure it is stored securely.
+  </Step>
+
+  <Step title="Authenticate Your API Requests">
+    Use your API keys to authenticate all requests. Apply the following authorization format:
+
+    ```bash  theme={null}
+    Authorization: Bearer YOUR_API_KEY
+    ```
+
+    <Warning>
+      Never expose your secret API keys in client-side code or public repositories.
+    </Warning>
+  </Step>
+</Steps>
+
+## Response Format
+
+<CodeGroup>
+  ```json Success Response theme={null}
+  {
+    "id": "pay_1234567890",
+    "status": "completed",
+    "amount": 2999,
+    "currency": "USD",
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+  ```
+
+  ```json Error Response theme={null}
+  {
+    "code": "INVALID_REQUEST",
+    "message": "The request contains invalid parameters"
+  }
+  ```
+</CodeGroup>
+
+## Rate Limits
+
+Our API uses a dual-window rate limiting system with burst protection. Limits are applied based on your authentication method and business tier.
+
+### Default Limits (Tier 0)
+
+| Window                 | Limit        |
+| ---------------------- | ------------ |
+| Per Second (Burst)     | 40 requests  |
+| Per Minute (Sustained) | 240 requests |
+
+### Business Tiers
+
+Higher rate limits are available for businesses with increased API needs:
+
+| Tier             | Burst (per second) | Sustained (per minute) |
+| ---------------- | ------------------ | ---------------------- |
+| Tier 0 (Default) | 40                 | 240                    |
+| Tier 1           | 100                | 1,000                  |
+| Tier 2           | 500                | 5,000                  |
+
+<Tip>
+  Contact support to upgrade your business to a higher rate limit tier.
+</Tip>
+
+### Unauthenticated Requests
+
+Requests without valid authentication headers are rate limited by IP address:
+
+| Window                 | Limit        |
+| ---------------------- | ------------ |
+| Per Second (Burst)     | 20 requests  |
+| Per Minute (Sustained) | 100 requests |
+
+### Rate Limit Headers
+
+Monitor your usage with these response headers:
+
+* `X-RateLimit-Limit` - Maximum requests allowed
+* `X-RateLimit-Remaining` - Requests remaining in current window
+* `X-RateLimit-Reset` - Time when the rate limit resets
+
+<Note>
+  When you exceed rate limits, the API returns a `429 Too Many Requests` response. Implement exponential backoff in your retry logic.
+</Note>
+
+## Error Handling
+
+To effectively manage errors, consult the *Error Codes* and *Transaction Failures* sections for detailed guidance.
+
+<CardGroup cols={2}>
+  <Card title="Error Codes" icon="triangle-exclamation" href="/api-reference/error-codes">
+    Delve into comprehensive error details and their resolutions.
+  </Card>
+
+  <Card title="Transaction Failures" icon="circle-exclamation" href="/api-reference/transaction-failures">
+    Gain insights into common transaction issues and their solutions.
+  </Card>
+</CardGroup>
+
+## Webhooks
+
+Receive real-time notifications about payment events. See our [Webhook Guide](/developer-resources/webhooks) for setup instructions.
+
+<Card title="Webhook Guide" icon="webhook" href="/developer-resources/webhooks">
+  Set up webhooks for real-time notifications and event handling.
+</Card>

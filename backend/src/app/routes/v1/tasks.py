@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -25,7 +26,12 @@ def _tenant_id() -> str:
 def _invalidate_thread_and_prewarm(db: Session, user_id: str, thread_id: str) -> None:
     if not thread_id:
         return
-    cache_coordinator.invalidate_thread(_tenant_id(), user_id, thread_id)
+    cache_coordinator.invalidate_thread_related_contact(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user_id,
+        thread_id=thread_id,
+    )
     cache_coordinator.prewarm_action_chips(
         db=db,
         tenant_id=_tenant_id(),
@@ -33,8 +39,33 @@ def _invalidate_thread_and_prewarm(db: Session, user_id: str, thread_id: str) ->
     )
 
 
-def _invalidate_task(user_id: str, task_id: int) -> None:
-    cache_coordinator.invalidate_task(_tenant_id(), user_id, str(task_id))
+def _invalidate_task(db: Session, user_id: str, task_id: int) -> None:
+    cache_coordinator.invalidate_task_related_contact(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user_id,
+        task_id=task_id,
+    )
+
+
+def _serialize_source_message(message: Optional[Message]) -> Optional[Dict[str, Any]]:
+    """Return task source message payload with decrypted body for UI display."""
+    if not message:
+        return None
+    return {
+        "id": message.id,
+        "message_id": message.message_id,
+        "thread_id": message.thread_id,
+        "subject": message.subject or "",
+        "sender": message.sender or "",
+        "recipient": message.recipient or "",
+        "body": message.decrypted_body or "",
+        "received_at": message.received_at,
+        "summary": message.summary,
+        "needs_reply": message.needs_reply,
+        "processed": message.processed,
+        "created_at": message.created_at,
+    }
 
 @router.get("/", response_model=TasksListResponse)
 def get_tasks(
@@ -144,7 +175,7 @@ def create_task(
         db.commit()
 
     _invalidate_thread_and_prewarm(db, user.user_id, message.thread_id)
-    _invalidate_task(user.user_id, task.id)
+    _invalidate_task(db, user.user_id, task.id)
 
     # Build response with source message
     task_dict = {
@@ -173,7 +204,7 @@ def create_task(
         "confidence_score": task.confidence_score,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
-        "source_message": message
+        "source_message": _serialize_source_message(message)
     }
 
     return TaskResponse(**task_dict)
@@ -242,7 +273,7 @@ def create_manual_task(
     db.add(task)
     db.commit()
     db.refresh(task)
-    _invalidate_task(user.user_id, task.id)
+    _invalidate_task(db, user.user_id, task.id)
 
     return task
 
@@ -308,7 +339,7 @@ def get_task(task_id: int, db: Session = Depends(get_db_for_user)):
         "confidence_score": task.confidence_score,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
-        "source_message": message
+        "source_message": _serialize_source_message(message)
     }
 
     return TaskResponse(**task_dict)
@@ -332,7 +363,7 @@ def approve_task(
 
     if task.thread_id:
         _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)
-    _invalidate_task(user.user_id, task.id)
+    _invalidate_task(db, user.user_id, task.id)
 
     # Track pattern for learning
     track_task_action(db, "approve", task, task.user_id or user.user_id)
@@ -367,7 +398,7 @@ def dismiss_task(
 
     if task.thread_id:
         _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)
-    _invalidate_task(user.user_id, task.id)
+    _invalidate_task(db, user.user_id, task.id)
 
     # Track pattern for learning
     track_task_action(db, "dismiss", task, task.user_id or user.user_id)
@@ -446,7 +477,7 @@ def update_task(
 
     if task.thread_id:
         _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)
-    _invalidate_task(user.user_id, task.id)
+    _invalidate_task(db, user.user_id, task.id)
 
     db.refresh(task)
 
@@ -468,7 +499,7 @@ def start_task(task_id: int, db: Session = Depends(get_db_for_user)):
     task.status = "in_progress"
     db.commit()
     if task.user_id:
-        _invalidate_task(task.user_id, task.id)
+        _invalidate_task(db, task.user_id, task.id)
 
     return {"message": "Task started", "task_id": task_id}
 
@@ -491,7 +522,7 @@ def complete_task(
 
     if task.thread_id:
         _invalidate_thread_and_prewarm(db, user.user_id, task.thread_id)
-    _invalidate_task(user.user_id, task.id)
+    _invalidate_task(db, user.user_id, task.id)
 
     return {"message": "Task completed", "task_id": task_id}
 
@@ -511,6 +542,6 @@ def snooze_task(
     task.status = "snoozed"
     db.commit()
     if task.user_id:
-        _invalidate_task(task.user_id, task.id)
+        _invalidate_task(db, task.user_id, task.id)
 
     return {"message": "Task snoozed", "snoozed_until": request.snooze_until}

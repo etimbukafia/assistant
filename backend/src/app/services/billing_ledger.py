@@ -489,14 +489,12 @@ def upsert_billing_event_audit(
     record.user_id = user_id or record.user_id
     record.event_type = event.event_type
     record.customer_id = event.customer_id
-    record.customer_email = event.customer_email
     record.subscription_id = event.subscription_id
-    record.invoice_id = str(invoice_id) if invoice_id else record.invoice_id
+    record.invoice_id = event.invoice_id or (str(invoice_id) if invoice_id else record.invoice_id)
     record.handled = handled
     record.error = error
     record.payload = {
         "normalized": serialize_billing_event(event),
-        "raw": event.raw,
     }
     record.processed_at = datetime.now(timezone.utc)
     db.flush()

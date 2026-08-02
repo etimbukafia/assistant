@@ -2,8 +2,8 @@
 
 import { useInbox } from "@/hooks/useInbox";
 import { EmailCard } from "./EmailCard";
-import { Inbox, Archive, Zap, ZapOff } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Inbox, Archive } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { isToday, isYesterday, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useSearchParams } from "next/navigation";
@@ -17,11 +17,9 @@ interface InboxFeedProps {
 }
 
 export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange, compact, statusFilter }: InboxFeedProps) {
-    const [isFocusMode, setIsFocusMode] = useState(false);
     const searchParams = useSearchParams();
     const highlightId = searchParams.get("messageId");
     const { data, fetchNextPage, hasNextPage, isFetchingNextPage, status } = useInbox({
-        needs_reply: isFocusMode ? true : undefined,
         status: statusFilter,
     });
 
@@ -94,35 +92,6 @@ export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange,
 
     return (
         <div className="space-y-6 pb-20">
-            {/* Focus Mode toggle — hidden in archive view */}
-            {statusFilter !== "archived" && (
-                <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                        <button
-                            onClick={() => setIsFocusMode(!isFocusMode)}
-                            className={cn(
-                                "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium font-inter transition-all",
-                                isFocusMode
-                                    ? "border-primary/50 bg-primary/[0.08] text-primary"
-                                    : "border-border text-muted-foreground hover:text-foreground"
-                            )}
-                        >
-                            {isFocusMode
-                                ? <Zap size={12} className="fill-current" />
-                                : <ZapOff size={12} />
-                            }
-                            {compact ? "" : (isFocusMode ? "Focus On" : "Focus Mode")}
-                        </button>
-
-                        {isFocusMode && !compact && (
-                            <span className="text-[11px] text-muted-foreground/60 font-inter animate-in fade-in slide-in-from-left-2">
-                                Actionable items only
-                            </span>
-                        )}
-                    </div>
-                </div>
-            )}
-
             {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-[40vh] text-muted-foreground gap-4 animate-in fade-in zoom-in-95 duration-500">
                     {statusFilter === "archived" ? (
@@ -131,24 +100,14 @@ export function InboxFeed({ selectedThreadId, onSelectThread, onThreadIdsChange,
                         <Inbox size={40} className="text-muted-foreground/25" />
                     )}
                     <p className="font-playfair text-xl text-muted-foreground/70">
-                        {statusFilter === "archived" ? "No archived messages" : isFocusMode ? "All caught up" : "Inbox zero"}
+                        {statusFilter === "archived" ? "No archived messages" : "Inbox zero"}
                     </p>
                     {!compact && (
                         <p className="text-sm font-inter text-muted-foreground/50 text-center max-w-xs">
                             {statusFilter === "archived"
                                 ? "Messages you archive will appear here."
-                                : isFocusMode
-                                    ? "No urgent items requiring your attention."
-                                    : "Nothing needs your attention right now."}
+                                : "Nothing needs your attention right now."}
                         </p>
-                    )}
-                    {isFocusMode && !statusFilter && (
-                        <button
-                            onClick={() => setIsFocusMode(false)}
-                            className="text-[12px] font-inter text-primary hover:text-primary/80 transition-colors"
-                        >
-                            View all messages
-                        </button>
                     )}
                 </div>
             ) : (

@@ -54,6 +54,18 @@ function mentionLabelToken(mention: ChatMention) {
     return `${prefix}${mention.label}`;
 }
 
+function hashMentionQuery(value: string): string {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return "none";
+
+    let hash = 2166136261;
+    for (let i = 0; i < normalized.length; i += 1) {
+        hash ^= normalized.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+}
+
 export function useMentionComposer({
     inputValue,
     setInputValue,
@@ -119,7 +131,7 @@ export function useMentionComposer({
                 return;
             }
 
-            const queryKey = `${sessionId || "default"}:${mentionContext.trigger}:${mentionContext.query.trim().toLowerCase()}`;
+            const queryKey = `${sessionId || "default"}:${mentionContext.trigger}:${hashMentionQuery(mentionContext.query)}`;
             const cached = suggestionsCacheRef.current[queryKey];
             if (cached) {
                 setMentionSuggestions(cached);

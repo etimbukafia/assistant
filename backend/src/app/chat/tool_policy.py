@@ -24,25 +24,6 @@ NO_TOOL_MESSAGES = {
 }
 
 
-ACTION_HINT_TOKENS = {
-    "draft",
-    "reply",
-    "respond",
-    "compose",
-    "write",
-    "prep",
-    "brief",
-    "schedule",
-    "reschedule",
-    "book",
-    "plan",
-    "summarize",
-    "recap",
-    "extract",
-    "search",
-    "find",
-}
-
 # Multi-word phrases that signal a context-retrieval question about a mentioned entity.
 # Single-word tokens (e.g. "what", "how") are intentionally excluded to avoid false
 # positives like "@Alice what is the capital of France?".
@@ -75,15 +56,31 @@ CONTEXT_QUERY_PHRASES = {
     "what were",
 }
 
-TASK_WRITE_HINT_TOKENS = {
-    "create task",
-    "add task",
-    "new task",
-    "update task",
-    "close task",
-    "complete task",
-    "mark done",
+MEMORY_QUERY_PHRASES = {
+    "when last",
+    "last time",
+    "did we approve",
+    "have we approved",
+    "was this approved",
+    "who approved",
+    "when did we discuss",
+    "did we discuss",
+    "have we discussed",
+    "what do i need to know about",
+    "anything i should know about",
+    "what should i know about",
+    "communication preference",
+    "communication preferences",
+    "preference i should know",
+    "preferences i should know",
+    "is there any preference",
+    "is there any communication preference",
+    "what changed",
+    "what has changed",
 }
+
+# Thinking Zone MVP: tools are read-only.
+THINKING_ZONE_READ_ONLY = True
 
 
 TOOL_FAMILY_BY_NAME = {
@@ -94,6 +91,9 @@ TOOL_FAMILY_BY_NAME = {
     "get_email_details": ToolFamily.READ_CONTEXT,
     "get_thread_summary": ToolFamily.READ_CONTEXT,
     "get_contact_context": ToolFamily.READ_CONTEXT,
+    "get_contact_brief": ToolFamily.READ_CONTEXT,
+    "get_contact_timeline": ToolFamily.READ_CONTEXT,
+    "get_contact_signals": ToolFamily.READ_CONTEXT,
     "get_thread_history": ToolFamily.READ_CONTEXT,
     "get_user_preferences": ToolFamily.READ_CONTEXT,
     "get_event_context": ToolFamily.READ_CONTEXT,
@@ -101,6 +101,7 @@ TOOL_FAMILY_BY_NAME = {
     "get_task_context": ToolFamily.READ_CONTEXT,
     "context_search": ToolFamily.READ_CONTEXT,
     "entity_search": ToolFamily.READ_CONTEXT,
+    "get_approval_history": ToolFamily.READ_CONTEXT,
     "search_vault": ToolFamily.READ_CONTEXT,
     "get_vault_note": ToolFamily.READ_CONTEXT,
     # Artifact generation
@@ -145,8 +146,7 @@ class ToolPolicyEngine:
         text = " ".join((user_message or "").lower().split())
         entities = (mention_context or {}).get("entities") or []
         has_mentions = bool(entities)
-        has_action_hint = any(token in text for token in ACTION_HINT_TOKENS)
-        has_task_write_hint = any(token in text for token in TASK_WRITE_HINT_TOKENS)
+        has_memory_query = any(phrase in text for phrase in MEMORY_QUERY_PHRASES) or _looks_like_memory_query(text)
         has_context_query = any(phrase in text for phrase in CONTEXT_QUERY_PHRASES)
 
         if text in NO_TOOL_MESSAGES:
@@ -156,41 +156,85 @@ class ToolPolicyEngine:
                 reason="smalltalk_or_ack",
             )
 
-        if not has_mentions:
+        if not has_mentions and not has_memory_query:
             return ToolPolicyDecision(
                 tools_allowed=False,
                 allowed_families=set(),
                 reason="requires_explicit_mentions",
             )
-        
-        # Context-query phrases (e.g. "what changed", "any updates") with a mention
-        # unlock read-only tools but not artifact generation or write tools.
-        if not has_action_hint and not has_task_write_hint:
-            if has_context_query:
-                return ToolPolicyDecision(
-                    tools_allowed=True,
-                    allowed_families={ToolFamily.READ_CONTEXT},
-                    reason="context_query_with_mention",
-                )
+
+        # Memory Reflection mode: explicit mentions or clear memory questions
+        # can trigger read-context retrieval only.
+        if THINKING_ZONE_READ_ONLY:
             return ToolPolicyDecision(
-                tools_allowed=False,
-                allowed_families=set(),
-                reason="mentions_without_action_intent",
+                tools_allowed=True,
+                allowed_families={ToolFamily.READ_CONTEXT},
+                reason=(
+                    "memory_reflection_context_query"
+                    if has_memory_query and not has_mentions
+                    else "memory_reflection_mentions_read_context"
+                ),
             )
 
-        families: Set[ToolFamily] = {ToolFamily.READ_CONTEXT, ToolFamily.GENERATE_ARTIFACT}
-        if has_task_write_hint:
-            families.add(ToolFamily.WRITE_TASK)
-
+        # Legacy path (currently disabled by THINKING_ZONE_READ_ONLY):
+        # context-query phrases with a mention unlock read-only tools only.
+        if has_context_query:
+            return ToolPolicyDecision(
+                tools_allowed=True,
+                allowed_families={ToolFamily.READ_CONTEXT},
+                reason="context_query_with_mention",
+            )
         return ToolPolicyDecision(
-            tools_allowed=True,
-            allowed_families=families,
-            reason="mentions_and_action_intent",
+            tools_allowed=False,
+            allowed_families=set(),
+            reason="mentions_without_action_intent",
         )
 
     def filter_tools(self, tool_names: Iterable[str], decision: ToolPolicyDecision) -> Set[str]:
         if not decision.tools_allowed:
             return set()
         return {name for name in tool_names if decision.allows_tool(name, self.family_map)}
+
+
+def _looks_like_memory_query(text: str) -> bool:
+    if not text:
+        return False
+
+    memory_terms = {
+        "approve",
+        "approved",
+        "approval",
+        "decided",
+        "decision",
+        "discuss",
+        "discussed",
+        "preference",
+        "preferences",
+        "remember",
+        "history",
+        "context",
+        "timeline",
+        "communicate",
+        "communication",
+        "latest",
+        "update",
+        "updates",
+    }
+    question_cues = {
+        "when",
+        "what",
+        "did",
+        "have",
+        "is",
+        "any",
+        "who",
+        "remind",
+        "summarize",
+    }
+
+    tokens = set(text.split())
+    if not tokens.intersection(memory_terms):
+        return False
+    return bool(tokens.intersection(question_cues))
 
 

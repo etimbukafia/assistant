@@ -46,6 +46,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { InlineContextCaptureCard } from "@/components/vault/InlineContextCaptureCard";
 import { cn } from "@/lib/utils";
 
 type CalendarView = "month" | "week" | "day" | "list";
@@ -59,19 +60,20 @@ const VIEW_LABELS: Record<CalendarView, string> = {
 
 const WEEK_STARTS_ON = 1; // Monday
 const CARD_SHADOW = "0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)";
+type CalendarMeta = { id: string; summary: string; primary?: boolean };
 
-// Calendar color palette — used only for the left accent bar in ListView and dots in settings.
+// Calendar color palette keyed by calendar order.
 // Order = calendar list order: first calendar gets palette[0], etc.
 const CALENDAR_COLOR_PALETTE = [
-    { dot: "bg-primary" },
-    { dot: "bg-copper" },
-    { dot: "bg-sage" },
-    { dot: "bg-teal" },
-    { dot: "bg-burgundy" },
-    { dot: "bg-obsidian/60" },
+    { dot: "bg-primary", chip: "bg-primary text-white", block: "bg-primary border-primary/20 text-white", badge: "bg-primary text-white", leftBar: "bg-primary" },
+    { dot: "bg-copper", chip: "bg-copper text-white", block: "bg-copper border-copper/20 text-white", badge: "bg-copper text-white", leftBar: "bg-copper" },
+    { dot: "bg-sage", chip: "bg-sage text-white", block: "bg-sage border-sage/20 text-white", badge: "bg-sage text-white", leftBar: "bg-sage" },
+    { dot: "bg-teal", chip: "bg-teal text-white", block: "bg-teal border-teal/20 text-white", badge: "bg-teal text-white", leftBar: "bg-teal" },
+    { dot: "bg-burgundy", chip: "bg-burgundy text-white", block: "bg-burgundy border-burgundy/20 text-white", badge: "bg-burgundy text-white", leftBar: "bg-burgundy" },
+    { dot: "bg-obsidian/70", chip: "bg-obsidian text-white", block: "bg-obsidian border-obsidian/20 text-white", badge: "bg-obsidian text-white", leftBar: "bg-obsidian" },
 ] as const;
 
-function getCalendarColor(calendarId: string | null | undefined, calendars: { id: string }[]) {
+function getCalendarColor(calendarId: string | null | undefined, calendars: CalendarMeta[]) {
     const idx = calendars.findIndex((c) => c.id === calendarId);
     return CALENDAR_COLOR_PALETTE[(idx < 0 ? 0 : idx) % CALENDAR_COLOR_PALETTE.length];
 }
@@ -242,6 +244,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
     });
 
     const events = eventsQuery.data?.events ?? [];
+    const calendars = calendarsQuery.data?.calendars ?? [];
 
     const handleViewChange = (next: CalendarView) => {
         setView(next);
@@ -362,6 +365,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
                                 <MonthView
                                     selectedDate={selectedDate}
                                     events={events}
+                                    calendars={calendars}
                                     onSelectDate={setSelectedDate}
                                     onSelectEvent={openEditDialog}
                                 />
@@ -370,6 +374,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
                                 <WeekView
                                     weekStart={startOfWeek(selectedDate, { weekStartsOn: WEEK_STARTS_ON })}
                                     events={events}
+                                    calendars={calendars}
                                     onSelectEvent={openEditDialog}
                                 />
                             )}
@@ -377,6 +382,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
                                 <DayView
                                     day={selectedDate}
                                     events={events}
+                                    calendars={calendars}
                                     onSelectEvent={openEditDialog}
                                 />
                             )}
@@ -385,6 +391,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
                                     rangeStart={range.start}
                                     rangeEnd={range.end}
                                     events={events}
+                                    calendars={calendars}
                                     onSelectEvent={openEditDialog}
                                 />
                             )}
@@ -397,7 +404,7 @@ export default function CalendarClient({ initialView }: { initialView: string })
             <aside className="space-y-4">
                 <CalendarSettingsPanel
                     settings={settingsQuery.data}
-                    calendars={calendarsQuery.data?.calendars ?? []}
+                    calendars={calendars}
                     onUpdate={(payload) => updateSettingsMutation.mutateAsync(payload)}
                 />
                 <SchedulingIntentsPanel
@@ -440,11 +447,13 @@ export default function CalendarClient({ initialView }: { initialView: string })
 function MonthView({
     selectedDate,
     events,
+    calendars,
     onSelectDate,
     onSelectEvent,
 }: {
     selectedDate: Date;
     events: CalendarEvent[];
+    calendars: CalendarMeta[];
     onSelectDate: (date: Date) => void;
     onSelectEvent: (event: CalendarEvent) => void;
 }) {
@@ -509,7 +518,7 @@ function MonthView({
                             </div>
                             <div className="space-y-0.5">
                                 {dayEvents.slice(0, 3).map((event) => {
-                                    const sticker = getLabelColor(event.label);
+                                    const sticker = getCalendarColor(event.calendar_id, calendars);
                                     return (
                                         <div
                                             key={event.id}
@@ -535,10 +544,12 @@ function MonthView({
 function WeekView({
     weekStart,
     events,
+    calendars,
     onSelectEvent,
 }: {
     weekStart: Date;
     events: CalendarEvent[];
+    calendars: CalendarMeta[];
     onSelectEvent: (event: CalendarEvent) => void;
 }) {
     const days = Array.from({ length: 7 }, (_, idx) => addDays(weekStart, idx));
@@ -562,7 +573,7 @@ function WeekView({
                     </div>
                 ))}
             </div>
-            <TimeGrid days={days} events={events} onSelectEvent={onSelectEvent} />
+            <TimeGrid days={days} events={events} calendars={calendars} onSelectEvent={onSelectEvent} />
         </div>
     );
 }
@@ -572,13 +583,15 @@ function WeekView({
 function DayView({
     day,
     events,
+    calendars,
     onSelectEvent,
 }: {
     day: Date;
     events: CalendarEvent[];
+    calendars: CalendarMeta[];
     onSelectEvent: (event: CalendarEvent) => void;
 }) {
-    return <TimeGrid days={[day]} events={events} onSelectEvent={onSelectEvent} />;
+    return <TimeGrid days={[day]} events={events} calendars={calendars} onSelectEvent={onSelectEvent} />;
 }
 
 // ─── TIME GRID ───────────────────────────────────────────────────────────────
@@ -586,10 +599,12 @@ function DayView({
 function TimeGrid({
     days,
     events,
+    calendars,
     onSelectEvent,
 }: {
     days: Date[];
     events: CalendarEvent[];
+    calendars: CalendarMeta[];
     onSelectEvent: (event: CalendarEvent) => void;
 }) {
     const hours = Array.from({ length: 24 }, (_, i) => i);
@@ -612,7 +627,7 @@ function TimeGrid({
                             {events
                                 .filter((event) => event.all_day && isSameDay(parseISO(event.start_time), day))
                                 .map((event) => {
-                                    const sticker = getLabelColor(event.label);
+                                    const sticker = getCalendarColor(event.calendar_id, calendars);
                                     return (
                                         <button
                                             key={event.id}
@@ -644,7 +659,7 @@ function TimeGrid({
                                     const endMinutes = end.getHours() * 60 + end.getMinutes();
                                     const top = (startMinutes / 60) * hourHeight;
                                     const height = Math.max(24, ((endMinutes - startMinutes) / 60) * hourHeight);
-                                    const sticker = getLabelColor(event.label);
+                                    const sticker = getCalendarColor(event.calendar_id, calendars);
                                     return (
                                         <button
                                             key={event.id}
@@ -675,11 +690,13 @@ function ListView({
     rangeStart,
     rangeEnd,
     events,
+    calendars,
     onSelectEvent,
 }: {
     rangeStart: Date;
     rangeEnd: Date;
     events: CalendarEvent[];
+    calendars: CalendarMeta[];
     onSelectEvent: (event: CalendarEvent) => void;
 }) {
     const days: Date[] = [];
@@ -712,7 +729,7 @@ function ListView({
                         </div>
                         <div className="space-y-1.5">
                             {dayEvents.map((event) => {
-                                const sticker = getLabelColor(event.label);
+                                const sticker = getCalendarColor(event.calendar_id, calendars);
                                 return (
                                     <button
                                         key={event.id}
@@ -770,22 +787,44 @@ function CalendarSettingsPanel({
     onUpdate: (payload: Parameters<typeof updateCalendarSettings>[0]) => Promise<CalendarSettings>;
 }) {
     const [saving, setSaving] = useState(false);
+    const [localSettings, setLocalSettings] = useState<CalendarSettings | undefined>(settings);
+    const [isOptimistic, setIsOptimistic] = useState(false);
+
+    useEffect(() => {
+        if (!isOptimistic) {
+            setLocalSettings(settings);
+        }
+    }, [settings, isOptimistic]);
 
     const handleChange = async (payload: Parameters<typeof updateCalendarSettings>[0]) => {
+        const previous = localSettings;
+        const next = {
+            ...(localSettings ?? settings),
+            ...payload,
+        } as CalendarSettings;
+
+        setIsOptimistic(true);
+        setLocalSettings(next);
+
         try {
             setSaving(true);
-            await onUpdate(payload);
+            const updated = await onUpdate(payload);
+            setLocalSettings(updated);
         } catch (error: any) {
+            setLocalSettings(previous);
             toast.error(error?.message || "Failed to update settings");
         } finally {
+            setIsOptimistic(false);
             setSaving(false);
         }
     };
 
-    const selectedIds = settings?.calendar_ids ?? [];
+    const selectedIds = localSettings?.calendar_ids ?? [];
+    const briefingEnabled = localSettings?.auto_briefing_enabled ?? true;
+    const briefingHours = localSettings?.briefing_hours_before ?? 1;
 
     const toggleCalendar = (calId: string) => {
-        const current = settings?.calendar_ids ?? [];
+        const current = localSettings?.calendar_ids ?? [];
         const next = current.includes(calId)
             ? current.filter((id) => id !== calId)
             : [...current, calId];
@@ -852,9 +891,12 @@ function CalendarSettingsPanel({
                 <label className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
                     Default calendar
                 </label>
+                <p className="text-[12px] font-inter text-muted-foreground/60">
+                    Used when creating events if no specific calendar is selected.
+                </p>
                 <select
                     className="w-full rounded-[8px] border border-border bg-white px-3 py-2 text-sm font-inter text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
-                    value={settings?.default_calendar_id || "primary"}
+                    value={localSettings?.default_calendar_id || "primary"}
                     onChange={(e) => handleChange({ default_calendar_id: e.target.value })}
                     disabled={saving}
                 >
@@ -869,18 +911,23 @@ function CalendarSettingsPanel({
             <div className="flex items-center justify-between gap-3">
                 <div>
                     <p className="text-sm font-medium font-inter text-foreground">Auto-generate briefs</p>
-                    <p className="text-[12px] font-inter text-muted-foreground/60 mt-0.5">1 hour before meetings</p>
+                    <p className="text-[12px] font-inter text-muted-foreground/60 mt-0.5">
+                        {briefingHours} {briefingHours === 1 ? "hour" : "hours"} before meetings
+                    </p>
                 </div>
                 <button
-                    onClick={() => handleChange({ auto_briefing_enabled: !(settings?.auto_briefing_enabled ?? true) })}
+                    type="button"
+                    aria-pressed={briefingEnabled}
+                    onClick={() => handleChange({ auto_briefing_enabled: !briefingEnabled })}
+                    disabled={saving}
                     className={cn(
-                        "relative w-9 h-5 rounded-full transition-colors duration-200",
-                        (settings?.auto_briefing_enabled ?? true) ? "bg-primary" : "bg-border"
+                        "relative inline-flex h-6 w-11 items-center rounded-full p-0.5 overflow-hidden transition-colors duration-200 disabled:opacity-70",
+                        briefingEnabled ? "bg-primary" : "bg-border"
                     )}
                 >
                     <span className={cn(
-                        "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200",
-                        (settings?.auto_briefing_enabled ?? true) ? "translate-x-4" : "translate-x-0.5"
+                        "h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200",
+                        briefingEnabled ? "translate-x-5" : "translate-x-0"
                     )} />
                 </button>
             </div>
@@ -892,7 +939,7 @@ function CalendarSettingsPanel({
                 <Input
                     type="number"
                     min={1}
-                    value={settings?.briefing_hours_before ?? 1}
+                    value={briefingHours}
                     onChange={(e) => handleChange({ briefing_hours_before: Number(e.target.value || 1) })}
                     disabled={saving}
                     className="rounded-[8px] border-border text-sm font-inter"
@@ -920,7 +967,7 @@ function getPrimaryAction(
 ): { label: string; action: () => void } {
     switch (intent.intent_type) {
         case "availability_request":
-            return { label: "Suggest availability", action: () => onOpenOrchestrator(intent) };
+            return { label: "Check availability", action: () => onOpenOrchestrator(intent) };
         case "time_request":
             return { label: "Suggest time", action: () => onOpenOrchestrator(intent) };
         case "reschedule_request":
@@ -949,8 +996,6 @@ function SchedulingIntentsPanel({
     onAddToCalendar: (intentId: number) => void;
     onOpenOrchestrator: (intent: SchedulingIntent) => void;
 }) {
-    if (intents.length === 0) return null;
-
     return (
         <div
             className="rounded-[14px] border border-border bg-white p-4 space-y-4"
@@ -960,51 +1005,60 @@ function SchedulingIntentsPanel({
                 Scheduling
             </p>
 
-            {intents.map((intent) => {
-                const primary = getPrimaryAction(intent, onOpenOrchestrator, onAcknowledge, onAddToCalendar);
-                return (
-                    <div
-                        key={intent.id}
-                        className="space-y-2.5 pb-4 border-b border-border/50 last:border-0 last:pb-0"
-                    >
-                        <button
-                            onClick={() => onOpenOrchestrator(intent)}
-                            className="text-left w-full space-y-1"
+            {intents.length === 0 ? (
+                <div className="rounded-[10px] border border-border/60 bg-linen/35 px-3 py-2.5">
+                    <p className="text-[12px] font-inter text-muted-foreground/80">
+                        No pending scheduling requests yet.
+                    </p>
+                    <p className="text-[11px] font-inter text-muted-foreground/60 mt-1">
+                        Incoming email scheduling asks will appear here with suggested next actions.
+                    </p>
+                </div>
+            ) : (
+                intents.map((intent) => {
+                    const primary = getPrimaryAction(intent, onOpenOrchestrator, onAcknowledge, onAddToCalendar);
+                    return (
+                        <div
+                            key={intent.id}
+                            className="space-y-2.5 pb-4 border-b border-border/50 last:border-0 last:pb-0"
                         >
-                            <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
-                                {INTENT_LABELS[intent.intent_type] ?? "Scheduling"}
-                                {intent.sender_name && ` · ${intent.sender_name}`}
-                            </p>
-                            {intent.intent_summary ? (
-                                <p className="text-sm font-inter text-foreground leading-snug">
-                                    {intent.intent_summary}
+                            <button
+                                onClick={() => onOpenOrchestrator(intent)}
+                                className="text-left w-full space-y-1"
+                            >
+                                <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter">
+                                    {INTENT_LABELS[intent.intent_type] ?? "Scheduling"}
+                                    {intent.sender_name && ` ? ${intent.sender_name}`}
                                 </p>
-                            ) : intent.meeting_title ? (
-                                <p className="text-sm font-inter text-foreground">{intent.meeting_title}</p>
-                            ) : null}
-                        </button>
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={primary.action}
-                                className="flex-1 py-1.5 rounded-[8px] bg-primary text-white text-[12px] font-medium font-inter hover:bg-primary/90 transition-colors"
-                            >
-                                {primary.label}
+                                {intent.intent_summary ? (
+                                    <p className="text-sm font-inter text-foreground leading-snug">
+                                        {intent.intent_summary}
+                                    </p>
+                                ) : intent.meeting_title ? (
+                                    <p className="text-sm font-inter text-foreground">{intent.meeting_title}</p>
+                                ) : null}
                             </button>
-                            <button
-                                onClick={() => onDismiss(intent.id)}
-                                className="px-3 py-1.5 rounded-[8px] border border-border text-muted-foreground text-[12px] font-inter hover:bg-muted/40 transition-colors"
-                            >
-                                Dismiss
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={primary.action}
+                                    className="flex-1 py-1.5 rounded-[8px] bg-primary text-white text-[12px] font-medium font-inter hover:bg-primary/90 transition-colors"
+                                >
+                                    {primary.label}
+                                </button>
+                                <button
+                                    onClick={() => onDismiss(intent.id)}
+                                    className="px-3 py-1.5 rounded-[8px] border border-border text-muted-foreground text-[12px] font-inter hover:bg-muted/40 transition-colors"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                );
-            })}
+                    );
+                })
+            )}
         </div>
     );
 }
-
-// ─── ORCHESTRATOR PANEL ───────────────────────────────────────────────────────
 
 function OrchestratorPanel({
     intent,
@@ -1024,6 +1078,13 @@ function OrchestratorPanel({
     const [addingToCalendar, setAddingToCalendar] = useState(false);
 
     const needsOrchestrator = ["availability_request", "time_request", "reschedule_request"].includes(intent.intent_type);
+    const runLabel = intent.intent_type === "availability_request"
+        ? "Check availability"
+        : intent.intent_type === "time_request"
+        ? "Suggest time"
+        : intent.intent_type === "reschedule_request"
+        ? "Suggest new times"
+        : "Get recommendations";
 
     const handleRun = async () => {
         setRunning(true);
@@ -1114,7 +1175,7 @@ function OrchestratorPanel({
                                         <span className="teeks-dot" style={{ width: 4, height: 4 }} />
                                     </span>
                                 ) : (
-                                    "Get recommendations"
+                                    runLabel
                                 )}
                             </button>
                         </div>
@@ -1122,6 +1183,29 @@ function OrchestratorPanel({
 
                     {needsOrchestrator && result && (
                         <div className="space-y-3">
+                            {result.availability_check?.requested_checks?.length ? (
+                                <div className="rounded-[8px] border border-border bg-linen/35 p-3 space-y-2">
+                                    <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/70 font-inter">
+                                        Availability check
+                                    </p>
+                                    <p className="text-sm font-inter text-foreground">
+                                        {result.availability_check.requested_checks[0].is_available
+                                            ? "Yes, this time is open."
+                                            : "No, this time overlaps with existing events."}
+                                    </p>
+                                    {!!result.availability_check.requested_checks[0].conflicts?.length && (
+                                        <ul className="space-y-1">
+                                            {result.availability_check.requested_checks[0].conflicts.map((c, i) => (
+                                                <li key={`${c.id ?? i}-${i}`} className="text-[12px] font-inter text-muted-foreground/80">
+                                                    {c.title || "Busy event"}
+                                                    {c.start_time ? ` · ${format(parseISO(c.start_time), "EEE, MMM d · p")}` : ""}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            ) : null}
+
                             {result.reasoning && (
                                 <p className="text-[11px] font-inter text-muted-foreground/60 italic">
                                     {result.reasoning}
@@ -1269,14 +1353,14 @@ function EventDialog({
 
     return (
         <Dialog open={open} onOpenChange={(next) => { if (!next) reset(); onOpenChange(next); }}>
-            <DialogContent className="max-w-xl">
+            <DialogContent className="max-w-xl max-h-[85vh] overflow-hidden flex flex-col">
                 <DialogHeader>
                     <DialogTitle className="font-playfair text-xl">
                         {event ? "Edit event" : "New event"}
                     </DialogTitle>
                 </DialogHeader>
 
-                <div className="space-y-3">
+                <div className="space-y-3 flex-1 overflow-y-auto pr-1">
                     <Input
                         placeholder="Event title"
                         value={title}
@@ -1341,6 +1425,20 @@ function EventDialog({
                     <Textarea placeholder="Description (optional)" value={description || ""} onChange={(e) => setDescription(e.target.value)} className="font-inter text-sm rounded-[8px]" />
                     <Textarea placeholder="Internal notes (not synced)" value={notes || ""} onChange={(e) => setNotes(e.target.value)} className="font-inter text-sm rounded-[8px]" />
 
+                    {event?.id && (
+                        <InlineContextCaptureCard
+                            scopeType="event"
+                            scopeId={event.id}
+                            linkedTo={event.title || "Event"}
+                            heading="Remember this"
+                            description="What should Teeks know before or after this meeting?"
+                            placeholder="Something said, agreed, or noticed…"
+                            className="bg-accent/[0.02]"
+                            revealStoredCaptureByDefault={false}
+                            allowStoredCaptureCorrection={false}
+                        />
+                    )}
+
                     {/* Briefing eligibility note */}
                     {label !== "meeting" && (
                         <p className="text-[11px] font-inter text-muted-foreground/50">
@@ -1385,7 +1483,7 @@ function EventDialog({
                             {event.briefing.related_emails && event.briefing.related_emails.length > 0 && (
                                 <div>
                                     <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter mb-1.5">
-                                        Related emails {event.briefing.message_count > 3 && `(${event.briefing.message_count})`}
+                                        Related emails {(event.briefing.message_count ?? event.briefing.related_emails.length) > 3 && `(${event.briefing.message_count ?? event.briefing.related_emails.length})`}
                                     </p>
                                     <div className="space-y-1.5">
                                         {event.briefing.related_emails.slice(0, 3).map((e, i) => (
@@ -1402,7 +1500,7 @@ function EventDialog({
                             {event.briefing.open_tasks && event.briefing.open_tasks.length > 0 && (
                                 <div>
                                     <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60 font-inter mb-1.5">
-                                        Open tasks {event.briefing.task_count > 3 && `(${event.briefing.task_count})`}
+                                        Open tasks {(event.briefing.task_count ?? event.briefing.open_tasks.length) > 3 && `(${event.briefing.task_count ?? event.briefing.open_tasks.length})`}
                                     </p>
                                     <ul className="space-y-1">
                                         {event.briefing.open_tasks.map((t, i) => (
@@ -1449,7 +1547,7 @@ function EventDialog({
                     )}
                 </div>
 
-                <div className="mt-4 flex items-center justify-between">
+                <div className="mt-4 pt-3 border-t border-border/50 flex items-center justify-between">
                     {event ? (
                         <div className="flex items-center gap-2">
                             <button

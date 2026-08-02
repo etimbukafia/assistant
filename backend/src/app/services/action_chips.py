@@ -9,6 +9,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.data.models import CalendarEvent, ContextEntry, Message, Task
+from app.services.context_memory_policy import apply_confidence_retrieval_filter
 from app.services.warm_cache import WarmCacheService
 
 
@@ -94,7 +95,7 @@ def build_action_chips_payload(db: Session, user_id: str, max_items: int = 8) ->
         )
 
     active_commitments = (
-        db.query(ContextEntry)
+        apply_confidence_retrieval_filter(db.query(ContextEntry))
         .filter(
             ContextEntry.user_id == user_id,
             ContextEntry.type == "commitment",

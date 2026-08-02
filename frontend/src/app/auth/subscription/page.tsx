@@ -6,6 +6,7 @@ import { DonnaText } from "@/components/ui/DonnaText";
 import { activateTrial, createCheckout, triggerInitialSync } from "@/services/billing";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
+import { ENABLE_MICROSOFT_UI } from "@/config/featureFlags";
 
 type PlanType = "trial" | "pro";
 
@@ -35,7 +36,7 @@ export default function SubscriptionPage() {
         return first || "there";
     }, [user]);
 
-    const isMicrosoft = settings?.connected_provider === "microsoft" || !!microsoftConnectError;
+    const isMicrosoft = ENABLE_MICROSOFT_UI && (settings?.connected_provider === "microsoft" || !!microsoftConnectError);
     const providerLabel = isMicrosoft ? "Microsoft" : "Gmail";
     const providerConnected = isMicrosoft ? microsoftConnected : gmailConnected;
     const providerConnectInFlight = isMicrosoft ? microsoftConnectInFlight : gmailConnectInFlight;
@@ -100,8 +101,16 @@ export default function SubscriptionPage() {
                 </div>
 
                 <div className="space-y-5">
-                    <button
+                    <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setSelectedPlan("trial")}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedPlan("trial");
+                            }
+                        }}
                         className={`relative w-full text-left rounded-lg overflow-visible transition-all duration-200 ${
                             selectedPlan === "trial"
                                 ? "border-2 border-copper shadow-xl shadow-auburn/[0.12]"
@@ -137,10 +146,18 @@ export default function SubscriptionPage() {
                                 <span className="text-xs text-faint ml-1">/ 7 days</span>
                             </div>
                         </div>
-                    </button>
+                    </div>
 
-                    <button
+                    <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setSelectedPlan("pro")}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedPlan("pro");
+                            }
+                        }}
                         className={`relative w-full text-left rounded-lg overflow-visible transition-all duration-200 ${
                             selectedPlan === "pro"
                                 ? "border-2 border-copper shadow-xl shadow-auburn/[0.12]"
@@ -199,7 +216,7 @@ export default function SubscriptionPage() {
                                 </span>
                             </div>
                         </div>
-                    </button>
+                    </div>
 
                     <p className="text-[13px] italic text-faint text-center leading-5">
                         Founding members get full access, early features, and locked-in pricing

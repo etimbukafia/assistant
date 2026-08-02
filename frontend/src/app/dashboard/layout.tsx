@@ -2,16 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { DashboardErrorBoundary } from "@/components/DashboardErrorBoundary";
 import {
     Settings,
     LogOut,
     Inbox,
     BookOpen,
-    MessageSquare,
+    Brain,
+    Zap,
     Target,
     Calendar,
     CreditCard,
+    Users,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -19,12 +23,20 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { chatService } from "@/services/chat";
 import { getBillingPortalUrl } from "@/services/billing";
+import { NotificationBell } from "@/components/notifications/NotificationBell";
 
+// Primary product pillars — Memory and Automations
 const primaryNavItems = [
-    { href: "/dashboard/chat",     label: "Chat",     icon: MessageSquare },
-    { href: "/dashboard/focus",    label: "Focus",    icon: Target },
+    { href: "/dashboard/chat",        label: "Memory",      icon: Brain },
+    { href: "/dashboard/automations", label: "Automations", icon: Zap },
+];
+
+// Work surfaces — subordinate to the primary pillars
+const workSurfaceItems = [
     { href: "/dashboard/inbox",    label: "Inbox",    icon: Inbox },
+    { href: "/dashboard/people",   label: "People",   icon: Users },
     { href: "/dashboard/calendar", label: "Calendar", icon: Calendar },
+    { href: "/dashboard/focus",    label: "Focus",    icon: Target },
     { href: "/dashboard/vault",    label: "Diary",    icon: BookOpen },
 ];
 
@@ -80,10 +92,26 @@ export default function DashboardLayout({
     children: React.ReactNode;
 }) {
     const queryClient = useQueryClient();
-    const { signOut, settings, refreshProfile } = useAuth();
+    const router = useRouter();
+    const { signOut, settings, settingsLoading, refreshProfile, user, loading } = useAuth();
     const pathname = usePathname();
     const prevSyncCompletedRef = useRef<boolean | null>(null);
     const [billingBusy, setBillingBusy] = useState(false);
+
+    // Defence-in-depth auth guard — middleware is primary, this catches edge cases
+    // (stale client session, middleware miss on cold navigation).
+    useEffect(() => {
+        if (!loading && !user) {
+            router.replace("/login");
+        }
+    }, [loading, user, router]);
+
+    if (loading) {
+        return <div className="min-h-screen bg-background" />;
+    }
+    if (!user) {
+        return null;
+    }
 
     useEffect(() => {
         if (!settings) return;
@@ -176,7 +204,19 @@ export default function DashboardLayout({
 
                     {/* Mobile icon nav */}
                     <nav className="flex items-center gap-0.5">
+                        <NotificationBell />
+                        <span className="w-px h-5 bg-border mx-1" />
                         {primaryNavItems.map((item) => (
+                            <NavLink
+                                key={item.href}
+                                href={item.href}
+                                label={item.label}
+                                icon={item.icon}
+                                isActive={pathname === item.href}
+                            />
+                        ))}
+                        <span className="w-px h-5 bg-border mx-1" />
+                        {workSurfaceItems.map((item) => (
                             <NavLink
                                 key={item.href}
                                 href={item.href}
@@ -231,6 +271,23 @@ export default function DashboardLayout({
                                 sidebar
                             />
                         ))}
+
+                        {/* Work surfaces — subordinate */}
+                        <div className="mt-4 mb-1 px-3">
+                            <span className="text-[10px] font-bold uppercase tracking-[1.2px] text-muted-foreground/60">
+                                Work surfaces
+                            </span>
+                        </div>
+                        {workSurfaceItems.map((item) => (
+                            <NavLink
+                                key={item.href}
+                                href={item.href}
+                                label={item.label}
+                                icon={item.icon}
+                                isActive={pathname === item.href}
+                                sidebar
+                            />
+                        ))}
                     </nav>
 
                     {/* Footer — Settings + Sign out */}
@@ -255,19 +312,25 @@ export default function DashboardLayout({
                 {/* ── Main content ────────────────────────────────────────────── */}
                 <main className="flex-1 lg:pl-[216px] min-h-screen">
                     <div className="mx-auto max-w-7xl px-6 py-8">
-                        {settings?.dunning_active && (
+                        <div className="hidden lg:flex mb-5 items-center justify-end">
+                            <NotificationBell />
+                        </div>
+                        {/* Dunning banner — skeleton while settings load, real content after */}
+                        {settingsLoading && !settings ? (
+                            <div className="mb-5 h-[62px] rounded-xl bg-muted/40 animate-pulse" />
+                        ) : settings?.dunning_active ? (
                             <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                     <div className="min-w-0">
                                         <p className="text-[13px] font-semibold text-amber-900">
-                                            {settings?.dunning_suspended_at
+                                            {settings.dunning_suspended_at
                                                 ? "Pro is paused until payment is updated"
                                                 : "Payment update needed to keep Pro active"}
                                         </p>
                                         <p className="mt-0.5 text-[12px] text-amber-800">
-                                            {settings?.dunning_suspended_at
+                                            {settings.dunning_suspended_at
                                                 ? "Update your payment method to restore access immediately."
-                                                : `We couldn't process your latest payment. Retry ${Math.max(1, settings?.dunning_attempt_count ?? 1)}/3. ${Math.max(0, settings?.dunning_days_remaining ?? 0)} day(s) left before Pro is paused.`}
+                                                : `We couldn't process your latest payment. Retry ${Math.max(1, settings.dunning_attempt_count ?? 1)}/3. ${Math.max(0, settings.dunning_days_remaining ?? 0)} day(s) left before Pro is paused.`}
                                         </p>
                                     </div>
                                     <button
@@ -281,8 +344,10 @@ export default function DashboardLayout({
                                     </button>
                                 </div>
                             </div>
-                        )}
-                        {children}
+                        ) : null}
+                        <DashboardErrorBoundary>
+                            {children}
+                        </DashboardErrorBoundary>
                     </div>
                 </main>
             </div>

@@ -7,16 +7,10 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useDiaryMutations } from "@/hooks/useVault"
 import { useMentionComposer } from "@/hooks/useMentionComposer"
-import type { DiaryEntryType } from "@/services/vault"
-
-// Entry type config — mirrors vault/page.tsx TYPE_COLORS with token-safe classes
-const TYPES: { value: DiaryEntryType; label: string; activeClass: string }[] = [
-    { value: "risks",         label: "Risk",         activeClass: "bg-obsidian/80  text-white  border-obsidian/80" },
-    { value: "decision",      label: "Decision",     activeClass: "bg-copper       text-white  border-copper" },
-    { value: "commitment",    label: "Commitment",   activeClass: "bg-sage         text-white  border-sage" },
-    { value: "preferences",   label: "Preference",   activeClass: "bg-teal         text-white  border-teal" },
-    { value: "relationships", label: "Relationship", activeClass: "bg-burgundy     text-white  border-burgundy" },
-]
+import {
+    CONTEXT_CAPTURE_MAX_CHARS,
+    type DiaryCaptureScopeType,
+} from "@/services/vault"
 
 // Sticky note paper palettes — physical-object material metaphor.
 // These are not brand colours; justified exception to the no-hardcoded-values rule.
@@ -32,7 +26,7 @@ const NOTE_PALETTES: [string, string, string][] = [
 
 // ── StickyNoteWidget ────────────────────────────────────────────────────────
 //
-// Floating quick-capture widget for pinning diary context entries from any
+// Floating quick-capture widget for capturing context from any
 // screen. Sits above the OmniChat FAB in the bottom-right corner.
 //
 // Design decisions:
@@ -46,13 +40,16 @@ const NOTE_PALETTES: [string, string, string][] = [
 export function StickyNoteWidget() {
     const [isOpen, setIsOpen]   = React.useState(false)
     const [content, setContent] = React.useState("")
-    const [type, setType]       = React.useState<DiaryEntryType>("risks")
+    const [selectedScopeKey, setSelectedScopeKey] = React.useState("global")
     // Palette is picked once per open; stable for the lifetime of that session
     const [palette, setPalette] = React.useState(NOTE_PALETTES[0])
 
     const panelRef    = React.useRef<HTMLDivElement>(null)
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
     const pathname    = usePathname()
+    const isChatRoute =
+        pathname === "/chat" ||
+        pathname.startsWith("/dashboard/chat")
 
     const { createEntry } = useDiaryMutations()
 
@@ -62,6 +59,7 @@ export function StickyNoteWidget() {
         mentionSuggestions,
         activeSuggestionIndex,
         loadingSuggestions,
+        selectedMentions,
         parseMentions,
         onInputChange,
         onInputKeyDown,
@@ -75,6 +73,34 @@ export function StickyNoteWidget() {
     })
 
     const showDropdown = Boolean(mentionContext || loadingSuggestions)
+    const scopeOptions = React.useMemo(() => {
+        const options: Array<{
+            key: string
+            label: string
+            scopeType: DiaryCaptureScopeType
+            scopeId: string | null
+            linkedTo: string | null
+        }> = [
+            { key: "global", label: "Global", scopeType: "global", scopeId: null, linkedTo: null },
+        ]
+
+        for (const mention of selectedMentions) {
+            if (!["contact", "message", "event", "task"].includes(mention.kind)) continue
+            options.push({
+                key: `${mention.kind}:${mention.ref}`,
+                label: `${mention.kind[0].toUpperCase()}${mention.kind.slice(1)}: ${mention.label}`,
+                scopeType: mention.kind as DiaryCaptureScopeType,
+                scopeId: mention.ref,
+                linkedTo: mention.label,
+            })
+        }
+
+        return options
+    }, [selectedMentions])
+    const selectedScope = React.useMemo(
+        () => scopeOptions.find((option) => option.key === selectedScopeKey) ?? scopeOptions[0],
+        [scopeOptions, selectedScopeKey],
+    )
 
     // Close panel on outside click
     React.useEffect(() => {
@@ -99,28 +125,35 @@ export function StickyNoteWidget() {
     const handleSave = React.useCallback(async () => {
         const trimmed = content.trim()
         if (!trimmed || createEntry.isPending) return
+        if (trimmed.length > CONTEXT_CAPTURE_MAX_CHARS) {
+            toast.error(`Keep captures under ${CONTEXT_CAPTURE_MAX_CHARS} characters.`)
+            return
+        }
 
         const links = parseMentions(trimmed).map((m) => ({
             entity_type: m.kind,
             entity_id: m.ref,
             display_name: m.label,
+            source: "user" as const,
         }))
 
         try {
             await createEntry.mutateAsync({
-                type,
-                content: trimmed,
-                importance_level: "normal",
+                text: trimmed,
+                scope_type: selectedScope.scopeType,
+                scope_id: selectedScope.scopeId,
+                linked_to: selectedScope.linkedTo,
                 links,
             })
             setContent("")
+            setSelectedScopeKey("global")
             clearMentionState()
             setIsOpen(false)
-            toast.success("Note pinned to Diary.")
+            toast("Saved. Organizing.")
         } catch {
             toast.error("That didn't save. Try again.")
         }
-    }, [content, type, createEntry, parseMentions, clearMentionState])
+    }, [content, createEntry, parseMentions, clearMentionState, selectedScope])
 
     const handleKeyDown = React.useCallback(
         (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -138,15 +171,22 @@ export function StickyNoteWidget() {
 
     // Mirror OmniChatOverlay route exclusions
     if (
-        pathname === "/chat" ||
-        pathname.startsWith("/dashboard/chat") ||
+        pathname.startsWith("/dashboard/vault") ||
+        pathname.startsWith("/dashboard/diary") ||
+        pathname.startsWith("/dashboard/remember") ||
         pathname === "/login" ||
         pathname.startsWith("/auth")
     ) return null
 
     return (
-        // Sits above the chat FAB — same right-6 column, 8pt above it
-        <div ref={panelRef} className="fixed bottom-[5.5rem] right-6 z-50">
+        // On chat route, this is the only floating control; elsewhere it stacks above chat FAB.
+        <div
+            ref={panelRef}
+            className={cn(
+                "fixed right-6 z-50 w-14 flex justify-center",
+                isChatRoute ? "bottom-6" : "bottom-[5.5rem]"
+            )}
+        >
 
             {/* ── Sticky note panel ─────────────────────────────────────────── */}
             {isOpen && (
@@ -182,18 +222,23 @@ export function StickyNoteWidget() {
                     />
 
                     {/* Header */}
-                    <div className="flex items-center justify-between px-3.5 pt-5 pb-0.5">
-                        <span className="text-[9px] font-bold uppercase tracking-[1.6px] font-inter text-stone/60 select-none">
-                            Quick note
-                        </span>
-                        <button
-                            type="button"
-                            onClick={() => setIsOpen(false)}
-                            aria-label="Close note"
-                            className="p-0.5 rounded text-stone/50 hover:text-foreground transition-colors"
-                        >
-                            <X size={13} strokeWidth={2} />
-                        </button>
+                    <div className="px-3.5 pt-5 pb-0.5 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <span className="text-[9px] font-bold uppercase tracking-[1.6px] font-inter text-stone/60 select-none">
+                                Capture Context
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setIsOpen(false)}
+                                aria-label="Close note"
+                                className="p-0.5 rounded text-stone/50 hover:text-foreground transition-colors"
+                            >
+                                <X size={13} strokeWidth={2} />
+                            </button>
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-stone/60 font-inter">
+                            Capture the moment. Teeks will organize it after you save.
+                        </p>
                     </div>
 
                     {/* Content textarea + mention dropdown */}
@@ -217,7 +262,7 @@ export function StickyNoteWidget() {
                                 onInputChange(value, cursor)
                             }}
                             onKeyDown={handleKeyDown}
-                            placeholder="Capture a thought, decision, or risk."
+                            placeholder="Capture what matters in plain language. @mention supporting context if it helps."
                             rows={4}
                             className={cn(
                                 "w-full resize-none rounded-sm px-2 py-1.5",
@@ -277,34 +322,32 @@ export function StickyNoteWidget() {
                         ))}
                     </div>
 
-                    {/* Type selector */}
+                    {/* Scope selector */}
                     <div className="px-3.5 pb-3">
                         <p className="text-[8.5px] font-bold uppercase tracking-widest font-inter text-stone/50 mb-1.5 select-none">
-                            Type
+                            Save To
                         </p>
-                        <div className="flex flex-wrap gap-1">
-                            {TYPES.map((t) => (
-                                <button
-                                    key={t.value}
-                                    type="button"
-                                    onClick={() => setType(t.value)}
-                                    className={cn(
-                                        "px-2 py-[3px] rounded-full text-[10px] font-medium font-inter",
-                                        "border transition-colors duration-150",
-                                        type === t.value
-                                            ? t.activeClass
-                                            : "border-stone/25 text-stone/70 hover:border-stone/45 hover:text-foreground",
-                                    )}
-                                >
-                                    {t.label}
-                                </button>
+                        <p className="text-[10px] font-inter text-stone/55 mb-2 leading-relaxed">
+                            Choose where this lives. Teeks will categorize it after you save.
+                        </p>
+                        <select
+                            value={selectedScope.key}
+                            onChange={(e) => setSelectedScopeKey(e.target.value)}
+                            className="w-full rounded-[10px] border border-stone/20 bg-white/80 px-2.5 py-1.5 text-[11px] font-medium font-inter text-stone/80 focus:outline-none focus:ring-1 focus:ring-secondary/40"
+                        >
+                            {scopeOptions.map((option) => (
+                                <option key={option.key} value={option.key}>
+                                    {option.label}
+                                </option>
                             ))}
-                        </div>
+                        </select>
                     </div>
 
                     {/* Footer — hint + save */}
                     <div className="flex items-center justify-between px-3.5 pb-3.5 pt-2 border-t border-stone/15">
-                        <span className="text-[10px] font-inter text-stone/45 select-none">⌘↵ to save</span>
+                        <span className="text-[10px] font-inter text-stone/45 select-none">
+                            {content.length}/{CONTEXT_CAPTURE_MAX_CHARS}
+                        </span>
                         {/* Save button uses Brass (--secondary) — not Peony, which belongs to OmniChat */}
                         <button
                             type="button"
@@ -324,7 +367,7 @@ export function StickyNoteWidget() {
                                 ? <Loader2 size={11} className="animate-spin" />
                                 : <Check size={11} strokeWidth={2.5} />
                             }
-                            Pin it
+                            Capture
                         </button>
                     </div>
                 </div>
@@ -335,7 +378,7 @@ export function StickyNoteWidget() {
             {/* Ghost/secondary styling — Peony is reserved for the chat FAB   */}
             <button
                 type="button"
-                aria-label={isOpen ? "Close note" : "Capture a quick note"}
+                aria-label={isOpen ? "Close note" : "Capture context"}
                 onClick={() => {
                     if (!isOpen) {
                         // Pick a new random palette each time the note opens
@@ -364,3 +407,5 @@ export function StickyNoteWidget() {
         </div>
     )
 }
+
+

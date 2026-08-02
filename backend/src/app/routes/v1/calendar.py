@@ -32,6 +32,35 @@ def _prewarm_action_chips(db: Session, user_id: str) -> None:
     )
 
 
+def _invalidate_event_related(db: Session, user_id: str, event: CalendarEvent | None) -> None:
+    if not event:
+        return
+    cache_coordinator.invalidate_event_related_contacts(
+        db=db,
+        tenant_id=_tenant_id(),
+        user_id=user_id,
+        event_id=event.id,
+        participants=event.participants if isinstance(event.participants, list) else [],
+        organizer=event.organizer,
+    )
+
+
+def _resolve_event_label(
+    explicit_label: str | None,
+    title: str,
+    description: str | None,
+    participants: list[str] | None,
+) -> str:
+    """Use explicit label when provided; otherwise classify from content."""
+    if explicit_label:
+        return explicit_label
+    return CalendarService._classify_event_label(
+        title=title,
+        description=description,
+        participants=participants or [],
+    )
+
+
 def _get_calendar_service(settings: UserSettings, db: Session, user_id: str):
     """Return provider-specific calendar service + provider name."""
     if settings.connected_provider == "microsoft":
@@ -68,7 +97,7 @@ def create_calendar_event(
 
     calendar_cache.invalidate_all(user.user_id)
     if event:
-        cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event.id))
+        _invalidate_event_related(db, user.user_id, event)
     _prewarm_action_chips(db, user.user_id)
 
     return event
@@ -92,6 +121,12 @@ def create_manual_calendar_event(
         end_time = start_time + timedelta(days=1)
 
     calendar_service, provider = _get_calendar_service(settings, db, user.user_id)
+    event_label = _resolve_event_label(
+        explicit_label=request.label,
+        title=request.title,
+        description=request.description,
+        participants=request.participants or [],
+    )
     calendar_event = CalendarEvent(
         user_id=user.user_id,
         title=request.title,
@@ -107,6 +142,7 @@ def create_manual_calendar_event(
         provider=provider,
         calendar_id=calendar_id,
         all_day=all_day,
+        label=event_label,
     )
     db.add(calendar_event)
     db.commit()
@@ -145,8 +181,8 @@ def create_manual_calendar_event(
     calendar_event.status = "created"
     db.commit()
 
-    # Schedule briefing if enabled
-    if settings.auto_briefing_enabled:
+    # Schedule briefing only for meeting-labelled events
+    if settings.auto_briefing_enabled and calendar_event.label == "meeting":
         briefing_time = start_time - timedelta(hours=settings.briefing_hours_before or 1)
         if briefing_time > datetime.now(timezone.utc):
             from app.jobs.queue import enqueue_task
@@ -160,7 +196,7 @@ def create_manual_calendar_event(
             db.commit()
 
     calendar_cache.invalidate_all(user.user_id)
-    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(calendar_event.id))
+    _invalidate_event_related(db, user.user_id, calendar_event)
     _prewarm_action_chips(db, user.user_id)
 
     return calendar_event
@@ -254,6 +290,13 @@ def update_calendar_event(
     event.start_time = start_time
     event.end_time = end_time
     event.all_day = all_day
+    if not event.label:
+        event.label = _resolve_event_label(
+            explicit_label=update_data.get("label"),
+            title=event.title,
+            description=event.description,
+            participants=event.participants if isinstance(event.participants, list) else [],
+        )
 
     calendar_id = update_data.get("calendar_id") or event.calendar_id or settings.default_calendar_id or "primary"
 
@@ -285,8 +328,8 @@ def update_calendar_event(
             }
             calendar_service.run_update_event(event_id=event.external_event_id, payload=payload)
 
-    # Reschedule briefing if enabled and time changed
-    if settings.auto_briefing_enabled:
+    # Reschedule briefing only for meeting-labelled events
+    if settings.auto_briefing_enabled and event.label == "meeting":
         briefing_time = event.start_time - timedelta(hours=settings.briefing_hours_before or 1)
         if briefing_time > datetime.now(timezone.utc):
             from app.jobs.queue import enqueue_task
@@ -303,7 +346,7 @@ def update_calendar_event(
     db.commit()
 
     calendar_cache.invalidate_all(user.user_id)
-    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event.id))
+    _invalidate_event_related(db, user.user_id, event)
     _prewarm_action_chips(db, user.user_id)
 
     db.refresh(event)
@@ -338,7 +381,7 @@ def delete_calendar_event(
     db.commit()
 
     calendar_cache.invalidate_all(user.user_id)
-    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event.id))
+    _invalidate_event_related(db, user.user_id, event)
     _prewarm_action_chips(db, user.user_id)
 
     return {"success": True}
@@ -351,7 +394,7 @@ async def sync_calendar_events(
     db: Session = Depends(get_db_for_user),
     settings: UserSettings = Depends(get_user_settings),
 ):
-    """Sync upcoming events from Google Calendar to database"""
+    """Sync upcoming events from connected calendar provider to database."""
 
     calendar_service, provider = _get_calendar_service(settings, db, user.user_id)
  
@@ -373,10 +416,12 @@ async def sync_calendar_events(
             results = await calendar_service.sync_upcoming_events(
                 days_ahead=days_ahead,
                 calendar_ids=calendar_ids,
+                briefing_hours_before=settings.briefing_hours_before or 1,
+                enable_briefings=enable_briefings,
             )
 
         calendar_cache.invalidate_all(user.user_id)
-        cache_coordinator.invalidate_action_chips(_tenant_id(), user.user_id)
+        cache_coordinator.invalidate_user_scopes(_tenant_id(), user.user_id)
         _prewarm_action_chips(db, user.user_id)
 
         return {
@@ -564,8 +609,7 @@ def generate_meeting_briefing(
     if not result:
         raise HTTPException(status_code=500, detail="Failed to generate briefing")
 
-    calendar_cache.invalidate_event(user.user_id, event_id)
-    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event_id))
+    _invalidate_event_related(db, user.user_id, event)
     _prewarm_action_chips(db, user.user_id)
 
     db.refresh(event)
@@ -602,8 +646,7 @@ def generate_meeting_followups(
     if not result:
         raise HTTPException(status_code=500, detail="Failed to generate follow-ups")
 
-    calendar_cache.invalidate_event(user.user_id, event_id)
-    cache_coordinator.invalidate_event(_tenant_id(), user.user_id, str(event_id))
+    _invalidate_event_related(db, user.user_id, event)
     _prewarm_action_chips(db, user.user_id)
 
     return result

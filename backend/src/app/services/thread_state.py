@@ -8,15 +8,19 @@ import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
+from email.utils import getaddresses, parseaddr
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy import or_
 
 from app.data.models import ThreadState, Task, Message
 from app.processors.ai import AIProcessor
-from core.cache import thread_cache
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 
 logger = logging.getLogger(__name__)
+cache_coordinator = EntityCacheCoordinator()
+_TENANT_ID = "default"
 
 
 class ThreadStateService:
@@ -27,11 +31,12 @@ class ThreadStateService:
     No full thread transcript re-analysis.
     """
 
-    def __init__(self, db: Session, ai_processor: Optional[AIProcessor] = None, assistant_name: str = "Teeks"):
+    def __init__(self, db: Session, ai_processor: Optional[AIProcessor] = None, assistant_name: str = "Teeks", task_detection_instructions: str = ""):
         self.db = db
+        self.task_detection_instructions = task_detection_instructions
         self.ai_processor = ai_processor or AIProcessor(assistant_name=assistant_name)
 
-    def get_or_create_thread_state(self, thread_id: str) -> ThreadState:
+    def get_or_create_thread_state(self, thread_id: str, user_id: Optional[str] = None) -> ThreadState:
         """
         Get existing thread state or create a new one.
 
@@ -50,15 +55,19 @@ class ThreadStateService:
         from sqlalchemy.exc import IntegrityError
 
         # Try to get existing with row lock
-        thread_state = self.db.query(ThreadState).filter(
-            ThreadState.thread_id == thread_id
-        ).with_for_update().first()
+        base_query = self.db.query(ThreadState).filter(ThreadState.thread_id == thread_id)
+        if user_id:
+            base_query = base_query.filter(
+                or_(ThreadState.user_id == user_id, ThreadState.user_id.is_(None))
+            )
+        thread_state = base_query.with_for_update().first()
 
         if not thread_state:
             # Create new - handle race condition with upsert pattern
             try:
                 thread_state = ThreadState(
                     thread_id=thread_id,
+                    user_id=user_id,
                     open_tasks=[],
                     decisions=[],
                     participants=[],
@@ -69,9 +78,12 @@ class ThreadStateService:
             except IntegrityError:
                 # Another process created it - rollback and fetch
                 self.db.rollback()
-                thread_state = self.db.query(ThreadState).filter(
-                    ThreadState.thread_id == thread_id
-                ).with_for_update().first()
+                retry_query = self.db.query(ThreadState).filter(ThreadState.thread_id == thread_id)
+                if user_id:
+                    retry_query = retry_query.filter(
+                        or_(ThreadState.user_id == user_id, ThreadState.user_id.is_(None))
+                    )
+                thread_state = retry_query.with_for_update().first()
 
                 # Defensive check - should never happen but prevents silent failures
                 if not thread_state:
@@ -79,6 +91,14 @@ class ThreadStateService:
                         f"Failed to get or create ThreadState for thread_id={thread_id}. "
                         "IntegrityError occurred but subsequent fetch returned None."
                     )
+
+        if thread_state and user_id and not thread_state.user_id:
+            thread_state.user_id = user_id
+        if thread_state and user_id and thread_state.user_id not in (None, user_id):
+            raise RuntimeError(
+                f"ThreadState ownership mismatch for thread_id={thread_id}. "
+                f"existing_user_id={thread_state.user_id} requested_user_id={user_id}"
+            )
 
         return thread_state
 
@@ -110,7 +130,7 @@ class ThreadStateService:
 
         try:
             # Get or create thread state
-            thread_state = self.get_or_create_thread_state(thread_id)
+            thread_state = self.get_or_create_thread_state(thread_id, user_id=message.user_id)
             is_first_message = thread_state.message_count == 0
 
             if is_first_message:
@@ -131,20 +151,17 @@ class ThreadStateService:
                     operation="email_processing"
                 )
 
-            # Update message count and last message reference
-            thread_state.message_count += 1
-            thread_state.last_message_id = message.id
-            if is_first_message:
-                thread_state.first_message_id = message.id
-                thread_state.subject = message.subject
-
-            # Add sender to participants if not already present
-            self._add_participant(thread_state, message.sender, "sender")
+            self._sync_message_metadata(thread_state, message, is_first_message=is_first_message)
 
             self.db.commit()
 
             if message.user_id:
-                thread_cache.invalidate(message.user_id, thread_id)
+                cache_coordinator.invalidate_thread_related_contact(
+                    db=self.db,
+                    tenant_id=_TENANT_ID,
+                    user_id=message.user_id,
+                    thread_id=thread_id,
+                )
 
         except Exception as e:
             # Rollback to release any locks and prevent stuck transactions
@@ -181,6 +198,43 @@ class ThreadStateService:
             "last_action": thread_state.last_action,
             "message_count": thread_state.message_count
         }
+
+    def _sync_message_metadata(
+        self,
+        thread_state: ThreadState,
+        message: Message,
+        *,
+        is_first_message: bool,
+    ) -> None:
+        """Keep thread state metadata aligned across single and batch processing."""
+        thread_state.user_id = thread_state.user_id or message.user_id
+        thread_state.message_count = (thread_state.message_count or 0) + 1
+        thread_state.last_message_id = message.id
+        if is_first_message or thread_state.first_message_id is None:
+            thread_state.first_message_id = message.id
+            thread_state.subject = thread_state.subject or message.subject
+        if message.contact_id and thread_state.contact_id is None:
+            thread_state.contact_id = message.contact_id
+
+        self._add_participant(thread_state, message.sender, "sender", contact_id=message.contact_id)
+        for recipient in self._iter_recipient_addresses(message.recipient):
+            self._add_participant(thread_state, recipient, "recipient")
+
+    @staticmethod
+    def _iter_recipient_addresses(recipient_value: Optional[str]) -> List[str]:
+        raw = (recipient_value or "").strip()
+        if not raw:
+            return []
+
+        values: list[str] = []
+        for display_name, email in getaddresses([raw]):
+            candidate = (email or "").strip()
+            if not candidate:
+                continue
+            formatted = f"{display_name} <{candidate}>" if display_name else candidate
+            if formatted not in values:
+                values.append(formatted)
+        return values
 
     def _apply_init_result(
         self,
@@ -439,24 +493,40 @@ class ThreadStateService:
         self,
         thread_state: ThreadState,
         email: str,
-        role: str = "participant"
+        role: str = "participant",
+        contact_id: Optional[int] = None,
     ):
         """Add a participant to thread if not already present."""
         if not email:
             return
 
         participants = thread_state.participants or []
+        display_name, parsed_email = parseaddr(email or "")
+        normalized_email = (parsed_email or email or "").strip().lower()
+        if not normalized_email or "@" not in normalized_email:
+            return
         existing_emails = {p.get("email", "").lower() for p in participants}
 
-        if email.lower() not in existing_emails:
+        if normalized_email not in existing_emails:
             participants.append({
-                "email": email,
-                "name": email.split("@")[0],  # Simple name extraction
+                "email": normalized_email,
+                "name": (display_name or normalized_email.split("@")[0]).strip(),  # Prefer header display name when available
                 "role": role
             })
+            if contact_id:
+                participants[-1]["contact_id"] = int(contact_id)
             thread_state.participants = participants
+            return
 
-    def get_thread_summary(self, thread_id: str) -> Optional[Dict[str, Any]]:
+        # Update existing participant with contact link if missing.
+        if contact_id:
+            for participant in participants:
+                if (participant.get("email", "").lower() == normalized_email) and (not participant.get("contact_id")):
+                    participant["contact_id"] = int(contact_id)
+                    thread_state.participants = participants
+                    break
+
+    def get_thread_summary(self, thread_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get a summary of thread state for display.
 
@@ -466,9 +536,10 @@ class ThreadStateService:
         Returns:
             Dict with thread state summary or None if not found
         """
-        thread_state = self.db.query(ThreadState).filter(
-            ThreadState.thread_id == thread_id
-        ).first()
+        query = self.db.query(ThreadState).filter(ThreadState.thread_id == thread_id)
+        if user_id:
+            query = query.filter(ThreadState.user_id == user_id)
+        thread_state = query.first()
 
         if not thread_state:
             return None
@@ -522,12 +593,14 @@ class ThreadStateService:
             message_data = {
                 "subject": message.subject,
                 "body": message.decrypted_body or message.body or "",
-                "sender": message.sender
+                "sender": message.sender,
+                "custom_instructions": self.task_detection_instructions,
             }
             
             # Check if thread state exists OR if we're already creating it in this batch
             existing_state = self.db.query(ThreadState).filter(
-                ThreadState.thread_id == message.thread_id
+                ThreadState.thread_id == message.thread_id,
+                or_(ThreadState.user_id == message.user_id, ThreadState.user_id.is_(None)),
             ).first()
             
             if existing_state or message.thread_id in threads_being_created:
@@ -561,9 +634,17 @@ class ThreadStateService:
             # Apply results to each message
             for (idx, message, msg_data), ai_result in zip(new_thread_msgs, batch_results):
                 try:
-                    thread_state = self._create_thread_state(message.thread_id)
+                    thread_state = self._create_thread_state(message.thread_id, user_id=message.user_id)
                     self._apply_init_result(thread_state, message, ai_result)
+                    self._sync_message_metadata(thread_state, message, is_first_message=True)
                     self.db.commit()
+                    if message.user_id:
+                        cache_coordinator.invalidate_thread_related_contact(
+                            db=self.db,
+                            tenant_id=_TENANT_ID,
+                            user_id=message.user_id,
+                            thread_id=thread_state.thread_id,
+                        )
                     
                     # Build result
                     scheduling_intent = ai_result.get("scheduling_intent", False)
@@ -599,7 +680,8 @@ class ThreadStateService:
             for thread_id, thread_msgs in existing_thread_msgs.items():
                 # Get current thread state
                 thread_state = self.db.query(ThreadState).filter(
-                    ThreadState.thread_id == thread_id
+                    ThreadState.thread_id == thread_id,
+                    or_(ThreadState.user_id == thread_msgs[0][1].user_id, ThreadState.user_id.is_(None)),
                 ).first()
                 
                 if thread_state and thread_msgs:
@@ -632,7 +714,15 @@ class ThreadStateService:
                 for (thread_id, idx, message, msg_data, thread_state), ai_result in zip(first_msgs, batch_results):
                     try:
                         self._apply_update_result(thread_state, message, ai_result)
+                        self._sync_message_metadata(thread_state, message, is_first_message=False)
                         self.db.commit()
+                        if message.user_id:
+                            cache_coordinator.invalidate_thread_related_contact(
+                                db=self.db,
+                                tenant_id=_TENANT_ID,
+                                user_id=message.user_id,
+                                thread_id=thread_state.thread_id,
+                            )
                         
                         scheduling_intent = ai_result.get("scheduling_intent", False)
                         scheduling_intent_type = ai_result.get("scheduling_intent_type", "none") if scheduling_intent else None
@@ -666,10 +756,11 @@ class ThreadStateService:
         
         return results
 
-    def _create_thread_state(self, thread_id: str) -> ThreadState:
+    def _create_thread_state(self, thread_id: str, user_id: Optional[str] = None) -> ThreadState:
         """Create a new thread state record."""
         thread_state = ThreadState(
             thread_id=thread_id,
+            user_id=user_id,
             message_count=0,
             needs_reply=True,
             open_tasks=[],

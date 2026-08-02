@@ -34,6 +34,11 @@ class NormalizedBillingEvent:
     subscription_status: Optional[str]
     period_start: Optional[datetime]
     period_end: Optional[datetime]
+    invoice_id: Optional[str]
+    payload_kind: Optional[str]
+    product_ids: list[str]
+    payment_amount_minor: Optional[int]
+    payment_currency: Optional[str]
     raw: dict[str, Any]
 
 
@@ -55,19 +60,22 @@ def _dt_to_iso(value: Optional[datetime]) -> Optional[str]:
 
 
 def serialize_billing_event(event: NormalizedBillingEvent) -> dict[str, Any]:
-    """Serialize normalized event for queue payloads and replay."""
+    """Serialize a minimized billing event for queue payloads and replay."""
     return {
         "provider": event.provider,
         "event_type": event.event_type,
         "raw_event_type": event.raw_event_type,
         "delivery_id": event.delivery_id,
         "customer_id": event.customer_id,
-        "customer_email": event.customer_email,
         "subscription_id": event.subscription_id,
         "subscription_status": event.subscription_status,
         "period_start": _dt_to_iso(event.period_start),
         "period_end": _dt_to_iso(event.period_end),
-        "raw": event.raw,
+        "invoice_id": event.invoice_id,
+        "payload_kind": event.payload_kind,
+        "product_ids": list(event.product_ids or []),
+        "payment_amount_minor": event.payment_amount_minor,
+        "payment_currency": event.payment_currency,
     }
 
 
@@ -84,6 +92,11 @@ def deserialize_billing_event(payload: dict[str, Any]) -> NormalizedBillingEvent
         subscription_status=payload.get("subscription_status"),
         period_start=_parse_dt(payload.get("period_start")),
         period_end=_parse_dt(payload.get("period_end")),
+        invoice_id=(str(payload.get("invoice_id")) if payload.get("invoice_id") else None),
+        payload_kind=(str(payload.get("payload_kind")) if payload.get("payload_kind") else None),
+        product_ids=[str(v) for v in (payload.get("product_ids") or []) if str(v).strip()],
+        payment_amount_minor=(int(payload.get("payment_amount_minor")) if payload.get("payment_amount_minor") is not None else None),
+        payment_currency=(str(payload.get("payment_currency")).upper() if payload.get("payment_currency") else None),
         raw=payload.get("raw") if isinstance(payload.get("raw"), dict) else {},
     )
 
@@ -423,6 +436,11 @@ class PolarBillingProvider(BillingProvider):
             subscription_status=_normalize_subscription_status(data.get("status")),
             period_start=_parse_dt(data.get("current_period_start")),
             period_end=_parse_dt(data.get("current_period_end")),
+            invoice_id=(str(data.get("invoice_id")) if data.get("invoice_id") else None),
+            payload_kind=str(data.get("payload_type") or "").strip().lower() or None,
+            product_ids=sorted(_extract_product_ids(data)),
+            payment_amount_minor=_extract_payment_amount_minor(data),
+            payment_currency=_extract_payment_currency(data),
             raw=event,
         )
 
@@ -718,6 +736,11 @@ class DodoBillingProvider(BillingProvider):
             subscription_status=_normalize_subscription_status(status_value),
             period_start=period_start,
             period_end=period_end,
+            invoice_id=(str(data.get("invoice_id")) if data.get("invoice_id") else None),
+            payload_kind=payload_type or None,
+            product_ids=sorted(_extract_product_ids(data)),
+            payment_amount_minor=_extract_payment_amount_minor(data),
+            payment_currency=_extract_payment_currency(data),
             raw=event,
         )
 
@@ -769,7 +792,7 @@ def _is_credit_topup_event(event: NormalizedBillingEvent, settings: Settings) ->
         return False
 
     data = _event_data(event.raw or {})
-    product_ids = _extract_product_ids(data)
+    product_ids = set(event.product_ids or _extract_product_ids(data))
     return topup_product_id in product_ids
 
 
@@ -793,12 +816,12 @@ def _apply_credit_topup(db: Session, *, user: UserSettings, event: NormalizedBil
     if existing:
         return True
 
-    amount_minor = _extract_payment_amount_minor(data)
+    amount_minor = event.payment_amount_minor or _extract_payment_amount_minor(data)
     if not amount_minor:
         logger.warning("Credit top-up event missing amount user=%s payment=%s", user.user_id, provider_payment_id)
         return True
 
-    currency = _extract_payment_currency(data)
+    currency = event.payment_currency or _extract_payment_currency(data)
     if currency != "USD":
         logger.warning(
             "Credit top-up currency unsupported user=%s payment=%s currency=%s",
@@ -841,10 +864,9 @@ def apply_billing_event(db: Session, event: NormalizedBillingEvent) -> bool:
     user = get_user_for_billing_event(db, event)
     if not user:
         logger.warning(
-            "Billing webhook for unknown customer provider=%s customer_id=%s customer_email=%s",
+            "Billing webhook for unknown customer provider=%s customer_id=%s",
             event.provider,
             event.customer_id,
-            event.customer_email,
         )
         return True
 
@@ -852,7 +874,7 @@ def apply_billing_event(db: Session, event: NormalizedBillingEvent) -> bool:
 
     settings = get_settings()
     raw_data = _event_data(event.raw or {})
-    raw_product_ids = _extract_product_ids(raw_data)
+    raw_product_ids = set(event.product_ids or _extract_product_ids(raw_data))
     subscription_product_ids = {
         value.strip()
         for value in [
@@ -861,7 +883,7 @@ def apply_billing_event(db: Session, event: NormalizedBillingEvent) -> bool:
         ]
         if isinstance(value, str) and value.strip()
     }
-    payload_type = str(raw_data.get("payload_type") or "").strip().lower()
+    payload_type = str(event.payload_kind or raw_data.get("payload_type") or "").strip().lower()
     has_subscription_context = bool(
         event.subscription_id
         or isinstance(raw_data.get("subscription"), dict)

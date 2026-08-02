@@ -6,7 +6,7 @@ Routes messages through LLM, executes tools, manages state.
 """
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import uuid
 import hashlib
@@ -16,13 +16,11 @@ import os
 import re
 import time
 
-from google.genai import types as genai_types
 from sqlalchemy.orm import Session
 
 from app.data.models import ChatSession, ChatPendingAction
 from .context import ChatContextManager, ConversationState
 from .tools import ChatToolRegistry, ToolResult
-from app.services.genai_client import get_genai_client
 from app.services.context_assembler import ContextAssembler
 from app.services.hot_context_cache import get_hot_context_cache_service
 from app.services.telemetry_writer import get_telemetry_writer
@@ -31,6 +29,7 @@ from app.security.prompt_sanitizer import detect_injection_patterns
 from app.security.security_logger import log_injection_attempt
 from .dag_executor import DependencyAwareExecutor, NodeRunStatus
 from .planner_parser import PlanParseError, parse_execution_plan
+from .planner_models import ToolFamily
 from .tool_policy import TOOL_FAMILY_BY_NAME, ToolPolicyDecision, ToolPolicyEngine
 
 logger = logging.getLogger(__name__)
@@ -39,6 +38,7 @@ MAX_TOOL_ROUNDS = 4
 MAX_ACTION_TOOLS_PER_TURN = 5
 MAX_DEFERRED_ACTIONS = 20
 ACTION_TOOL_NAMES = {"draft_email", "generate_meeting_brief"}
+THINKING_ZONE_MVP = True
 NO_CONTEXT_MESSAGES = {
     "hi",
     "hello",
@@ -68,6 +68,29 @@ STRUCTURED_HINT_TOKENS = {
     "preference",
     "preferences",
 }
+MEMORY_RETRIEVAL_HINT_TOKENS = {
+    "approve",
+    "approved",
+    "approval",
+    "decision",
+    "decisions",
+    "discuss",
+    "discussed",
+    "history",
+    "last time",
+    "when last",
+    "preference",
+    "preferences",
+    "relationship",
+    "relationships",
+    "signal",
+    "signals",
+    "status",
+    "timeline",
+    "update",
+    "updates",
+    "what changed",
+}
 DEEP_DETAIL_HINTS = {
     "detailed",
     "detail",
@@ -90,6 +113,7 @@ CHAT_METRICS_SAMPLE_RATE = max(0.0, min(1.0, float(os.getenv("CHAT_METRICS_SAMPL
 CHAT_METRICS_PROMPT_MAX_MESSAGES = max(1, int(os.getenv("CHAT_METRICS_PROMPT_MAX_MESSAGES", "6")))
 CHAT_METRICS_PROMPT_MAX_TOTAL_CHARS = max(512, int(os.getenv("CHAT_METRICS_PROMPT_MAX_TOTAL_CHARS", "4096")))
 CHAT_METRICS_PROMPT_MAX_CONTENT_CHARS = max(120, int(os.getenv("CHAT_METRICS_PROMPT_MAX_CONTENT_CHARS", "420")))
+OLD_MEMORY_DISCLAIMER_DAYS = 180
 
 # Module-level cached LLM orchestrator (avoids re-init per request)
 _chat_llm = None
@@ -124,6 +148,7 @@ def _load_prompt(name: str) -> str:
 
 
 _PLANNER_HIDDEN_TOOLS = {
+    "get_thread_summary",
     "get_contact_context",
     "get_thread_history",
     "get_user_preferences",
@@ -178,11 +203,13 @@ def resolve_mode(
 
     if session_type == "reflection":
         base_prompt = _load_prompt("chat_reflection")
+        tool_names = ", ".join(tool_registry._tools.keys())
+        tools = tool_registry.get_tool_definitions()
         return ModeConfig(
-            system_prompt=f"{identity}\n\n{base_prompt}\n\n## Current Context\n{context}",
+            system_prompt=f"{identity}\n\n{base_prompt}\n\n## Current Context\n{context}\n\nAvailable tools: {tool_names}",
             context_type="task_review",
-            tools=[],
-            use_tools=False,
+            tools=tools,
+            use_tools=True,
         )
 
     # Action / command mode
@@ -277,6 +304,7 @@ class ChatOrchestrator:
             )
 
         state = self.context_manager.get_session_state(session)
+        self._apply_active_contact_from_mentions(state, mention_context or {})
         history = self.context_manager.get_recent_messages(session.id)
 
         context = self.context_manager.build_prompt_context(
@@ -293,6 +321,17 @@ class ChatOrchestrator:
         )
         policy_decision = self.tool_policy.decide(user_message, mention_context or {})
         tools_allowed_this_turn = bool(mode.use_tools and policy_decision.tools_allowed)
+        planner_enabled_this_turn = bool(
+            tools_allowed_this_turn
+            and any(
+                family in policy_decision.allowed_families
+                for family in (
+                    ToolFamily.GENERATE_ARTIFACT,
+                    ToolFamily.WRITE_TASK,
+                    ToolFamily.EXTERNAL_ACTION,
+                )
+            )
+        )
         response_profile = self._select_response_profile(user_message)
 
         no_context_message = self._is_no_context_message(user_message)
@@ -347,18 +386,24 @@ class ChatOrchestrator:
 
         messages = []
         if self._is_smalltalk_minimal(user_message, mention_context or {}):
-            # Ultra-lean prompt for short, no-context smalltalk to cut latency.
+            # Ultra-lean prompt for short, no-context smalltalk to cut latency,
+            # but keep a tiny recent window so the assistant does not reset tone.
+            smalltalk_history = history[-4:] if history else []
             messages = [
                 {
                     "role": "system",
                     "content": (
                         f"You are {self.assistant_name}, a personal assistant for {self.user_name or 'the user'}. "
                         "Reply naturally and warmly in one short sentence. "
-                        "Do not mention tools, policies, or internal details."
+                        "Do not mention tools, policies, or internal details. "
+                        "Do not restart the conversation with a generic greeting unless the user greeted you first. "
+                        "If the user is praising, thanking, or acknowledging you, respond with a short acknowledgment."
                     ),
                 },
-                {"role": "user", "content": user_message},
             ]
+            for msg in smalltalk_history:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+            messages.append({"role": "user", "content": user_message})
             response_profile = ResponseProfile(
                 task_type="chat",
                 artifact="none",
@@ -379,26 +424,60 @@ class ChatOrchestrator:
             ]
             layered_payload = {
                 "task": layers.task,
+                "contact": layers.contact,
+                "profile": layers.profile,
                 "structured": layers.structured,
             }
-            if layered_payload["task"] or layered_payload["structured"]:
+            if layered_payload["task"] or layered_payload["contact"] or layered_payload["structured"]:
                 messages.append(
                     {
                         "role": "system",
                         "content": f"Layered memory JSON: {json.dumps(layered_payload, ensure_ascii=True, separators=(',', ':'))}",
                     }
                 )
+            context_used_guard = self._build_context_used_guard_instruction(
+                mention_context=mention_context or {},
+                contact_layer=layers.contact,
+                structured_layer=layers.structured,
+            )
+            if context_used_guard:
+                messages.append({"role": "system", "content": context_used_guard})
+            context_freshness_instruction = self._build_context_freshness_instruction(
+                mention_context=mention_context or {},
+                contact_layer=layers.contact,
+                structured_layer=layers.structured,
+            )
+            if context_freshness_instruction:
+                messages.append({"role": "system", "content": context_freshness_instruction})
+            if layers.contact:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Active contact guidance: when a person is in focus, answer from the relationship first. "
+                            "Prioritize what matters about this person, open commitments with them, and recent changes "
+                            "before falling back to generic thread or event details."
+                        ),
+                    }
+                )
             if mention_context:
                 safe_context = json.dumps(mention_context, ensure_ascii=True, separators=(",", ":"))
                 messages.append({"role": "system", "content": f"Resolved mention context JSON: {safe_context}"})
-                if tools_allowed_this_turn:
+                memory_retrieval_instruction = self._build_memory_retrieval_instruction(
+                    user_message=user_message,
+                    mention_context=mention_context or {},
+                    policy_decision=policy_decision,
+                )
+                if memory_retrieval_instruction:
+                    messages.append({"role": "system", "content": memory_retrieval_instruction})
+                if planner_enabled_this_turn:
                     batch_instruction = self._build_batch_action_instruction(
                         user_message=user_message,
                         mention_context=mention_context or {},
                     )
                     if batch_instruction:
                         messages.append({"role": "system", "content": batch_instruction})
-            if tools_allowed_this_turn:
+            if planner_enabled_this_turn:
                 planner_hint = self._build_planner_hint(user_message, mention_context or {})
                 if planner_hint:
                     messages.append({"role": "system", "content": planner_hint})
@@ -448,29 +527,46 @@ class ChatOrchestrator:
                     if tools_allowed_this_turn
                     else []
                 )
-                if tools_allowed_this_turn and active_tools:
-                    planned = await self._run_planned_tool_execution(
+                explicit_thread_batch = (
+                    self._extract_explicit_thread_batch_targets(user_message, mention_context or {})
+                    if planner_enabled_this_turn and policy_decision.allows_tool("draft_email")
+                    else []
+                )
+                if explicit_thread_batch:
+                    deterministic = self._execute_explicit_thread_batch_drafts(
                         user_message=user_message,
-                        mention_context=mention_context or {},
-                        active_tools=active_tools,
-                        policy_decision=policy_decision,
-                        session_id=session.id,
+                        thread_targets=explicit_thread_batch,
                     )
-                    if planned is not None:
-                        llm_prompt_ms_total += int(planned.get("llm_prompt_ms", 0) or 0)
-                        llm_ms_total += int(planned.get("llm_ms", 0) or 0)
-                        llm_calls_total += int(planned.get("llm_calls", 0) or 0)
-                        assistant_message = str(planned.get("assistant_message") or "").strip()
-                        tool_results.extend(planned.get("tool_results", []))
-                        tool_execution_records.extend(planned.get("tool_execution_records", []))
-                        pending_actions.extend(planned.get("pending_actions", []))
-                        newly_deferred.extend(planned.get("deferred_actions", []))
-                    else:
-                        logger.info(
-                            "planner_execution_fallback user=%s session=%s reason=planner_parse_or_validation_failed",
-                            self.user_id,
-                            session.id,
+                    tool_results.extend(deterministic.get("tool_results", []))
+                    tool_execution_records.extend(deterministic.get("tool_execution_records", []))
+                    pending_actions.extend(deterministic.get("pending_actions", []))
+                    newly_deferred.extend(deterministic.get("deferred_actions", []))
+                    assistant_message = self._format_tool_results(tool_results)
+
+                if planner_enabled_this_turn and active_tools:
+                    if not explicit_thread_batch:
+                        planned = await self._run_planned_tool_execution(
+                            user_message=user_message,
+                            mention_context=mention_context or {},
+                            active_tools=active_tools,
+                            policy_decision=policy_decision,
+                            session_id=session.id,
                         )
+                        if planned is not None:
+                            llm_prompt_ms_total += int(planned.get("llm_prompt_ms", 0) or 0)
+                            llm_ms_total += int(planned.get("llm_ms", 0) or 0)
+                            llm_calls_total += int(planned.get("llm_calls", 0) or 0)
+                            assistant_message = str(planned.get("assistant_message") or "").strip()
+                            tool_results.extend(planned.get("tool_results", []))
+                            tool_execution_records.extend(planned.get("tool_execution_records", []))
+                            pending_actions.extend(planned.get("pending_actions", []))
+                            newly_deferred.extend(planned.get("deferred_actions", []))
+                        else:
+                            logger.info(
+                                "planner_execution_fallback user=%s session=%s reason=planner_parse_or_validation_failed",
+                                self.user_id,
+                                session.id,
+                            )
 
                 if not tools_allowed_this_turn or not assistant_message:
                     attempted_richness_retry = False
@@ -649,6 +745,11 @@ class ChatOrchestrator:
                 assistant_message = self._format_tool_results(tool_results)
             else:
                 assistant_message = self._friendly_llm_error(user_message)
+        elif tool_results and any(bool(item.get("action_tool")) for item in tool_execution_records):
+            # For executed action tools, prefer deterministic renderer over model narration.
+            rendered = self._format_tool_results(tool_results)
+            if rendered.strip():
+                assistant_message = rendered
 
         has_action_activity = any(bool(item.get("action_tool")) for item in tool_execution_records)
         assistant_message = self._format_action_followup(
@@ -661,8 +762,7 @@ class ChatOrchestrator:
         assistant_message, had_placeholders = self._strip_placeholder_lines(assistant_message)
         if had_placeholders and len(assistant_message) < 40:
             assistant_message = self._friendly_llm_error(user_message)
-        action_intent = self._detect_primary_action_intent(user_message)
-        if action_intent and (mention_context or {}).get("entities") and not tool_execution_records:
+        if planner_enabled_this_turn and self._requires_action_tool_result(user_message, mention_context or {}, tool_execution_records):
             assistant_message = self._friendly_llm_error(user_message)
 
         state.deferred_actions = list(deferred_remaining)[:MAX_DEFERRED_ACTIONS]
@@ -701,8 +801,8 @@ class ChatOrchestrator:
         """
         Call the LLM with messages and optional tools.
 
-        Primary path uses native Gemini function-calling.
-        Fallback path uses existing text generation + JSON extraction.
+        Primary path uses provider-native tool calling when available.
+        Fallback path uses prompt-based tool descriptions plus JSON extraction.
         """
         call_started = time.perf_counter()
         tool_definitions_count = len(tools or [])
@@ -713,153 +813,18 @@ class ChatOrchestrator:
             tools=tools or [],
         )
         metrics_messages = self._prepare_metrics_messages(messages) if record_metrics else []
-
-        client = get_genai_client()
-        if client is not None:
-            model_name = "gemini-2.5-flash-lite"
-            system_content = ""
-            contents: List[genai_types.Content] = []
-
-            for msg in messages:
-                role = (msg.get("role") or "").strip().lower()
-                text = msg.get("content", "")
-
-                if role == "system":
-                    text = str(text or "")
-                    system_content = f"{system_content}\n\n{text}".strip() if system_content else text
-                    continue
-
-                if role == "assistant":
-                    parts: List[genai_types.Part] = []
-                    if text:
-                        parts.append(genai_types.Part.from_text(text=str(text)))
-                    for function_call in msg.get("function_calls", []) or []:
-                        fn_name = (function_call.get("name") or "").strip()
-                        fn_args = function_call.get("arguments") or {}
-                        if not fn_name:
-                            continue
-                        if not isinstance(fn_args, dict):
-                            fn_args = self._parse_tool_args(fn_args)
-                        parts.append(genai_types.Part.from_function_call(name=fn_name, args=fn_args))
-                    if parts:
-                        contents.append(genai_types.Content(role="model", parts=parts))
-                    continue
-
-                if role == "tool":
-                    tool_name = (msg.get("name") or "").strip()
-                    tool_response = msg.get("response") or {}
-                    if tool_name:
-                        if not isinstance(tool_response, dict):
-                            tool_response = {"value": str(tool_response)}
-                        part = genai_types.Part.from_function_response(
-                            name=tool_name,
-                            response=tool_response,
-                        )
-                        contents.append(genai_types.Content(role="tool", parts=[part]))
-                    continue
-
-                if not isinstance(text, str):
-                    text = json.dumps(text, ensure_ascii=True)
-                contents.append(genai_types.Content(role="user", parts=[genai_types.Part.from_text(text=text)]))
-
-            config_kwargs: Dict[str, Any] = {
-                "system_instruction": system_content,
-                "max_output_tokens": max(120, min(int(max_output_tokens or 300), 1200)),
-            }
-            if tools:
-                config_kwargs["automatic_function_calling"] = genai_types.AutomaticFunctionCallingConfig(disable=True)
-                declarations = self._to_genai_function_declarations(tools)
-                if declarations:
-                    config_kwargs["tools"] = [genai_types.Tool(function_declarations=declarations)]
-
-            llm_started = time.perf_counter()
-            prompt_ms = int((llm_started - call_started) * 1000)
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=genai_types.GenerateContentConfig(**config_kwargs),
-                )
-            except Exception as exc:
-                latency_ms = int((time.perf_counter() - llm_started) * 1000)
-                if record_metrics:
-                    self._enqueue_chat_metric(
-                        session_id=safe_session_id,
-                        model=model_name,
-                        provider="genai",
-                        path="native",
-                        messages=metrics_messages,
-                        latency_ms=latency_ms,
-                        input_tokens=0,
-                        output_tokens=0,
-                        tool_definitions_count=tool_definitions_count,
-                        tool_calls_count=0,
-                        success=False,
-                        error_type=exc.__class__.__name__,
-                        response_chars=0,
-                    )
-                raise
-
-            latency_ms = int((time.perf_counter() - llm_started) * 1000)
-
-            tool_calls: List[Dict[str, Any]] = []
-            for fc in list(response.function_calls or []):
-                tool_calls.append(
-                    {
-                        "function": {
-                            "name": fc.name,
-                            "arguments": json.dumps(dict(fc.args or {})),
-                        }
-                    }
-                )
-
-            usage = getattr(response, "usage_metadata", None)
-            input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0) if usage else 0
-            output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0) if usage else 0
-            if input_tokens > 0 or output_tokens > 0:
-                self._enqueue_token_usage(
-                    user_id=self.user_id,
-                    model=model_name,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    operation="chat",
-                )
-
-            if record_metrics:
-                self._enqueue_chat_metric(
-                    session_id=safe_session_id,
-                    model=model_name,
-                    provider="genai",
-                    path="native",
-                    messages=metrics_messages,
-                    latency_ms=latency_ms,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    tool_definitions_count=tool_definitions_count,
-                    tool_calls_count=len(tool_calls),
-                    success=True,
-                    error_type=None,
-                    response_chars=len((response.text or "").strip()),
-                )
-
-            return {
-                "content": (response.text or "").strip(),
-                "tool_calls": tool_calls,
-                "timing": {
-                    "prompt_ms": prompt_ms,
-                    "llm_ms": latency_ms,
-                    "total_ms": int((time.perf_counter() - call_started) * 1000),
-                },
-            }
-
         orchestrator = _get_chat_llm()
+        provider_name = str(getattr(orchestrator.config, "provider", "unknown") or "unknown")
+        native_tool_path = bool(tools and orchestrator.supports_tools())
+        llm_path = "native_tools" if native_tool_path else ("prompt_tools" if tools else "text")
         prompt_parts = []
         system_content = ""
 
         for msg in messages:
             role = msg.get("role")
             if role == "system":
-                system_content = msg.get("content", "")
+                system_text = str(msg.get("content", "") or "")
+                system_content = f"{system_content}\n\n{system_text}".strip() if system_content else system_text
             elif role == "user":
                 prompt_parts.append(f"User: {msg.get('content', '')}")
             elif role == "assistant":
@@ -876,25 +841,38 @@ class ChatOrchestrator:
                 )
 
         prompt = "\n\n".join(prompt_parts)
-        if tools:
+        if tools and not native_tool_path:
             tool_desc = self._build_tool_prompt(tools)
             prompt = tool_desc + "\n\n" + prompt
 
         llm_started = time.perf_counter()
         prompt_ms = int((llm_started - call_started) * 1000)
         try:
-            raw_text = await orchestrator.agenerate_text(
-                prompt=prompt,
-                system_prompt=system_content
-            )
+            if native_tool_path:
+                provider_response = await orchestrator.agenerate_with_tools(
+                    messages=messages,
+                    tools=tools or [],
+                    max_output_tokens=max_output_tokens,
+                )
+                raw_text = str(provider_response.get("content") or "")
+                tool_calls = list(provider_response.get("tool_calls") or [])
+            else:
+                raw_text = await orchestrator.agenerate_text(
+                    prompt=prompt,
+                    system_prompt=system_content
+                )
+                tool_calls = self._extract_tool_calls_from_response({}, raw_text)
         except Exception as exc:
             latency_ms = int((time.perf_counter() - llm_started) * 1000)
             if record_metrics:
                 self._enqueue_chat_metric(
                     session_id=safe_session_id,
-                    model="llm_orchestrator",
-                    provider="orchestrator",
-                    path="fallback",
+                    model=getattr(orchestrator.config, "anthropic_model", None)
+                    or getattr(orchestrator.config, "gemini_model", None)
+                    or getattr(orchestrator.config, "hf_model_id", None)
+                    or "llm_orchestrator",
+                    provider=provider_name,
+                    path=llm_path,
                     messages=metrics_messages,
                     latency_ms=latency_ms,
                     input_tokens=0,
@@ -922,9 +900,8 @@ class ChatOrchestrator:
             )
         orchestrator.reset_token_usage()
 
-        tool_calls = self._extract_tool_calls_from_response({}, raw_text)
         content = raw_text
-        if tool_calls:
+        if tool_calls and not native_tool_path:
             import re as _re
             content = _re.sub(r'```json\s*.*?\s*```', '', content, flags=_re.DOTALL).strip()
             content = _re.sub(r'\{"tool_call"\s*:\s*\{[^}]+\}\s*\}', '', content).strip()
@@ -933,8 +910,8 @@ class ChatOrchestrator:
             self._enqueue_chat_metric(
                 session_id=safe_session_id,
                 model=usage.get("model") or "llm_orchestrator",
-                provider="orchestrator",
-                path="fallback",
+                provider=provider_name,
+                path=llm_path,
                 messages=metrics_messages,
                 latency_ms=latency_ms,
                 input_tokens=input_tokens,
@@ -1053,22 +1030,6 @@ class ChatOrchestrator:
             )
         except Exception:
             logger.warning("token_usage_enqueue_failed user=%s", self.user_id, exc_info=True)
-
-    def _to_genai_function_declarations(self, tools: List[Dict[str, Any]]) -> List[genai_types.FunctionDeclaration]:
-        declarations: List[genai_types.FunctionDeclaration] = []
-        for tool in tools or []:
-            fn = tool.get("function", {})
-            name = fn.get("name")
-            if not name:
-                continue
-            declarations.append(
-                genai_types.FunctionDeclaration(
-                    name=name,
-                    description=fn.get("description", ""),
-                    parameters_json_schema=fn.get("parameters", {"type": "object", "properties": {}}),
-                )
-            )
-        return declarations
 
     def _build_tool_prompt(self, tools: List[Dict[str, Any]]) -> str:
         """Build the tool description prompt with JSON schema."""
@@ -1226,6 +1187,14 @@ class ChatOrchestrator:
             max_tokens = max(max_tokens, 500)
             retry_tokens = max(retry_tokens, 760)
 
+        if THINKING_ZONE_MVP and task_type == "draft":
+            # Thinking Zone does not execute/deliver final artifacts.
+            task_type = "analysis"
+            if depth == "micro":
+                depth = "standard"
+            max_tokens = max(max_tokens, 420)
+            retry_tokens = max(retry_tokens, 560)
+
         return ResponseProfile(
             task_type=task_type,
             artifact=artifact,
@@ -1257,6 +1226,17 @@ class ChatOrchestrator:
             "- Expand only when the ask needs a usable artifact, plan, or deeper analysis.",
             "- Never mention internal policy names or decision logic.",
         ]
+
+        if THINKING_ZONE_MVP:
+            lines.extend(
+                [
+                    "- Thinking Zone mode: do not execute actions or deliver final send-ready drafts.",
+                    "- If asked to execute, provide a clear recommendation and a ready-to-edit outline the user can use.",
+                    "- For recommendation/decision questions, format as: Recommendation, Why, Context used.",
+                    "- In 'Context used', list only relevant signals (e.g., decision/preference/relationship/thread/event/contact).",
+                    "- If no retrieved context was used, write: Context used: conversation only.",
+                ]
+            )
 
         if profile.task_type == "draft":
             lines.extend(
@@ -1331,6 +1311,147 @@ class ChatOrchestrator:
             return True
         return any(token in lowered for token in STRUCTURED_HINT_TOKENS)
 
+    def _should_prioritize_memory_retrieval(
+        self,
+        user_message: str,
+        mention_context: Dict[str, Any],
+        policy_decision: ToolPolicyDecision,
+    ) -> bool:
+        if not policy_decision.allows_family(ToolFamily.READ_CONTEXT):
+            return False
+
+        entity_resolution = mention_context.get("entity_resolution") or {}
+        if mention_context.get("entities") or entity_resolution.get("status") in {"resolved", "unresolved"}:
+            return True
+
+        lowered = " ".join((user_message or "").lower().split())
+        return any(token in lowered for token in MEMORY_RETRIEVAL_HINT_TOKENS)
+
+    def _build_memory_retrieval_instruction(
+        self,
+        user_message: str,
+        mention_context: Dict[str, Any],
+        policy_decision: ToolPolicyDecision,
+    ) -> str:
+        if not self._should_prioritize_memory_retrieval(user_message, mention_context, policy_decision):
+            return ""
+
+        lines = [
+            "Memory retrieval rule for this turn:",
+            "- Retrieve before answering when the user is asking about prior discussions, approvals, preferences, relationships, history, or what changed.",
+            "- Prefer grounded memory over generic advice or general reasoning.",
+            "- Ask one concise clarification only if ambiguity still blocks a safe answer after retrieval.",
+            "- If the user asks where a memory came from or asks for provenance, answer from retrieved source metadata. If the source thread or message is no longer present, say so plainly instead of implying the source is still available.",
+        ]
+
+        entities = self._normalize_referenced_entities(mention_context)
+        if entities:
+            anchors = [item.get("label") or item.get("ref") or item.get("kind") for item in entities[:3]]
+            anchors = [str(item).strip() for item in anchors if str(item or "").strip()]
+            if anchors:
+                lines.append(f"- Resolved anchors already in view: {', '.join(anchors)}. Use them before guessing.")
+
+        lines.append(
+            "- If a person is in focus, prefer contact brief, timeline, and signals before broader context search."
+        )
+        lines.append(
+            "- If the user names a person, vendor, project, or thread and no entity is resolved yet, use entity_search first, then context_search."
+        )
+        read_path_guidance = self._build_read_path_guidance(user_message, mention_context)
+        if read_path_guidance:
+            lines.append(read_path_guidance)
+
+        entity_resolution = mention_context.get("entity_resolution") or {}
+        candidate = " ".join(str(entity_resolution.get("candidate") or "").split()).strip()
+        status = " ".join(str(entity_resolution.get("status") or "").split()).strip().lower()
+        if status == "resolved":
+            lines.append("- A natural-language entity was already resolved for this turn. Treat that resolution as authoritative unless the user corrects it.")
+        elif status == "unresolved":
+            target = candidate or "the named entity"
+            lines.append(
+                f"- No direct entity match was found for {target}. Do not pretend a direct match exists; prefer topic/context retrieval and be explicit if no direct record is available."
+            )
+
+        return "\n".join(lines)
+
+    def _build_read_path_guidance(self, user_message: str, mention_context: Dict[str, Any]) -> str:
+        lowered = " ".join((user_message or "").lower().split())
+        entities = self._normalize_referenced_entities(mention_context)
+        kinds = {
+            str(item.get("kind") or "").strip().lower()
+            for item in entities
+            if str(item.get("kind") or "").strip()
+        }
+        guidance_lines: List[str] = []
+
+        if self._is_approval_history_query(lowered):
+            guidance_lines.append(
+                "- Preferred read path: use get_approval_history first for approval status/history questions. "
+                "Anchor it with the named item or subject; use context_search only if you need surrounding rationale or related decisions."
+            )
+        if "contact" in kinds and self._is_contact_preference_query(lowered):
+            guidance_lines.append(
+                "- Preferred read path: contact question with preference/tone intent. Use get_contact_brief first, "
+                "then get_contact_signals if you need current communication risks or stale follow-up."
+            )
+        if "contact" in kinds and self._is_contact_history_query(lowered):
+            guidance_lines.append(
+                "- Preferred read path: contact history question. Use get_contact_timeline first, "
+                "then context_search for decisions, commitments, or preferences that need extra detail."
+            )
+        scoped_kinds = [kind for kind in ("thread", "event", "message", "task") if kind in kinds]
+        for kind in scoped_kinds:
+            guidance_lines.append(
+                f"- Preferred read path: {kind} is already resolved. Use context_search scoped to entity_type={kind} "
+                "and the resolved entity id before broader search."
+            )
+        if "contact" in kinds and not self._is_contact_preference_query(lowered) and not self._is_contact_history_query(lowered):
+            guidance_lines.append(
+                "- Preferred read path: contact is already resolved. Start with get_contact_brief; add get_contact_timeline "
+                "or get_contact_signals only if the question asks for history or current risks."
+            )
+        return "\n".join(guidance_lines)
+
+    def _is_approval_history_query(self, lowered_message: str) -> bool:
+        return any(
+            phrase in lowered_message
+            for phrase in {
+                "approve",
+                "approved",
+                "approval",
+                "who approved",
+                "did we approve",
+                "was this approved",
+            }
+        )
+
+    def _is_contact_preference_query(self, lowered_message: str) -> bool:
+        return any(
+            phrase in lowered_message
+            for phrase in {
+                "preference",
+                "preferences",
+                "communication preference",
+                "tone",
+                "how should i communicate",
+                "what should i know about",
+            }
+        )
+
+    def _is_contact_history_query(self, lowered_message: str) -> bool:
+        return any(
+            phrase in lowered_message
+            for phrase in {
+                "when last",
+                "last time",
+                "history",
+                "timeline",
+                "did we discuss",
+                "have we discussed",
+                "what changed",
+            }
+        )
+
     def _build_task_context_from_state(self, state: ConversationState) -> Dict[str, Any]:
         task_context: Dict[str, Any] = {}
         if state.current_thread_id:
@@ -1346,6 +1467,177 @@ class ChatOrchestrator:
         if state.workflow_data:
             task_context["constraints"] = state.workflow_data
         return task_context
+
+    def _build_context_used_guard_instruction(
+        self,
+        mention_context: Dict[str, Any],
+        contact_layer: Any,
+        structured_layer: Any,
+    ) -> str:
+        """
+        Keep 'Context used' grounded to actually provided signals.
+        """
+        entities = mention_context.get("entities") or []
+        mention_prefetch = mention_context.get("mention_prefetch") or {}
+        selected_entries = mention_prefetch.get("selected_entries") if isinstance(mention_prefetch, dict) else []
+
+        structured_entries: List[Dict[str, Any]] = []
+        if isinstance(structured_layer, list):
+            structured_entries = [item for item in structured_layer if isinstance(item, dict)]
+
+        contact_present = isinstance(contact_layer, dict) and bool(contact_layer)
+        has_retrieved_context = bool(entities or selected_entries or structured_entries or contact_present)
+        if not has_retrieved_context:
+            return (
+                "Grounding rule for this turn: no retrieved context entries were provided. "
+                "If you include a 'Context used' section, it must be exactly: "
+                "\"Context used: conversation only\". "
+                "Do not invent preferences, decisions, relationships, or commitments."
+            )
+
+        allowed: List[str] = []
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            kind = " ".join(str(entity.get("kind") or "").split()).strip()
+            label = " ".join(str(entity.get("label") or entity.get("ref") or "").split()).strip()
+            if kind or label:
+                allowed.append(f"{kind}:{label}".strip(":"))
+
+        for entry in (selected_entries or []):
+            if not isinstance(entry, dict):
+                continue
+            etype = " ".join(str(entry.get("type") or "").split()).strip()
+            scope = " ".join(str(entry.get("entity_type") or "").split()).strip()
+            if etype or scope:
+                allowed.append(f"{etype}:{scope}".strip(":"))
+
+        for entry in structured_entries:
+            etype = " ".join(str(entry.get("type") or "").split()).strip()
+            scope = " ".join(str(entry.get("entity_type") or "").split()).strip()
+            if etype or scope:
+                allowed.append(f"{etype}:{scope}".strip(":"))
+
+        if contact_present:
+            contact_name = " ".join(str(contact_layer.get("name") or "").split()).strip()
+            if contact_name:
+                allowed.append(f"contact:{contact_name}")
+            for key in ("top_preferences", "open_commitments", "recent_decisions", "signals"):
+                if contact_layer.get(key):
+                    allowed.append(key)
+
+        compact_allowed: List[str] = []
+        seen: set[str] = set()
+        for item in allowed:
+            key = item.lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            compact_allowed.append(item)
+            if len(compact_allowed) >= 8:
+                break
+
+        if compact_allowed:
+            return (
+                "Grounding rule for this turn: in 'Context used', cite only signals from this allowed set: "
+                f"{json.dumps(compact_allowed, ensure_ascii=True)}. "
+                "Do not invent additional context."
+            )
+        return "Grounding rule: do not invent context. Cite only context explicitly provided this turn."
+
+    def _build_context_freshness_instruction(
+        self,
+        mention_context: Dict[str, Any],
+        contact_layer: Any,
+        structured_layer: Any,
+    ) -> str:
+        mention_prefetch = mention_context.get("mention_prefetch") or {}
+        selected_entries = mention_prefetch.get("selected_entries") if isinstance(mention_prefetch, dict) else []
+        structured_entries = [item for item in structured_layer if isinstance(item, dict)] if isinstance(structured_layer, list) else []
+        old_entries = self._collect_old_memory_entries(
+            selected_entries=selected_entries,
+            structured_entries=structured_entries,
+        )
+        if not old_entries:
+            return ""
+        cited_entries = json.dumps(old_entries[:5], ensure_ascii=True)
+        return (
+            "Freshness rule for this turn: only add an age disclaimer if you rely on one of these older memory items: "
+            f"{cited_entries}. "
+            "If you rely only on newer memory or conversation text, do not mention age. "
+            "When you do rely on one of the older items above, say so naturally instead of presenting it as fully current. "
+            "Use phrasing like 'Based on a preference captured months ago, this may have changed.' "
+            "Treat older memory as history unless this turn provides a newer confirmation."
+        )
+
+    def _collect_old_memory_entries(
+        self,
+        *,
+        selected_entries: List[Dict[str, Any]],
+        structured_entries: List[Dict[str, Any]],
+    ) -> List[str]:
+        threshold = datetime.now(timezone.utc) - timedelta(days=OLD_MEMORY_DISCLAIMER_DAYS)
+        old_entries: List[str] = []
+        seen: set[str] = set()
+
+        for entry in list(selected_entries or []) + list(structured_entries or []):
+            if not isinstance(entry, dict):
+                continue
+            created_at = self._parse_old_memory_timestamp(
+                entry.get("created_at"),
+                entry.get("updated_at"),
+                entry.get("occurred_at"),
+            )
+            if created_at is None or created_at > threshold:
+                continue
+            label = self._old_memory_label(entry, created_at=created_at)
+            key = label.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            old_entries.append(label)
+
+        return old_entries
+
+    def _parse_old_memory_timestamp(self, *values: Any) -> Optional[datetime]:
+        for value in values:
+            if value is None:
+                continue
+            if isinstance(value, datetime):
+                dt = value
+            else:
+                text = str(value).strip()
+                if not text:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        return None
+
+    def _old_memory_label(self, entry: Dict[str, Any], *, created_at: datetime) -> str:
+        kind = " ".join(
+            str(entry.get("type") or entry.get("kind") or entry.get("entity_type") or "memory").split()
+        ).strip()
+        content = " ".join(
+            str(
+                entry.get("content")
+                or entry.get("title")
+                or entry.get("decision")
+                or entry.get("label")
+                or entry.get("entity_id")
+                or ""
+            ).split()
+        ).strip()
+        age_days = max(OLD_MEMORY_DISCLAIMER_DAYS, int((datetime.now(timezone.utc) - created_at).days))
+        age_months = max(6, round(age_days / 30))
+        if content:
+            shortened = content[:64].rstrip()
+            return f"{kind or 'memory'}:{shortened} ({age_months}mo old)"
+        return f"{kind or 'memory'} ({age_months}mo old)"
 
     def _is_continue_intent(self, message: str) -> bool:
         normalized = " ".join("".join(ch.lower() if ch.isalnum() or ch.isspace() else " " for ch in (message or "")).split())
@@ -1372,6 +1664,18 @@ class ChatOrchestrator:
             return True
         tokens = set(normalized.split())
         return bool(tokens.intersection({"continue", "proceed", "next", "resume"}))
+
+    def _apply_active_contact_from_mentions(self, state: ConversationState, mention_context: Dict[str, Any]) -> None:
+        primary_contact = mention_context.get("primary_contact") or {}
+        if not isinstance(primary_contact, dict):
+            return
+        contact_id = primary_contact.get("id")
+        if contact_id is None:
+            return
+        try:
+            state.current_contact_id = int(contact_id)
+        except (TypeError, ValueError):
+            return
 
     def _execute_deferred_actions(
         self,
@@ -1443,14 +1747,9 @@ class ChatOrchestrator:
         return merged
 
     def _friendly_llm_error(self, message: str) -> str:
-        lowered = (message or "").lower()
-        if any(token in lowered for token in {"draft", "reply", "email"}):
-            return "I can't draft that reply right now."
-        if any(token in lowered for token in {"meeting brief", "brief", "prep", "prepare"}):
-            return "I can't prepare that meeting brief right now."
-        if any(token in lowered for token in {"recap", "summary", "decisions", "commitments"}):
-            return "I can't summarize that right now."
-        return "I can't complete that right now."
+        if self.user_name:
+            return f"sorry {self.user_name}, I can't handle this right now"
+        return "sorry, I can't handle this right now"
 
     def _normalize_action_title(self, value: Optional[str]) -> str:
         text = " ".join((value or "").replace('"', "").split())
@@ -1462,13 +1761,15 @@ class ChatOrchestrator:
         data = item.get("data") or {}
 
         if name == "draft_email":
+            draft_format = self._normalize_action_title(data.get("draft_format") or args.get("draft_format"))
             subject = self._normalize_action_title(data.get("subject") or args.get("subject"))
             recipient = self._normalize_action_title(data.get("recipient") or args.get("recipient"))
+            label_prefix = "draft reply" if draft_format == "message" else "draft email"
             if subject and recipient:
-                return f"draft email for {subject} to {recipient}"
+                return f"{label_prefix} for {subject} to {recipient}"
             if subject:
-                return f"draft email for {subject}"
-            return "draft email"
+                return f"{label_prefix} for {subject}"
+            return label_prefix
 
         if name == "generate_meeting_brief":
             subject = self._normalize_action_title(data.get("meeting_subject") or args.get("meeting_subject"))
@@ -1538,10 +1839,9 @@ class ChatOrchestrator:
             return "", False
 
         placeholder_re = re.compile(
-            r"\[(?:your\s*name|your\s*email|list\s+of|insert|tbd|to\s+be\s+decided|"
-            r"link|date|time|attendee|attendees|recipient|assignee|name|title|company|"
-            r"phone|location|agenda|pre-reads?|attachments?|notes?|commitment|"
-            r"suggest)\b[^\]]*\]",
+            r"\[(?:[^\]]*\b(?:your\s*name|your\s*email|list\s+of|insert|tbd|to\s+be\s+decided|"
+            r"date|time|attendee|attendees|recipient|assignee|name|title|company|"
+            r"phone|location|agenda|pre-reads?|attachments?|notes?|commitment|suggest|placeholder)\b[^\]]*)\]",
             flags=re.IGNORECASE,
         )
         extracted_re = re.compile(r"\bcommitment\s+\d+\s+extracted\b", flags=re.IGNORECASE)
@@ -1656,6 +1956,101 @@ class ChatOrchestrator:
             f"- Entity references: {json.dumps(visible, ensure_ascii=True)}"
         )
 
+    def _extract_explicit_thread_batch_targets(
+        self,
+        user_message: str,
+        mention_context: Dict[str, Any],
+    ) -> List[Dict[str, str]]:
+        """Return explicit thread targets for deterministic follow-up drafting when safe."""
+        lowered = (user_message or "").lower()
+        if not any(token in lowered for token in {"draft", "reply", "respond", "compose", "write", "email", "follow up", "follow-up"}):
+            return []
+        # Mixed-intent turns should stay in planner path.
+        conflicting = {
+            "meeting brief",
+            "prep",
+            "prepare",
+            "schedule",
+            "reschedule",
+            "create task",
+            "task",
+            "extract",
+            "summarize",
+            "what changed",
+        }
+        if any(token in lowered for token in conflicting):
+            return []
+        return [e for e in self._normalize_referenced_entities(mention_context) if e.get("kind") == "thread"]
+
+    def _execute_explicit_thread_batch_drafts(
+        self,
+        user_message: str,
+        thread_targets: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Execute deterministic draft_email calls for explicit thread mentions."""
+        tool_results: List[ToolResult] = []
+        tool_execution_records: List[Dict[str, Any]] = []
+        pending_actions: List[Dict[str, Any]] = []
+        deferred_actions: List[Dict[str, Any]] = []
+        action_count = 0
+
+        for target in thread_targets:
+            args = {
+                "thread_id": target.get("ref") or "",
+                "thread": target.get("label") or "",
+                "subject": target.get("label") or "Follow-up",
+                "intent": "follow-up reply",
+                "user_request": user_message,
+            }
+            if self.user_name:
+                args["sender_name"] = self.user_name
+
+            if action_count >= MAX_ACTION_TOOLS_PER_TURN:
+                deferred_actions.append(
+                    {
+                        "name": "draft_email",
+                        "arguments": args,
+                        "reason": "auto_action_limit",
+                    }
+                )
+                tool_execution_records.append(
+                    {
+                        "name": "draft_email",
+                        "arguments": args,
+                        "success": False,
+                        "data": None,
+                        "error": "deferred_due_to_auto_action_limit",
+                        "deferred": True,
+                        "action_tool": True,
+                    }
+                )
+                continue
+
+            result = self.tool_registry.execute_tool("draft_email", args)
+            action_count += 1
+            tool_results.append(result)
+            if result.pending_action:
+                pending_actions.append(result.pending_action)
+            tool_execution_records.append(
+                {
+                    "name": "draft_email",
+                    "arguments": args,
+                    "success": result.success,
+                    "data": result.data if result.success else None,
+                    "error": result.error,
+                    "deferred": False,
+                    "action_tool": True,
+                }
+            )
+            self._release_db_connection()
+
+        return {
+            "tool_results": tool_results,
+            "tool_execution_records": tool_execution_records,
+            "pending_actions": pending_actions,
+            "deferred_actions": deferred_actions,
+        }
+
     def _looks_like_single_target_clarification(self, assistant_text: str) -> bool:
         text = " ".join((assistant_text or "").lower().split())
         if not text:
@@ -1744,6 +2139,42 @@ class ChatOrchestrator:
             return "draft_email"
         return ""
 
+    def _requires_action_tool_result(
+        self,
+        user_message: str,
+        mention_context: Dict[str, Any],
+        tool_execution_records: List[Dict[str, Any]],
+    ) -> bool:
+        if tool_execution_records:
+            return False
+
+        entities = self._normalize_referenced_entities(mention_context)
+        if not entities:
+            return False
+
+        action_intent = self._detect_primary_action_intent(user_message)
+        if action_intent == "generate_meeting_brief":
+            return any(item.get("kind") == "event" for item in entities)
+
+        if action_intent == "draft_email":
+            if any(item.get("kind") == "thread" for item in entities):
+                return True
+            text = " ".join((user_message or "").lower().split())
+            email_signals = {
+                "email",
+                "mail",
+                "inbox",
+                "subject",
+                "cc",
+                "bcc",
+                "reply all",
+                "forward",
+                "thread",
+            }
+            return any(token in text for token in email_signals)
+
+        return False
+
     async def _run_planned_tool_execution(
         self,
         user_message: str,
@@ -1775,11 +2206,12 @@ class ChatOrchestrator:
 
         try:
             plan = parse_execution_plan(raw_plan)
-        except PlanParseError:
+        except PlanParseError as parse_exc:
             logger.warning(
-                "plan_parse_failed user=%s session=%s raw_preview=%s",
+                "plan_parse_failed user=%s session=%s error=%s raw_preview=%s",
                 self.user_id,
                 session_id,
+                str(parse_exc),
                 raw_plan[:220],
             )
             repaired = await self._repair_planner_output(
@@ -1967,11 +2399,12 @@ class ChatOrchestrator:
             return None
         try:
             return parse_execution_plan(repaired_raw)
-        except PlanParseError:
+        except PlanParseError as parse_exc:
             logger.warning(
-                "plan_repair_failed user=%s session=%s raw_preview=%s",
+                "plan_repair_failed user=%s session=%s error=%s raw_preview=%s",
                 self.user_id,
                 session_id,
+                str(parse_exc),
                 repaired_raw[:220],
             )
             return None
@@ -2007,10 +2440,16 @@ class ChatOrchestrator:
             "Each node must include: id, sub_request_id, family, tool, args, depends_on[]. "
             "Use only tools from the provided catalog. "
             "Prefer unified tools (entity_search, context_search) over deprecated get_* context tools. "
+            "Use get_approval_history for approval-status or approval-history questions before broad context_search whenever possible. "
+            "For named people, vendors, projects, or threads without a resolved entity, start with entity_search. "
+            "When a contact is already resolved, prefer get_contact_brief, get_contact_timeline, and get_contact_signals before broad context_search. "
             "Use context_search when the user asks to retrieve decisions, commitments, preferences, relationships, risks, or history "
-            "about an entity (contact/thread/event/message/task), or when they ask for updates/recaps/status/what-changed."
+            "about an entity (contact/thread/event/message/task), or when they ask for updates/recaps/status/what-changed. "
+            "Place read-context retrieval before any write or action node whenever grounding is needed. "
+            "If resolved mention context shows an unresolved entity, prefer topic/context fallback retrieval rather than inventing a direct match. "
             "Prefer minimal plans. "
             "If the request is blocked, set clarification.needed=true with one concise question. "
+            "Use clarification only for genuine ambiguity or missing information that retrieval cannot safely cover. "
             "If not blocked, clarification.needed=false."
         )
         planner_user = (
@@ -2020,6 +2459,7 @@ class ChatOrchestrator:
             "Constraints:\n"
             f"- Max {MAX_ACTION_TOOLS_PER_TURN} action nodes for this turn.\n"
             "- For independent reads, keep dependencies empty so they can run in parallel.\n"
+            "- If grounding is needed, schedule retrieval nodes before action nodes.\n"
             "- Keep args concrete and executable.\n"
             "- Never include tools outside catalog."
         )
@@ -2115,7 +2555,15 @@ class ChatOrchestrator:
                     parts.append(str(result.data.get("summary")))
         
         if parts:
-            rendered = "\n".join(parts)
+            deduped_parts: List[str] = []
+            seen_parts: set[str] = set()
+            for part in parts:
+                key = " ".join(str(part).split()).strip().lower()
+                if not key or key in seen_parts:
+                    continue
+                seen_parts.add(key)
+                deduped_parts.append(part)
+            rendered = "\n".join(deduped_parts or parts)
             rendered = self._sanitize_plain_artifact_text(rendered, replace_sender=False)
             rendered, had_placeholders = self._strip_placeholder_lines(rendered)
             if had_placeholders and len(rendered) < 40:
@@ -2125,44 +2573,40 @@ class ChatOrchestrator:
         return "I completed that step, but there wasn't any displayable output yet."
 
     def _humanize_tool_error(self, error: Optional[str]) -> str:
-        text = " ".join(str(error or "").split()).strip().lower()
-        if not text:
-            return "I couldn't finish that action."
-        if "not found" in text and "thread" in text:
-            return "I couldn't find that thread. Please reselect it from references and try again."
-        if "not found" in text and "event" in text:
-            return "I couldn't find that event. Please reselect it from references and try again."
-        if "not found" in text and "task" in text:
-            return "I couldn't find that task. Please reselect it from references and try again."
-        if "missing required field" in text:
-            return "I need one more detail to complete that action."
-        if "invalid parameter" in text or "validation" in text:
-            return "I couldn't run that because one detail was invalid. Please adjust and resend."
-        if "draft" in text or "email" in text or "reply" in text:
-            return "I couldn't draft that email yet."
-        if "meeting" in text or "brief" in text or "prep" in text:
-            return "I couldn't prepare that meeting brief yet."
-        if "task" in text:
-            return "I couldn't complete that task action yet."
-        if "calendar" in text or "event" in text:
-            return "I couldn't complete that calendar action yet."
-        return "I couldn't complete that action yet."
+        if self.user_name:
+            return f"sorry {self.user_name}, I can't handle this right now"
+        return "sorry, I can't handle this right now"
 
     def _render_email_draft(self, payload: Dict[str, Any]) -> str:
         subject = " ".join(str(payload.get("subject") or "").split()).strip()
         body = str(payload.get("body") or "").strip()
         recipient = " ".join(str(payload.get("recipient") or "").split()).strip()
+        draft_format = " ".join(str(payload.get("draft_format") or "").split()).strip().lower()
 
         if body:
             if self.user_name:
                 body = re.sub(r"\[(?:your\s*name)\]", self.user_name, body, flags=re.IGNORECASE)
             else:
                 body = re.sub(r"\[(?:your\s*name)\]", "", body, flags=re.IGNORECASE)
+            body = re.sub(
+                r"\[(?:[^\]]*\b(?:name|contact|recipient|assignee|specific|task|date|time|location|placeholder)\b[^\]]*)\]",
+                "",
+                body,
+                flags=re.IGNORECASE,
+            )
+            body = re.sub(r"@thread[a-z0-9_-]+", "", body, flags=re.IGNORECASE)
+            if draft_format == "message":
+                body = re.sub(r"(?im)^\s*(subject|to|cc|bcc)\s*:\s*.*$", "", body)
+                body = re.sub(
+                    r"(?is)\n(?:best|regards|sincerely|thanks)[,!\.]?\s*\n[^\n]{0,80}\s*$",
+                    "",
+                    body.strip(),
+                )
 
         lines: List[str] = []
-        if subject:
+        if draft_format != "message" and subject:
             lines.append(f"Subject: {subject}")
-        if recipient:
+        if draft_format != "message" and recipient:
             lines.append(f"To: {recipient}")
         if body:
             if lines:

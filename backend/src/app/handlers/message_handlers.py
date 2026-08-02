@@ -90,10 +90,10 @@ async def enqueue_message_for_processing(event: Dict[str, Any], payload: Dict[st
 @register_handler("message_received")
 async def update_contact_stats(event: Dict[str, Any], payload: Dict[str, Any]):
     """
-    Update contact statistics when a message is received.
+    Update legacy derived contact statistics when a message is received.
 
-    Increments message_count for the sender in ContactContext.
-    This powers Layer 3 relationship-based email filtering.
+    Increments derived message_count for the sender in ContactContext.
+    This powers legacy relationship-based email filtering support only.
 
     Security: user_id is derived from the Message record in DB, not from payload.
     """
@@ -116,12 +116,8 @@ async def update_contact_stats(event: Dict[str, Any], payload: Dict[str, Any]):
 
         db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
-        # Extract sender email
-        sender = message.sender or ""
-        if '<' in sender and '>' in sender:
-            sender_email = sender[sender.index('<') + 1:sender.index('>')].strip().lower()
-        else:
-            sender_email = sender.strip().lower()
+        from app.services.contact_linking import extract_sender_email
+        sender_email = extract_sender_email(message.sender)
 
         if sender_email:
             from app.services.contact_stats import increment_message_count

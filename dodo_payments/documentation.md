@@ -1,0 +1,461 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.dodopayments.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Welcome to Dodo Payments
+
+> The complete payments & billing platform for SaaS, AI, and digital products. Accept payments globally, set up flexible billing models, and monetize your product in minutes - all without building your own infrastructure.
+
+<Frame>
+  <img src="https://mintcdn.com/dodopayments/uPUxf15iPIZdcBn4/images/intro_cover.png?fit=max&auto=format&n=uPUxf15iPIZdcBn4&q=85&s=33cbb77568c45c08d919ae9018bb20b3" alt="Dodo Payments - Complete payments and billing platform for modern digital products" data-og-width="1723" width="1723" data-og-height="900" height="900" data-path="images/intro_cover.png" data-optimize="true" data-opv="3" srcset="https://mintcdn.com/dodopayments/uPUxf15iPIZdcBn4/images/intro_cover.png?w=280&fit=max&auto=format&n=uPUxf15iPIZdcBn4&q=85&s=5ea7b3d304597fa7cba5e6bddab60243 280w, https://mintcdn.com/dodopayments/uPUxf15iPIZdcBn4/images/intro_cover.png?w=560&fit=max&auto=format&n=uPUxf15iPIZdcBn4&q=85&s=e45bc2a96b51a6274bace112e6933574 560w, https://mintcdn.com/dodopayments/uPUxf15iPIZdcBn4/images/intro_cover.png?w=840&fit=max&auto=format&n=uPUxf15iPIZdcBn4&q=85&s=ebcb8bb3cb2dca2b7a5831f0a425185c 840w, https://mintcdn.com/dodopayments/uPUxf15iPIZdcBn4/images/intro_cover.png?w=1100&fit=max&auto=format&n=uPUxf15iPIZdcBn4&q=85&s=4a610a732fb7af29913d01c821e56b37 1100w, https://mintcdn.com/dodopayments/uPUxf15iPIZdcBn4/images/intro_cover.png?w=1650&fit=max&auto=format&n=uPUxf15iPIZdcBn4&q=85&s=5324741dc71c03cc4ef6c8287b51a71a 1650w, https://mintcdn.com/dodopayments/uPUxf15iPIZdcBn4/images/intro_cover.png?w=2500&fit=max&auto=format&n=uPUxf15iPIZdcBn4&q=85&s=e0deb9c4427cbe5b1b54fd0e53c77e2c 2500w" />
+</Frame>
+
+## What is Dodo Payments?
+
+Dodo Payments is the **all-in-one engine** to launch, scale, and monetize worldwide. Designed for the new generation of digital SaaS and AI products, we handle everything from **payments to billing to distribution** - all without extra engineering.
+
+<Info>
+  **Built for SaaS and AI Products**: Handle one-time payments, subscriptions, credits, seats, tokens, or any usage metric with our optimized billing infrastructure.
+</Info>
+
+<Tip>
+  <strong>Meet Sentra: Your AI-powered billing assistant</strong><br />
+  Sentra is an AI agent that integrates, analyzes, and acts on billing and payments directly in your IDE. Ask questions, build integrations, or plan billing architectures - all by describing what you want.
+
+  <a href="/developer-resources/sentra">
+    Get started with Sentra →
+  </a>
+</Tip>
+
+### Why Choose Dodo Payments?
+
+<CardGroup cols={2}>
+  <Card title="All-in-One Platform" icon="box">
+    One solution for payments, billing, and distribution—no more piecing tools together
+  </Card>
+
+  <Card title="Global Merchant of Record" icon="globe">
+    Go global without complexity: built-in coverage in 150+ countries, 80+ currencies, and 30+ payment methods
+  </Card>
+
+  <Card title="Developer-First & No-Code" icon="code">
+    Seamless APIs and SDKs for fast integration, plus <a href="/developer-resources/sentra">Sentra AI agent</a> to build integrations by just describing what you need
+  </Card>
+
+  <Card title="Faster Monetization" icon="bolt">
+    Start collecting revenue in minutes, not weeks
+  </Card>
+
+  <Card title="Flexible Billing Models" icon="repeat">
+    Usage-based, subscriptions with addons, or one-time payments are built in
+  </Card>
+
+  <Card title="Optimized for AI Products" icon="brain">
+    Handle credits, seats, tokens, or any usage metric
+  </Card>
+</CardGroup>
+
+## Quick Start Guide
+
+Get up and running with Dodo Payments in just a few steps:
+
+<Steps>
+  <Step title="Create Your Account">
+    Sign up at [app.dodopayments.com](https://app.dodopayments.com/signup) using your email.
+
+    <Check>
+      You'll receive a confirmation email to verify your account.
+    </Check>
+  </Step>
+
+  <Step title="Add Your First Product">
+    Choose your billing model and add your product to start accepting payments.
+
+    <CardGroup cols={3}>
+      <Card title="One-Time Payment" icon="box" href="/features/one-time-payment-products">
+        Perfect for digital downloads, courses, or single purchases
+      </Card>
+
+      <Card title="Subscription Product" icon="repeat" href="/features/subscription">
+        Ideal for SaaS, memberships, or recurring services
+      </Card>
+
+      <Card title="Usage-Based Billing" icon="chart-bar" href="/features/usage-based-billing">
+        Bill customers for API calls, credits, tokens, or any usage metric - ideal for AI and SaaS
+      </Card>
+    </CardGroup>
+  </Step>
+
+  <Step title="Choose Your Integration Method">
+    Select the integration approach that best fits your needs and technical requirements.
+
+    <Tabs>
+      <Tab title="No-Code (Fastest)">
+        **Perfect for getting started quickly:**
+
+        * Create **Payment Links** from your dashboard
+        * Share via email, social media, or embed in websites
+        * Start accepting payments immediately
+      </Tab>
+
+      <Tab title="Overlay Checkout">
+        **Best for seamless, on-brand payments:**
+
+        * Launch checkout as an overlay on your site or app
+        * Keep users on your page for a frictionless experience
+        * Customize appearance to match your brand
+
+        <Card title="Overlay Integration" icon="layer-group" href="/developer-resources/overlay-checkout">
+          Add our overlay checkout with a single line of code
+        </Card>
+      </Tab>
+
+      <Tab title="Inline Checkout">
+        **Best for fully integrated, embedded checkout experiences:**
+
+        * Embed checkout directly into your page layout
+        * Build custom order summaries that sync with checkout
+        * Maximum control over checkout design and flow
+
+        <Card title="Inline Integration" icon="credit-card" href="/developer-resources/inline-checkout">
+          Embed checkout directly into your website
+        </Card>
+      </Tab>
+
+      <Tab title="Full SDK Integration">
+        **Best for advanced, fully customized solutions:**
+
+        * Use our TypeScript/Python/Go/Java/Kotlin/C#/Ruby SDK for seamless integration
+        * Programmatic access to all payment, subscription, and customer portal APIs
+        * Deep integration with your backend, workflows, and data models
+        * Full support for webhooks, advanced features, and automation
+
+        <Tip>
+          <strong>Skip the manual work with Sentra</strong><br />
+          Install our AI agent in VS Code, Cursor, or Windsurf. Describe what you want - SDK integration, webhook handlers, subscription flows - and Sentra generates the code for you.
+
+          <a href="/developer-resources/sentra">
+            Install Sentra →
+          </a>
+        </Tip>
+
+        <Card title="SDK Quickstart" icon="code" href="/developer-resources/integration-guide">
+          Learn how to install and use our official SDK
+        </Card>
+
+        <Card title="API Reference" icon="server" href="/api-reference/introduction">
+          Explore the full API and SDK documentation
+        </Card>
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+## Developer Integration
+
+<Card title="Sentra: AI-Powered Integration Assistant" icon="wand-magic-sparkles" href="/developer-resources/sentra">
+  **Build billing integrations by describing what you need.** Sentra is an AI agent for VS Code, Cursor, and Windsurf that generates SDK code, webhook handlers, subscription flows, and more. Use **Ask** mode to learn, **Build** mode to implement, or **Plan** mode to architect your billing system.
+</Card>
+
+### MCP Servers for AI Assistants
+
+Connect your AI coding assistant (Cursor, Claude Desktop, Windsurf, VS Code) directly to Dodo Payments with our MCP servers.
+
+<CardGroup cols={2}>
+  <Card title="Dodo Knowledge MCP" icon="book-open" href="/developer-resources/mcp-server#dodo-knowledge-mcp">
+    Semantic search across Dodo Payments documentation - get instant answers about features, APIs, and best practices
+  </Card>
+
+  <Card title="Dodo Payments MCP" icon="credit-card" href="/developer-resources/mcp-server">
+    Execute API operations directly - create payments, manage subscriptions, and handle refunds through your AI assistant
+  </Card>
+</CardGroup>
+
+<Accordion title="Quick MCP Setup for Cursor/Claude Desktop">
+  Add both servers to your MCP configuration (`~/.cursor/mcp.json` or Claude Desktop config):
+
+  ```json  theme={null}
+  {
+    "mcpServers": {
+      "dodo-knowledge": {
+        "command": "npx",
+        "args": ["-y", "mcp-remote@latest", "https://knowledge.dodopayments.com/mcp"]
+      },
+      "dodopayments": {
+        "command": "npx",
+        "args": ["-y", "mcp-remote@latest", "https://mcp.dodopayments.com/sse"]
+      }
+    }
+  }
+  ```
+
+  <Info>
+    Requires Node.js 18+. See the [MCP Server documentation](/developer-resources/mcp-server) for detailed setup instructions for all supported clients.
+  </Info>
+</Accordion>
+
+### Agent Skills
+
+Enhance your AI coding assistant with official Dodo Payments skills - reusable capabilities that teach agents how to implement payment integrations, webhook handlers, and billing flows correctly.
+
+<Card title="Dodo Payments Skills" icon="wand-magic-sparkles" href="/developer-resources/agent-skills">
+  Install skills for checkout integration, subscriptions, usage-based billing, webhooks, and more. Works with Claude Code, OpenCode, Cursor, and any MCP-compatible agent.
+</Card>
+
+<Accordion title="Quick Skills Installation">
+  ```bash  theme={null}
+  # Install all Dodo Payments skills
+  npx skills add dodopayments/skills
+
+  # Or install individual skills
+  npx skills add dodopayments/skills/dodo-best-practices
+  npx skills add dodopayments/skills/webhook-integration
+  npx skills add dodopayments/skills/subscription-integration
+  ```
+
+  <Info>
+    See the [Agent Skills documentation](/developer-resources/agent-skills) for Claude Code, OpenCode, and other client setup instructions.
+  </Info>
+</Accordion>
+
+### Framework Adapters
+
+Integrate in under 10 lines of code with our framework adapters. Choose from our recommended frameworks or explore all supported options.
+
+#### Recommended Frameworks
+
+<CardGroup cols={2}>
+  <Card title="Next.js" icon="atom" href="/developer-resources/nextjs-adaptor">
+    React-based full-stack framework with App Router support
+  </Card>
+
+  <Card title="Better Auth" icon="shield" href="/developer-resources/better-auth-adaptor">
+    Authentication framework with built-in integrations
+  </Card>
+
+  <Card title="Supabase" icon="database" href="developer-resources/supabase-boilerplate">
+    Open source Firebase alternative with Postgres and Auth
+  </Card>
+
+  <Card title="Convex" icon="database" href="/developer-resources/convex-component">
+    Backend-as-a-Service with real-time capabilities
+  </Card>
+</CardGroup>
+
+<AccordionGroup>
+  <Accordion title="Show other 8+ supported frameworks">
+    <CardGroup cols={4}>
+      <Card title="SvelteKit" icon="js" href="/developer-resources/sveltekit-adaptor" />
+
+      <Card title="Nuxt" icon="vuejs" href="/developer-resources/nuxt-adaptor" />
+
+      <Card title="Remix" icon="react" href="/developer-resources/remix-adaptor" />
+
+      <Card title="Express" icon="js" href="/developer-resources/express-adaptor" />
+
+      <Card title="Fastify" icon="bolt" href="/developer-resources/fastify-adaptor" />
+
+      <Card title="Hono" icon="cloud" href="/developer-resources/hono-adaptor" />
+
+      <Card title="Astro" icon="star" href="/developer-resources/astro-adaptor" />
+
+      <Card title="TanStack" icon="chart-line" href="/developer-resources/tanstack-adaptor" />
+    </CardGroup>
+  </Accordion>
+</AccordionGroup>
+
+### Powerful SDKs
+
+Speed up development with our official SDKs. Choose from our recommended languages or explore all supported options.
+
+<CardGroup cols={4}>
+  <Card title="TypeScript" icon="code-simple" href="/developer-resources/dodo-payments-sdks#typescript" />
+
+  <Card title="Python" icon="python" href="/developer-resources/dodo-payments-sdks#python" />
+
+  <Card title="Go" icon="golang" href="/developer-resources/dodo-payments-sdks#go" />
+
+  <Card title="PHP" icon="php" href="/developer-resources/dodo-payments-sdks#php" />
+
+  <Card title="Java" icon="java" href="/developer-resources/dodo-payments-sdks#java" />
+
+  <Card title="Kotlin" icon="android" href="/developer-resources/dodo-payments-sdks#kotlin" />
+
+  <Card title="C#" icon="hashtag" href="/developer-resources/dodo-payments-sdks#c%23" />
+
+  <Card title="Ruby" icon="gem" href="/developer-resources/dodo-payments-sdks#ruby" />
+</CardGroup>
+
+### Billing SDK
+
+Stop reinventing the wheel. Use production-ready, accessible billing components, from pricing cards to subscription dashboards, built for React and ShadCN.
+
+<Card title="Billing Components" icon="credit-card" href="https://billingsdk.com" target="_blank">
+  Beautiful, customizable billing components, pricing tables, subscription management, and usage meters - save development time with production-ready UI for billing and payments.
+</Card>
+
+<Info>
+  **Open Source & Free**: BillingSDK is completely free to use and modify for personal and commercial projects. Built by the Dodo Payments team for developers.
+</Info>
+
+### In-App Purchases for Android and iOS
+
+Build rich in-app payment experiences with our lightweight payment links and secure React Native SDKs optimized for iOS and Android.
+
+<CardGroup cols={3}>
+  <Card title="Mobile Integration Guide" icon="book" href="/developer-resources/mobile-integration">
+    Complete guide for integrating payments in mobile applications
+  </Card>
+
+  <Card title="React Native SDK" icon="mobile" href="/developer-resources/react-native-integration">
+    Native mobile SDK for iOS and Android with seamless payment flows
+  </Card>
+
+  <Card title="Expo Boilerplate" icon="box-open" href="/developer-resources/expo-boilerplate">
+    Jumpstart your React Native in-app payments with our open source Expo template
+  </Card>
+</CardGroup>
+
+## External Integrations
+
+Connect Dodo Payments with your favorite tools and platforms to automate workflows, send notifications, and enhance your payment operations.
+
+<Info>
+  **Automate Everything**: Set up real-time notifications, trigger workflows, sync customer data, and more with our growing library of integrations.
+</Info>
+
+### Popular Integrations
+
+Quickly connect Dodo Payments to the most used design and productivity tools to streamline your workflow and automate payment operations.
+
+<CardGroup cols={4}>
+  <Card title="Framer Plugin" icon="frame" href="/integrations/framer-plugin">
+    Add payments to Framer websites
+  </Card>
+
+  <Card title="WooCommerce" icon="wordpress" href="/integrations/woocommerce-plugin">
+    Accept payments on WooCommerce stores
+  </Card>
+
+  <Card title="Raycast Extension" icon="rocket" href="/integrations/raycast-extension">
+    Manage payments from Raycast
+  </Card>
+
+  <Card title="Figma Plugin" icon="figma" href="/integrations/figma-plugin">
+    Access Dodo Payments in Figma
+  </Card>
+</CardGroup>
+
+<AccordionGroup>
+  <Accordion title="Communication & Notifications">
+    Stay informed about payment events with real-time notifications in your team communication tools.
+
+    <CardGroup cols={3}>
+      <Card title="Slack" icon="slack" href="/integrations/slack">
+        Send payment notifications and alerts to Slack channels
+      </Card>
+
+      <Card title="Discord" icon="discord" href="/integrations/discord">
+        Get instant payment updates in your Discord server
+      </Card>
+
+      <Card title="Microsoft Teams" icon="microsoft" href="/integrations/microsoft-teams">
+        Receive payment notifications directly in Teams channels
+      </Card>
+    </CardGroup>
+  </Accordion>
+
+  <Accordion title="Email Marketing & Customer Communication">
+    Sync customer data and trigger email campaigns based on payment events.
+
+    <CardGroup cols={4}>
+      <Card title="Resend" icon="envelope" href="/integrations/resend">
+        Send transactional emails with Resend
+      </Card>
+
+      <Card title="SendGrid" icon="paper-plane" href="/integrations/sendgrid">
+        Automate email campaigns with SendGrid
+      </Card>
+
+      <Card title="Loops" icon="repeat" href="/integrations/loops">
+        Trigger email sequences with Loops
+      </Card>
+
+      <Card title="Customer.io" icon="users" href="/integrations/customer-io">
+        Sync customer data to Customer.io
+      </Card>
+
+      <Card title="AutoSend" icon="paper-plane" href="/integrations/autosend">
+        Send automated transactional emails with AutoSend
+      </Card>
+    </CardGroup>
+  </Accordion>
+
+  <Accordion title="CRM & Sales">
+    Connect your payment data with CRM platforms to streamline sales and customer management.
+
+    <CardGroup cols={2}>
+      <Card title="HubSpot" icon="hubspot" href="/integrations/hubspot">
+        Sync customers and deals with HubSpot CRM
+      </Card>
+
+      <Card title="Close CRM" icon="briefcase" href="/integrations/close-crm">
+        Automate sales workflows with Close CRM
+      </Card>
+    </CardGroup>
+  </Accordion>
+
+  <Accordion title="Automation & Workflows">
+    Build powerful automations and data pipelines with workflow automation platforms.
+
+    <CardGroup cols={4}>
+      <Card title="Zapier" icon="bolt" href="/integrations/zapier">
+        Connect to 5,000+ apps with Zapier
+      </Card>
+
+      <Card title="N8N" icon="diagram-project" href="/integrations/n8n">
+        Automate workflows with self-hosted or cloud N8N
+      </Card>
+
+      <Card title="Windmill" icon="wind" href="/integrations/windmill">
+        Build custom workflows with Windmill
+      </Card>
+
+      <Card title="Inngest" icon="code" href="/integrations/inngest">
+        Create event-driven workflows with Inngest
+      </Card>
+
+      <Card title="Segment" icon="chart-network" href="/integrations/segment">
+        Stream payment data to Segment CDP
+      </Card>
+
+      <Card title="DataFast" icon="chart-bar" href="/integrations/datafast">
+        Attribute revenue to marketing channels with DataFast analytics
+      </Card>
+    </CardGroup>
+  </Accordion>
+</AccordionGroup>
+
+<Card title="View All Integrations" icon="puzzle-piece" href="/integrations/introduction">
+  Explore our complete library of integrations with detailed setup guides
+</Card>
+
+## Need Help?
+
+<CardGroup cols={2}>
+  <Card title="Developer Documentation" icon="book" href="/developer-resources/integration-guide">
+    Explore comprehensive guides and API references
+  </Card>
+
+  <Card title="API Reference" icon="terminal" href="/api-reference/introduction">
+    Full OpenAPI reference, endpoints, parameters, and example requests for all Dodo Payments APIs
+  </Card>
+
+  <Card title="Community Support" icon="users" href="https://discord.gg/bYqAp4ayYh">
+    Join our Discord community for help and discussions
+  </Card>
+
+  <Card title="Contact Support" icon="headphones" href="mailto:support@dodopayments.com">
+    Get direct help from our support team
+  </Card>
+</CardGroup>

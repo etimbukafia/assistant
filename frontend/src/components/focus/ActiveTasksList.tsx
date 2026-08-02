@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { getTasksInfinite } from "@/services/tasks";
 import { TaskItem } from "@/components/focus/TaskItem";
-import { useTaskMutations, useTaskStats } from "@/hooks/useTasks";
+import { useTask, useTaskMutations, useTaskStats } from "@/hooks/useTasks";
 import type { Task } from "@/services/messages";
 import {
     Dialog,
@@ -15,7 +15,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { InlineContextCaptureCard } from "@/components/vault/InlineContextCaptureCard";
 import { Plus } from "lucide-react";
+import Link from "next/link";
+import { ENABLE_REMINDERS_UI } from "@/config/featureFlags";
 
 const PAGE_SIZE = 5;
 const CARD_SHADOW = '0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)';
@@ -101,6 +104,7 @@ export const ActiveTasksList = () => {
     const [draftImportant, setDraftImportant] = useState(false);
     const [draftDeadline, setDraftDeadline] = useState("");
     const [draftReminder, setDraftReminder] = useState("");
+    const [showSourceEmailBody, setShowSourceEmailBody] = useState(false);
     const [createOpen, setCreateOpen] = useState(false);
     const [createTitle, setCreateTitle] = useState("");
     const [createDescription, setCreateDescription] = useState("");
@@ -188,6 +192,8 @@ export const ActiveTasksList = () => {
     useEffect(() => { setSelectedIds(new Set()); }, [activeTab]);
 
     const selectedTask = useMemo(() => tasks.find((t) => t.id === detailTaskId) ?? null, [tasks, detailTaskId]);
+    const { data: selectedTaskDetail } = useTask(detailTaskId);
+    const taskForDetail = selectedTaskDetail ?? selectedTask;
 
     // Seed draft fields only when the user opens a task (detailTaskId changes).
     // Using selectedTask as a dependency would re-seed on every background refetch,
@@ -196,6 +202,7 @@ export const ActiveTasksList = () => {
         if (!detailTaskId) {
             setDraftTitle(""); setDraftDescription(""); setDraftImportant(false);
             setDraftDeadline(""); setDraftReminder("");
+            setShowSourceEmailBody(false);
             return;
         }
         // Snapshot the task at the moment the dialog opens
@@ -206,6 +213,7 @@ export const ActiveTasksList = () => {
         setDraftImportant(task.priority === "urgent" || task.priority === "high");
         setDraftDeadline(task.deadline_at ? toLocalInputValue(task.deadline_at) : "");
         setDraftReminder(task.scheduled_reminder_at ? toLocalInputValue(task.scheduled_reminder_at) : "");
+        setShowSourceEmailBody(false);
     }, [detailTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleSelect = (taskId: number) => {
@@ -286,14 +294,16 @@ export const ActiveTasksList = () => {
             }
         }
 
-        // Reminder
-        const currentReminderLocal = selectedTask.scheduled_reminder_at
-            ? toLocalInputValue(selectedTask.scheduled_reminder_at)
-            : "";
-        if (draftReminder !== currentReminderLocal) {
-            payload.scheduled_reminder_at = draftReminder
-                ? new Date(draftReminder).toISOString()
-                : null;
+        // Reminder (MVP-hidden unless feature-flag enabled)
+        if (ENABLE_REMINDERS_UI) {
+            const currentReminderLocal = selectedTask.scheduled_reminder_at
+                ? toLocalInputValue(selectedTask.scheduled_reminder_at)
+                : "";
+            if (draftReminder !== currentReminderLocal) {
+                payload.scheduled_reminder_at = draftReminder
+                    ? new Date(draftReminder).toISOString()
+                    : null;
+            }
         }
 
         update.mutate({ taskId: selectedTask.id, data: payload });
@@ -507,7 +517,7 @@ export const ActiveTasksList = () => {
                             Task details
                         </DialogTitle>
                     </DialogHeader>
-                    {selectedTask ? (
+                    {taskForDetail ? (
                         <div className="space-y-5">
                             <div className="space-y-1.5">
                                 <Label htmlFor="task-title" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Task</Label>
@@ -517,6 +527,71 @@ export const ActiveTasksList = () => {
                                 <Label htmlFor="task-description" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Details</Label>
                                 <Textarea id="task-description" value={draftDescription} onChange={(e) => setDraftDescription(e.target.value)} rows={3} className="font-inter" />
                             </div>
+                            {taskForDetail.id > 0 && (
+                                <InlineContextCaptureCard
+                                    scopeType="task"
+                                    scopeId={taskForDetail.id}
+                                    linkedTo={taskForDetail.title}
+                                    heading="Remember this"
+                                    description="Context Teeks should know when this comes up again."
+                                    placeholder="Why this matters, what was decided, what to watch out for…"
+                                    className="bg-linen/30"
+                                    revealStoredCaptureByDefault={false}
+                                    allowStoredCaptureCorrection={false}
+                                />
+                            )}
+                            {((taskForDetail.source_message?.id ?? taskForDetail.message_id) || 0) > 0 && (
+                                <div className="space-y-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                                            Source email
+                                        </p>
+                                        {taskForDetail.source_message?.body && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowSourceEmailBody((prev) => !prev)}
+                                                className="text-xs text-primary hover:underline underline-offset-2 font-inter"
+                                            >
+                                                {showSourceEmailBody ? "Hide body" : "View body"}
+                                            </button>
+                                        )}
+                                    </div>
+                                    {taskForDetail.source_message && (
+                                        <div className="rounded-[8px] border border-border bg-linen/40 px-3 py-2.5 space-y-1.5">
+                                            <p className="text-sm font-semibold text-foreground font-inter">
+                                                {taskForDetail.source_message.subject || "No subject"}
+                                            </p>
+                                            <p className="text-xs text-muted-foreground font-inter">
+                                                From {taskForDetail.source_message.sender || "Unknown"} to{" "}
+                                                {taskForDetail.source_message.recipient || "Unknown"}
+                                            </p>
+                                            <p className="text-xs text-muted-foreground font-inter">
+                                                {taskForDetail.source_message.received_at
+                                                    ? new Date(taskForDetail.source_message.received_at).toLocaleString()
+                                                    : ""}
+                                            </p>
+                                            {showSourceEmailBody ? (
+                                                <div className="mt-2 max-h-56 overflow-y-auto rounded-[6px] border border-border bg-white px-2.5 py-2">
+                                                    <p className="text-sm leading-6 whitespace-pre-wrap text-foreground font-inter">
+                                                        {taskForDetail.source_message.body || ""}
+                                                    </p>
+                                                </div>
+                                            ) : (
+                                                <p className="text-sm text-foreground/85 font-inter">
+                                                    {(taskForDetail.source_message.body || "").slice(0, 220)}
+                                                    {(taskForDetail.source_message.body || "").length > 220 ? "..." : ""}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+                                    <Link
+                                        href={`/dashboard/inbox?messageId=${taskForDetail.source_message?.id ?? taskForDetail.message_id}${taskForDetail.source_message?.thread_id ? `&threadId=${encodeURIComponent(taskForDetail.source_message.thread_id)}` : ""}`}
+                                        className="text-sm text-primary hover:underline underline-offset-2 font-inter"
+                                    >
+                                        Open in inbox
+                                    </Link>
+                                </div>
+                            )}
                             <label className="flex items-center gap-2 text-sm font-medium text-obsidian font-inter">
                                 <input
                                     type="checkbox"
@@ -526,32 +601,34 @@ export const ActiveTasksList = () => {
                                 />
                                 Mark as important
                             </label>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className={`grid ${ENABLE_REMINDERS_UI ? "grid-cols-2" : "grid-cols-1"} gap-4`}>
                                 <div className="space-y-1.5">
                                     <Label htmlFor="task-deadline" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Deadline</Label>
                                     <Input id="task-deadline" type="datetime-local" value={draftDeadline} onChange={(e) => setDraftDeadline(e.target.value)} className="font-inter" />
-                                    {selectedTask.deadline_at && !draftDeadline && (
+                                    {taskForDetail.deadline_at && !draftDeadline && (
                                         <span className="text-xs text-muted-foreground font-inter">(clears on save)</span>
                                     )}
                                 </div>
-                                <div className="space-y-1.5">
-                                    <Label htmlFor="task-reminder" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Reminder</Label>
-                                    <Input id="task-reminder" type="datetime-local" value={draftReminder} onChange={(e) => setDraftReminder(e.target.value)} className="font-inter" />
-                                </div>
+                                {ENABLE_REMINDERS_UI && (
+                                    <div className="space-y-1.5">
+                                        <Label htmlFor="task-reminder" className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">Reminder</Label>
+                                        <Input id="task-reminder" type="datetime-local" value={draftReminder} onChange={(e) => setDraftReminder(e.target.value)} className="font-inter" />
+                                    </div>
+                                )}
                             </div>
                             <div className="flex flex-wrap gap-2 pt-1">
-                                {selectedTask.status === "pending_approval" && (
+                                {taskForDetail.status === "pending_approval" && (
                                     <>
                                         <button
                                             type="button"
-                                            onClick={() => dismiss.mutate(selectedTask.id)}
+                                            onClick={() => dismiss.mutate(taskForDetail.id)}
                                             className="rounded-[8px] border border-burgundy/40 px-4 py-2 text-[13px] font-semibold text-burgundy hover:bg-burgundy/10 transition-colors font-inter"
                                         >
                                             Reject
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => approve.mutate(selectedTask.id)}
+                                            onClick={() => approve.mutate(taskForDetail.id)}
                                             className="rounded-[8px] bg-copper px-4 py-2 text-[13px] font-semibold text-white hover:bg-copper/90 active:scale-[0.97] transition-all font-inter"
                                         >
                                             Approve
@@ -561,11 +638,11 @@ export const ActiveTasksList = () => {
                                 <button
                                     type="button"
                                     onClick={handleSaveDetails}
-                                    disabled={!!selectedTask && selectedTask.id < 0}
-                                    title={selectedTask && selectedTask.id < 0 ? "Saving task…" : undefined}
+                                    disabled={!!taskForDetail && taskForDetail.id < 0}
+                                    title={taskForDetail && taskForDetail.id < 0 ? "Saving task…" : undefined}
                                     className="rounded-[8px] border border-border px-4 py-2 text-[13px] font-semibold text-foreground hover:bg-linen active:scale-[0.97] transition-all font-inter disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
-                                    {selectedTask && selectedTask.id < 0 ? "Saving…" : "Save changes"}
+                                    {taskForDetail && taskForDetail.id < 0 ? "Saving…" : "Save changes"}
                                 </button>
                             </div>
                         </div>

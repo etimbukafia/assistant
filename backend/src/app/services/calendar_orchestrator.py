@@ -9,12 +9,13 @@ Output is ephemeral — nothing is stored until the user confirms an action.
 """
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone, timedelta, date
 from typing import Dict, Any, List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.data.models import SchedulingIntent, UserSettings, Task, ThreadState, CalendarEvent
+from app.data.models import SchedulingIntent, UserSettings, Task, ThreadState, CalendarEvent, Message
 from app.services.calendar import CalendarService
 
 logger = logging.getLogger(__name__)
@@ -28,16 +29,19 @@ class OrchestratorResult:
         suggested_slots: List[Dict[str, Any]],
         draft_reply: str,
         reasoning: Optional[str] = None,
+        availability_check: Optional[Dict[str, Any]] = None,
     ):
         self.suggested_slots = suggested_slots
         self.draft_reply = draft_reply
         self.reasoning = reasoning
+        self.availability_check = availability_check
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "suggested_slots": self.suggested_slots,
             "draft_reply": self.draft_reply,
             "reasoning": self.reasoning,
+            "availability_check": self.availability_check,
         }
 
 
@@ -66,14 +70,16 @@ class CalendarOrchestrator:
         """
         settings = self._get_settings()
         context = self._build_context(intent, settings, user_note)
+        availability_check = self._build_availability_check(intent, context)
         slots = self._suggest_slots(intent, settings, context)
-        draft_reply = self._draft_reply(intent, slots, settings, context, user_note)
-        reasoning = self._build_reasoning(intent, slots, context)
+        draft_reply = self._draft_reply(intent, slots, settings, context, user_note, availability_check)
+        reasoning = self._build_reasoning(intent, slots, context, availability_check)
 
         return OrchestratorResult(
             suggested_slots=slots,
             draft_reply=draft_reply,
             reasoning=reasoning,
+            availability_check=availability_check,
         )
 
     # ── Context gathering ────────────────────────────────────────────────────
@@ -176,6 +182,171 @@ class CalendarOrchestrator:
 
     # ── Slot suggestion ──────────────────────────────────────────────────────
 
+    def _build_availability_check(
+        self,
+        intent: SchedulingIntent,
+        context: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        For availability/time intents with concrete requested times, check calendar
+        conflicts and return an explicit available/busy verdict with overlap details.
+        """
+        if intent.intent_type not in ("availability_request", "time_request"):
+            return None
+
+        windows = self._extract_requested_windows(intent)
+        if not windows:
+            return None
+
+        checks: List[Dict[str, Any]] = []
+        for window in windows[:3]:
+            start_dt = window["start_time"]
+            end_dt = window["end_time"]
+            conflicts = self.db.query(CalendarEvent).filter(
+                CalendarEvent.user_id == self.user_id,
+                CalendarEvent.status != "cancelled",
+                CalendarEvent.start_time < end_dt,
+                CalendarEvent.end_time > start_dt,
+            ).order_by(CalendarEvent.start_time.asc()).limit(5).all()
+
+            conflict_payload = [
+                {
+                    "id": e.id,
+                    "title": e.title,
+                    "start_time": e.start_time.isoformat() if e.start_time else None,
+                    "end_time": e.end_time.isoformat() if e.end_time else None,
+                    "label": e.label,
+                }
+                for e in conflicts
+            ]
+            checks.append(
+                {
+                    "start_time": start_dt.isoformat(),
+                    "end_time": end_dt.isoformat(),
+                    "is_available": len(conflict_payload) == 0,
+                    "conflicts": conflict_payload,
+                }
+            )
+
+        return {
+            "is_available": all(c.get("is_available", False) for c in checks),
+            "requested_checks": checks,
+        }
+
+    def _extract_requested_windows(self, intent: SchedulingIntent) -> List[Dict[str, datetime]]:
+        """Extract concrete requested time windows from message metadata/body."""
+        if not intent.message_id:
+            return []
+
+        message = self.db.query(Message).filter(
+            Message.id == intent.message_id,
+            Message.user_id == self.user_id,
+        ).first()
+        if not message:
+            return []
+
+        candidate_datetimes: List[datetime] = []
+        extracted_dates = message.extracted_dates or []
+        candidate_datetimes.extend(self._parse_datetime_candidates(extracted_dates))
+
+        if not candidate_datetimes and intent.meeting_date:
+            time_candidates = self._extract_times_from_text(f"{message.subject or ''} {message.decrypted_body or ''}")
+            for hour, minute in time_candidates:
+                candidate_datetimes.append(
+                    datetime.combine(intent.meeting_date, datetime.min.time(), tzinfo=timezone.utc).replace(
+                        hour=hour, minute=minute
+                    )
+                )
+
+        dedup: Dict[str, datetime] = {}
+        for dt_obj in candidate_datetimes:
+            normalized = dt_obj if dt_obj.tzinfo else dt_obj.replace(tzinfo=timezone.utc)
+            dedup[normalized.isoformat()] = normalized
+
+        duration = timedelta(minutes=30)
+        windows: List[Dict[str, datetime]] = []
+        for dt_obj in sorted(dedup.values()):
+            windows.append({"start_time": dt_obj, "end_time": dt_obj + duration})
+
+        return windows
+
+    def _parse_datetime_candidates(self, raw_dates: Any) -> List[datetime]:
+        """Parse datetime candidates from extracted date structures."""
+        if not isinstance(raw_dates, list):
+            return []
+
+        candidates: List[datetime] = []
+        for raw in raw_dates:
+            if isinstance(raw, str):
+                parsed = self._safe_parse_datetime(raw)
+                if parsed and not (parsed.hour == 0 and parsed.minute == 0 and parsed.second == 0):
+                    candidates.append(parsed)
+                continue
+
+            if isinstance(raw, dict):
+                for key in ("datetime", "start_time", "start", "value", "iso"):
+                    value = raw.get(key)
+                    if isinstance(value, str):
+                        parsed = self._safe_parse_datetime(value)
+                        if parsed:
+                            candidates.append(parsed)
+                            break
+
+                date_value = raw.get("date")
+                time_value = raw.get("time")
+                if isinstance(date_value, str) and isinstance(time_value, str):
+                    parsed = self._safe_parse_datetime(f"{date_value}T{time_value}")
+                    if parsed:
+                        candidates.append(parsed)
+
+        return candidates
+
+    @staticmethod
+    def _extract_times_from_text(text: str) -> List[tuple[int, int]]:
+        """Extract clock times (e.g. 2pm, 14:30) from free text."""
+        if not text:
+            return []
+
+        out: List[tuple[int, int]] = []
+
+        for match in re.finditer(r"\b([0]?[1-9]|1[0-2])(?::([0-5]\d))?\s*([ap]m)\b", text, flags=re.IGNORECASE):
+            hour = int(match.group(1))
+            minute = int(match.group(2) or 0)
+            meridiem = match.group(3).lower()
+            if meridiem == "pm" and hour != 12:
+                hour += 12
+            if meridiem == "am" and hour == 12:
+                hour = 0
+            out.append((hour, minute))
+
+        for match in re.finditer(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text):
+            out.append((int(match.group(1)), int(match.group(2))))
+
+        seen = set()
+        deduped: List[tuple[int, int]] = []
+        for value in out:
+            if value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
+    @staticmethod
+    def _safe_parse_datetime(value: str) -> Optional[datetime]:
+        """Best-effort ISO-ish datetime parser with UTC fallback."""
+        if not value:
+            return None
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except Exception:
+            return None
+
     def _suggest_slots(
         self,
         intent: SchedulingIntent,
@@ -245,6 +416,7 @@ class CalendarOrchestrator:
         settings: Optional[UserSettings],
         context: Dict[str, Any],
         user_note: str,
+        availability_check: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Generate a context-appropriate scheduling reply using the LLM.
@@ -257,6 +429,9 @@ class CalendarOrchestrator:
             tz = context.get("timezone", "UTC")
             tz_display = tz.split("/")[-1].replace("_", " ") if "/" in tz else tz
             sender = intent.sender_name or (intent.sender_email or "").split("@")[0]
+
+            if availability_check and availability_check.get("requested_checks"):
+                return self._availability_check_reply(availability_check, slots, tz_display)
 
             slot_texts = self._format_slots_for_prompt(slots, tz_display)
 
@@ -300,21 +475,20 @@ Reply:"""
                         if isinstance(v, str) and len(v) > 10:
                             reply = v
                             break
-                return reply or self._fallback_reply(intent, slots, tz_display, sender)
+                return reply or self._fallback_reply(intent, slots, tz_display)
             if isinstance(result, str):
                 return result
-            return self._fallback_reply(intent, slots, tz_display, sender)
+            return self._fallback_reply(intent, slots, tz_display)
 
         except Exception as e:
             logger.error(f"CalendarOrchestrator: draft reply LLM call failed: {e}")
-            return self._fallback_reply(intent, slots, context.get("timezone", "UTC"), "")
+            return self._fallback_reply(intent, slots, context.get("timezone", "UTC"))
 
     def _fallback_reply(
         self,
         intent: SchedulingIntent,
         slots: List[Dict[str, Any]],
         tz_display: str,
-        sender: str,
     ) -> str:
         """Simple template reply used when LLM is unavailable."""
         if not slots:
@@ -332,6 +506,52 @@ Reply:"""
                 "Which of those works for you?"
             )
         return f"I'm available {slot_texts} ({tz_display}). Does any of those work?"
+
+    def _availability_check_reply(
+        self,
+        availability_check: Dict[str, Any],
+        slots: List[Dict[str, Any]],
+        tz_display: str,
+    ) -> str:
+        """Deterministic yes/no reply for requested time checks."""
+        checks = availability_check.get("requested_checks") or []
+        if not checks:
+            return "I could not find a concrete time to check. Share a specific time and I will check it."
+
+        first = checks[0]
+        start_label = self._format_datetime_label(first.get("start_time"))
+
+        if first.get("is_available", False):
+            return f"Yes — you're free at {start_label} ({tz_display}). Want me to confirm that time?"
+
+        conflicts = first.get("conflicts") or []
+        if conflicts:
+            top = conflicts[0]
+            top_start = self._format_datetime_label(top.get("start_time"))
+            top_end = self._format_datetime_label(top.get("end_time"), include_date=False)
+            conflict_text = f"{top.get('title', 'another meeting')} ({top_start}–{top_end})"
+        else:
+            conflict_text = "another meeting"
+
+        alternatives = self._format_slots_for_prompt(slots, tz_display)
+        if alternatives:
+            return (
+                f"No — you're not free at {start_label} ({tz_display}) because of {conflict_text}. "
+                f"You are available {alternatives} ({tz_display})."
+            )
+        return f"No — you're not free at {start_label} ({tz_display}) because of {conflict_text}."
+
+    @staticmethod
+    def _format_datetime_label(value: Optional[str], include_date: bool = True) -> str:
+        if not value:
+            return "that time"
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if include_date:
+                return dt.strftime("%a %b %d at %I:%M %p")
+            return dt.strftime("%I:%M %p")
+        except Exception:
+            return "that time"
 
     def _format_slots_for_prompt(self, slots: List[Dict[str, Any]], tz_display: str) -> str:
         """Format slot list as a readable string for the prompt."""
@@ -357,6 +577,7 @@ Reply:"""
         intent: SchedulingIntent,
         slots: List[Dict[str, Any]],
         context: Dict[str, Any],
+        availability_check: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Brief human-readable explanation of why these slots were chosen.
@@ -380,7 +601,14 @@ Reply:"""
         if user_note:
             parts.append(f"your note applied: \"{user_note[:60]}\"")
 
-        if not slots:
+        if availability_check and availability_check.get("requested_checks"):
+            first = availability_check["requested_checks"][0]
+            if first.get("is_available"):
+                parts.append("requested time is free")
+            else:
+                parts.append(f"requested time conflicts with {len(first.get('conflicts') or [])} event(s)")
+
+        if not slots and not (availability_check and availability_check.get("requested_checks")):
             return "No available slots found in the next 14 days matching your preferences."
 
         if not parts:

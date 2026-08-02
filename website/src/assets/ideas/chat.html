@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jane Anderson Chatbot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:wght@600&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #D9BA9E 0%, #C9A050 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        /* Custom Scrollbar */
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .glass-input {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: #333;
+        }
+
+        /* Animation for new messages */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        /* Typing Indicator Animation */
+        .typing-dot {
+            animation: typing 1.4s infinite ease-in-out both;
+        }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        /* Beam / Shine Animation */
+        @keyframes shine {
+            0% { left: -100%; opacity: 0; }
+            50% { opacity: 0.5; }
+            100% { left: 200%; opacity: 0; }
+        }
+
+        .shine-effect {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .shine-effect::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 50%;
+            height: 100%;
+            background: linear-gradient(to right, transparent, rgba(255,255,255,0.4), transparent);
+            transform: skewX(-20deg);
+            animation: shine 4s infinite cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+        }
+
+        /* Smooth Carousel Transition */
+        .carousel-track {
+            scroll-behavior: smooth;
+        }
+    </style>
+</head>
+<body class="p-4">
+
+    <!-- Main Chatbot Container -->
+    <!-- Updated: Slender dimensions (max-w-[320px], h-[600px]) for iPhone look -->
+    <div class="relative w-full max-w-[320px] h-[600px] max-h-[90vh] bg-[#090807]/95 backdrop-blur-2xl border border-[#D9BA9E]/20 rounded-[50px] shadow-2xl overflow-hidden flex flex-col text-white ring-1 ring-[#D9BA9E]/10">
+        
+        <!-- Header -->
+        <div class="flex justify-between items-center px-6 pt-10 pb-4 z-10">
+            <div class="flex items-center gap-3">
+                <div>
+                    <div class="text-sm font-semibold">Jane Anderson</div>
+                    <div class="text-[10px] opacity-70 flex items-center gap-1">
+                        <span class="w-1.5 h-1.5 bg-green-400 rounded-full"></span> Active now
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Window Controls -->
+            <div class="flex items-center gap-3 opacity-70">
+                <button class="hover:text-white transition-colors" title="Chat History">
+                    <i class="fa-solid fa-clock-rotate-left text-xs"></i>
+                </button>
+                <button class="hover:text-white transition-colors">
+                    <i class="fa-solid fa-minus text-xs"></i>
+                </button>
+                <button class="hover:text-white transition-colors">
+                    <i class="fa-solid fa-expand text-xs"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Scrollable Content Area -->
+        <div id="chat-container" class="flex-1 overflow-y-auto px-4 pt-2 pb-24 scrollbar-hide flex flex-col gap-6">
+            
+            <!-- Dynamic Chat Content -->
+            <div id="messages-area" class="flex flex-col gap-5 mt-4 pb-4">
+                <!-- Messages injected via JS -->
+            </div>
+
+            <!-- Typing Indicator (Hidden by default) -->
+            <div id="typing-indicator" class="hidden pl-2">
+                <div class="bg-[#1A1A1A] p-4 rounded-2xl rounded-tl-sm w-fit flex gap-1.5 shadow-sm border border-[#D9BA9E]/10">
+                    <div class="w-2 h-2 bg-[#D9BA9E]/60 rounded-full typing-dot"></div>
+                    <div class="w-2 h-2 bg-[#D9BA9E]/60 rounded-full typing-dot"></div>
+                    <div class="w-2 h-2 bg-[#D9BA9E]/60 rounded-full typing-dot"></div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Input Area -->
+        <div class="absolute bottom-0 w-full p-5 pt-10 bg-gradient-to-t from-[#090807] via-[#090807]/95 to-transparent z-20">
+            <div class="relative flex items-center">
+                <input type="text" 
+                       id="user-input"
+                       placeholder="Message..." 
+                       class="w-full glass-input text-white placeholder-white/60 rounded-full py-3 pl-5 pr-12 outline-none focus:bg-white/10 transition-all text-sm font-light shadow-lg"
+                       disabled>
+                
+                <button class="absolute right-1.5 w-9 h-9 bg-[#C9A050] hover:bg-[#d4ac5e] text-white rounded-full flex items-center justify-center shadow-md transition-transform transform active:scale-95">
+                    <i class="fa-solid fa-arrow-up text-sm"></i>
+                </button>
+            </div>
+            <div class="w-1/3 h-1 bg-white/30 rounded-full mx-auto mt-5"></div>
+        </div>
+
+    </div>
+
+    <!-- Templates -->
+    
+    <!-- Template: Property Card -->
+    <template id="property-card-template">
+        <div class="property-card relative flex-shrink-0 w-[240px] h-[300px] rounded-3xl overflow-hidden shadow-xl mx-2 group bg-white cursor-pointer hover:scale-[1.02] transition-transform duration-300">
+            <!-- Image Container -->
+            <div class="absolute inset-0 w-full h-full overflow-hidden">
+                <img src="" alt="Property" class="w-full h-full object-cover transition-transform duration-700 ease-out scale-110 property-image">
+                <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent"></div>
+            </div>
+            
+            <!-- Content -->
+            <div class="absolute bottom-0 left-0 w-full p-5 text-white">
+                <div class="inline-block px-2 py-1 bg-[#C9A050] text-[10px] font-bold uppercase tracking-wider rounded-md mb-2 shadow-sm">
+                    New Listing
+                </div>
+                <h3 class="text-lg font-serif font-medium leading-tight mb-1 property-title">Title</h3>
+                <p class="text-[10px] text-white/80 mb-3 property-address"><i class="fa-solid fa-location-dot mr-1"></i> Address</p>
+                <div class="flex justify-between items-end border-t border-white/20 pt-3">
+                    <span class="text-base font-semibold property-price">$0</span>
+                    <button class="w-7 h-7 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center hover:bg-white/40 transition-colors">
+                        <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script>
+        // -- Configuration --
+        const chatContainer = document.getElementById('chat-container');
+        const messagesArea = document.getElementById('messages-area');
+        const typingIndicator = document.getElementById('typing-indicator');
+        
+        // -- Data --
+        const properties = [
+            {
+                id: 1,
+                name: "The Victorian Manor",
+                address: "1234 Oak Avenue, SF",
+                price: "$4,250,000",
+                image: "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&q=80&w=600"
+            },
+            {
+                id: 2,
+                name: "The Glass Horizon",
+                address: "890 Pacific Heights Dr, SF",
+                price: "$6,800,000",
+                image: "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&q=80&w=600"
+            },
+            {
+                id: 3,
+                name: "Marina Townhouse",
+                address: "22 Marina Blvd, SF",
+                price: "$3,100,000",
+                image: "https://images.unsplash.com/photo-1564013799919-ab600027ffc6?auto=format&fit=crop&q=80&w=600"
+            },
+            {
+                id: 4,
+                name: "Sunnyvale Estate",
+                address: "45 Palm Way, SF",
+                price: "$5,500,000",
+                image: "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&q=80&w=600"
+            }
+        ];
+
+        // -- Conversation Scenario --
+        const scenario = [
+            { type: 'bot', text: "Hi, welcome to Jane Anderson", delay: 800 },
+            { type: 'user', text: "Hi, I'm looking for a home with lots of natural light.", delay: 2000 },
+            { type: 'bot', text: "I'd be happy to help. I've got a few beautiful options that flood with natural light.", delay: 1500 },
+            { type: 'bot', text: "The **Victorian Manor** has a sun-soaked kitchen and bright, open entertaining spaces, while the **Glass Horizon** showcases panoramic glass walls.", delay: 2500 },
+            { type: 'carousel', data: properties, delay: 1500 },
+            { type: 'bot', text: "Would you like homes with that same bright, airy feel across San Francisco, or are you looking for a specific neighborhood?", delay: 3000 },
+            { type: 'user', text: "The Marina townhouse looks interesting.", delay: 2500 },
+            { type: 'bot', text: "It's interesting indeed. The water views and rooftop deck are stunning. We can arrange a private showing. Would you like to schedule a date to see it?", delay: 1500 },
+            { type: 'user', text: "Yes", delay: 2000 },
+            { type: 'bot', text: "Perfect, I'd be happy to help you schedule a tour! Please fill in your contact details and you'll be able to choose a convenient time.", delay: 1500 },
+            { type: 'form', title: "Schedule a Property Tour", delay: 1000 }
+        ];
+
+        // -- Engine --
+        let currentStep = 0;
+
+        function startScenario() {
+            processStep();
+        }
+
+        function processStep() {
+            // -- Loop Logic --
+            if (currentStep >= scenario.length) {
+                setTimeout(() => {
+                    // Reset
+                    messagesArea.innerHTML = '';
+                    currentStep = 0;
+                    startScenario();
+                }, 5000); // 5s Pause before restarting
+                return;
+            }
+
+            const step = scenario[currentStep];
+            
+            // Show typing if it's a bot message
+            if (step.type === 'bot' || step.type === 'carousel' || step.type === 'form') {
+                showTyping();
+            }
+
+            setTimeout(() => {
+                hideTyping();
+                
+                if (step.type === 'bot') {
+                    addMessage(step.text, 'bot');
+                } else if (step.type === 'user') {
+                    addMessage(step.text, 'user');
+                } else if (step.type === 'carousel') {
+                    addPropertyDeck(step.data);
+                } else if (step.type === 'form') {
+                    addForm(step.title);
+                }
+
+                currentStep++;
+                // Continue to next step
+                processStep();
+
+            }, step.delay);
+        }
+
+        // -- UI Components --
+
+        function showTyping() {
+            typingIndicator.classList.remove('hidden');
+            scrollToBottom();
+        }
+
+        function hideTyping() {
+            typingIndicator.classList.add('hidden');
+        }
+
+        function scrollToBottom() {
+            chatContainer.scrollTo({
+                top: chatContainer.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+
+        function addMessage(text, sender) {
+            const div = document.createElement('div');
+            const isUser = sender === 'user';
+            
+            // Added shine-effect class for Beam Animation
+            div.className = `max-w-[85%] p-4 rounded-2xl animate-fade-in text-sm leading-relaxed shadow-sm shine-effect ${
+                isUser
+                ? 'bg-white/20 ml-auto rounded-tr-sm backdrop-blur-sm'
+                : 'bg-[#1A1A1A] mr-auto rounded-tl-sm border border-[#D9BA9E]/10'
+            }`;
+            
+            // Allow strong tags for bolding
+            const formattedText = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            div.innerHTML = formattedText;
+            
+            messagesArea.appendChild(div);
+            scrollToBottom();
+        }
+
+        function addPropertyDeck(items) {
+            const container = document.createElement('div');
+            container.className = 'w-full -mx-4 animate-fade-in mb-2 py-2'; 
+            
+            // Scrollable Track
+            const track = document.createElement('div');
+            track.className = 'flex overflow-x-auto carousel-track scrollbar-hide px-6 pb-4';
+            track.id = 'property-track';
+            
+            const template = document.getElementById('property-card-template');
+
+            items.forEach(item => {
+                const clone = template.content.cloneNode(true);
+                clone.querySelector('.property-image').src = item.image;
+                clone.querySelector('.property-title').textContent = item.name;
+                clone.querySelector('.property-address').innerHTML = `<i class="fa-solid fa-location-dot mr-1"></i> ${item.address}`;
+                clone.querySelector('.property-price').textContent = item.price;
+                track.appendChild(clone);
+            });
+
+            container.appendChild(track);
+            // Removed controls bubbles/arrows as requested
+
+            messagesArea.appendChild(container);
+            
+            // Auto-scroll logic (Faster)
+            const autoScroll = setInterval(() => {
+                // If the track is no longer in the DOM (after reset), clear interval
+                if (!document.body.contains(track)) {
+                    clearInterval(autoScroll);
+                    return;
+                }
+
+                if (!track.matches(':hover')) {
+                   // Faster scroll: 1.5px per tick (simulated)
+                   track.scrollLeft += 2;
+                   
+                   // Reset if end reached (infinite loop simulation)
+                   if(track.scrollLeft >= (track.scrollWidth - track.clientWidth)) {
+                       track.scrollLeft = 0;
+                   }
+                }
+            }, 20); // 20ms update rate
+            
+            scrollToBottom();
+        }
+
+        function addForm(title) {
+            const div = document.createElement('div');
+            div.className = 'w-full animate-fade-in mt-2 mb-10';
+            
+            // Reason Pre-filled Logic (Updated)
+            const reasonValue = "Viewing for Marina Townhouse";
+            
+            div.innerHTML = `
+                <div class="glass-panel p-5 rounded-3xl shadow-lg mx-1">
+                    <h3 class="text-[#090807] font-serif font-bold text-lg mb-4">${title}</h3>
+                    
+                    <div class="space-y-3">
+                        <div class="relative">
+                            <label class="text-[10px] text-gray-500 uppercase font-bold tracking-wider ml-1 mb-1 block">Your Details</label>
+                            <input type="text" placeholder="Name" class="w-full bg-white/50 border border-gray-300 rounded-lg p-2.5 text-xs outline-none focus:border-[#C9A050] transition-colors placeholder-gray-500 mb-2">
+                            <input type="email" placeholder="Email" class="w-full bg-white/50 border border-gray-300 rounded-lg p-2.5 text-xs outline-none focus:border-[#C9A050] transition-colors placeholder-gray-500 mb-2">
+                             <input type="tel" placeholder="Phone" class="w-full bg-white/50 border border-gray-300 rounded-lg p-2.5 text-xs outline-none focus:border-[#C9A050] transition-colors placeholder-gray-500">
+                        </div>
+
+                        <!-- Added Reason Field -->
+                        <div class="relative pt-1">
+                            <label class="text-[10px] text-gray-500 uppercase font-bold tracking-wider ml-1 mb-1 block">Reason for Visit</label>
+                            <textarea class="w-full bg-white/50 border border-gray-300 rounded-lg p-2.5 text-xs outline-none focus:border-[#C9A050] transition-colors placeholder-gray-500 min-h-[60px] resize-none">${reasonValue}</textarea>
+                        </div>
+                        
+                        <button class="w-full bg-[#C9A050] text-white p-3 rounded-lg font-medium text-xs hover:bg-[#b89143] transition-colors flex items-center justify-center gap-2 mt-2 shadow-md">
+                            <i class="fa-regular fa-calendar"></i> Confirm Date
+                        </button>
+
+                         <!-- Added Callback Button -->
+                        <button class="w-full bg-transparent border border-[#C9A050] text-[#C9A050] p-3 rounded-lg font-medium text-xs hover:bg-[#C9A050] hover:text-white transition-colors mt-0">
+                            Request Callback
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            messagesArea.appendChild(div);
+            scrollToBottom();
+        }
+
+        window.addEventListener('load', () => {
+            setTimeout(startScenario, 500);
+        });
+
+    </script>
+</body>
+</html>

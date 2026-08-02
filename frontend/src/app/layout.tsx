@@ -8,8 +8,8 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const playfair = Playfair_Display({ subsets: ["latin"], variable: "--font-playfair-display" });
 
 export const metadata: Metadata = {
-  title: "Teeks | The Executive Assistant's Desk",
-  description: "Chaos Out. Clarity In.",
+  title: "Teeks | Automation powered by stored context",
+  description: "Memory and automation for Executive Assistants.",
 };
 
 import { AuthProvider } from "@/context/AuthContext";

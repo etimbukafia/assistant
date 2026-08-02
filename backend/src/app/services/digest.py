@@ -23,27 +23,43 @@ class DigestService:
     No LLM calls, no processing - just state aggregation.
     """
 
-    def __init__(self, db: Session, user_email: str):
+    def __init__(self, db: Session, user_email: str | None = None, user_id: str | None = None):
         self.db = db
-        self.user_email = user_email
-        self._cached_user_id: Optional[str] = None
+        self.user_email = (user_email or "").strip().lower() or None
+        self._cached_user_id: Optional[str] = user_id or None
+        self._settings_cache: Optional[UserSettings] = None
         self.user_tz = self._get_user_timezone()
 
     @property
     def _user_id(self) -> Optional[str]:
         """Cached user_id lookup from UserSettings."""
         if self._cached_user_id is None:
-            settings = self.db.query(UserSettings).filter(
-                UserSettings.user_email == self.user_email
-            ).first()
+            settings = self._get_settings()
             self._cached_user_id = settings.user_id if settings else ""
         return self._cached_user_id or None
 
+    def _get_settings(self) -> Optional[UserSettings]:
+        if self._settings_cache is not None:
+            return self._settings_cache
+
+        query = self.db.query(UserSettings)
+        if self._cached_user_id:
+            settings = query.filter(UserSettings.user_id == self._cached_user_id).first()
+        elif self.user_email:
+            settings = query.filter(UserSettings.user_email == self.user_email).first()
+        else:
+            settings = None
+
+        self._settings_cache = settings
+        if settings and not self.user_email:
+            self.user_email = (settings.user_email or "").strip().lower() or None
+        if settings and not self._cached_user_id:
+            self._cached_user_id = settings.user_id or None
+        return settings
+
     def _get_user_timezone(self) -> ZoneInfo:
         """Get user's timezone from settings, default to UTC."""
-        settings = self.db.query(UserSettings).filter(
-            UserSettings.user_email == self.user_email
-        ).first()
+        settings = self._get_settings()
 
         tz_name = settings.default_timezone if settings else "UTC"
         try:
@@ -270,6 +286,7 @@ class DigestService:
         NOT Message.needs_reply (signal only).
         """
         threads = self.db.query(ThreadState).filter(
+            ThreadState.user_id == self.user_id,
             ThreadState.needs_reply == True
         ).order_by(ThreadState.updated_at.desc()).limit(limit).all()
         
@@ -280,6 +297,7 @@ class DigestService:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         
         threads = self.db.query(ThreadState).filter(
+            ThreadState.user_id == self.user_id,
             ThreadState.needs_reply == True,
             ThreadState.updated_at < cutoff
         ).order_by(ThreadState.updated_at.asc()).limit(limit).all()

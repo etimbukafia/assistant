@@ -52,7 +52,14 @@ class BaseLLMProvider(ABC):
         pass
 
     @abstractmethod
-    def _raw_generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def _raw_generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        *,
+        max_output_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
         """
         Internal: Generate raw text from model.
         Subclasses implement this. Not exposed publicly.
@@ -107,6 +114,28 @@ class BaseLLMProvider(ABC):
 
         logger.error(f"JSON parse failed after {self.max_retries} attempts")
         return {"_error": True, "_raw": raw}
+
+    def generate_text(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        *,
+        max_output_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        """
+        Generate raw text synchronously.
+
+        For drafting and other natural-language workloads that do not require
+        JSON parsing.
+        """
+        self.ensure_initialized()
+        return self._raw_generate(
+            prompt,
+            system_prompt,
+            max_output_tokens=max_output_tokens,
+            temperature=temperature,
+        )
 
     def generate_batch(
         self,
@@ -312,6 +341,39 @@ class BaseLLMProvider(ABC):
         """
         import asyncio
         return await asyncio.to_thread(self._raw_generate, prompt, system_prompt)
+
+    async def agenerate_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
+        max_output_tokens: int = 300,
+    ) -> Dict[str, Any]:
+        """
+        Async generate with normalized tool definitions.
+
+        Normalized tool definitions follow the existing OpenAI-style shape:
+        {
+            "function": {
+                "name": "...",
+                "description": "...",
+                "parameters": {...json schema...}
+            }
+        }
+
+        Providers with native tool support should override this. The default
+        implementation signals lack of support explicitly rather than silently
+        ignoring tools.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not support tool calling")
+
+    def supports_tools(self) -> bool:
+        """Whether this provider implements native tool calling."""
+        return False
+
+    def supports_files(self) -> bool:
+        """Whether this provider implements file-aware generation."""
+        return False
 
     def ensure_initialized(self) -> None:
         """Ensure provider is initialized before use"""

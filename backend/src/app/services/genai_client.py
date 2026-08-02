@@ -20,7 +20,8 @@ def get_genai_client() -> Optional[genai.Client]:
     if _client is not None:
         return _client
 
-    api_key = (get_settings().GOOGLE_API_KEY or "").strip()
+    settings = get_settings()
+    api_key = (settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY or "").strip()
     if not api_key:
         return None
 

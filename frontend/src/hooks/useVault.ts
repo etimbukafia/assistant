@@ -6,7 +6,9 @@ import {
   fetchDiaryContextEntries,
   createDiaryContextEntry,
   updateDiaryContextEntry,
-  deleteDiaryContextEntry,
+  correctCaptureCategory,
+  patchContextCapture,
+  removeContextCaptureLink,
   fetchDiaryContacts,
   fetchContactByEmail,
   createDiaryContact,
@@ -14,7 +16,7 @@ import {
   deleteDiaryContact,
   VaultNoteType,
   DiaryEntryType,
-  DiaryImportance,
+  DiaryCaptureScopeType,
   DiaryEntryLink,
   DiaryContextEntry,
   DiaryContact,
@@ -28,11 +30,24 @@ export const vaultKeys = {
 export const diaryKeys = {
   entries: (params?: Record<string, unknown>) => ["diary", "entries", params] as const,
   contacts: (q?: string) => ["diary", "contacts", q] as const,
-  contactByEmail: (email: string) => ["diary", "contact-by-email", email] as const,
+  contactLookup: (email?: string | null) => ["diary", "contact-lookup", hashDiaryContactLookup(email)] as const,
 };
 
 const ENTRIES_KEY = ["diary", "entries"] as const;
 const CONTACTS_KEY = ["diary", "contacts"] as const;
+const VISIBLE_ENTRY_STATUSES = new Set<DiaryContextEntry["status"]>(["active", "stale"]);
+
+function hashDiaryContactLookup(email?: string | null): string {
+  const normalized = (email || "").trim().toLowerCase();
+  if (!normalized) return "none";
+
+  let hash = 2166136261;
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
 
 export function useVaultNotes(params?: { note_type?: VaultNoteType; q?: string; limit?: number; offset?: number }) {
   return useQuery({
@@ -62,10 +77,15 @@ export function useVaultMutations() {
 
 // ── Diary hooks ─────────────────────────────────────────────────────────────
 
-export function useDiaryEntries(params?: { type?: DiaryEntryType }) {
+export function useDiaryEntries(
+  params?: { type?: DiaryEntryType; entity_type?: DiaryContextEntry["entity_type"]; entity_id?: string },
+  options?: { refetchInterval?: number | false }
+) {
   return useQuery({
     queryKey: diaryKeys.entries(params),
     queryFn: () => fetchDiaryContextEntries(params),
+    refetchOnWindowFocus: true,
+    refetchInterval: options?.refetchInterval,
   });
 }
 
@@ -78,7 +98,7 @@ export function useDiaryContacts(q?: string) {
 
 export function useContactByEmail(email: string | null) {
   return useQuery({
-    queryKey: diaryKeys.contactByEmail(email || ""),
+    queryKey: diaryKeys.contactLookup(email),
     queryFn: () => fetchContactByEmail(email!),
     enabled: !!email,
     retry: false,
@@ -100,10 +120,10 @@ export function useDiaryMutations() {
 
   const createEntry = useMutation({
     mutationFn: (payload: {
-      type: DiaryEntryType;
-      content: string;
-      importance_level?: DiaryImportance;
-      expires_at?: string | null;
+      text: string;
+      scope_type: DiaryCaptureScopeType;
+      scope_id?: string | null;
+      linked_to?: string | null;
       links?: DiaryEntryLink[];
     }) => createDiaryContextEntry(payload),
     onMutate: async (payload) => {
@@ -112,35 +132,27 @@ export function useDiaryMutations() {
       const optimistic: DiaryContextEntry = {
         id: -Date.now(),
         user_id: "",
-        type: payload.type,
-        content: payload.content,
-        entity_type: "global",
-        entity_id: null,
-        linked_to: null,
+        type: "insight",
+        content: payload.text,
+        raw_text: payload.text,
+        entity_type: payload.scope_type,
+        entity_id: payload.scope_id ?? null,
+        linked_to: payload.linked_to ?? null,
         created_by: "You",
-        importance_level: payload.importance_level ?? "normal",
         status: "active",
-        expires_at: payload.expires_at ?? null,
+        classification_status: "pending",
+        classification_confidence: null,
+        user_corrected: false,
+        expires_at: null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        links: payload.links ?? [],
+        links: (payload.links ?? []).map((link) => ({
+          ...link,
+          source: link.source ?? "user",
+        })),
       };
       qc.setQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }, (old) =>
         old ? [optimistic, ...old] : [optimistic]
-      );
-      return { snapshot };
-    },
-    onError: (_err, _vars, ctx) => { if (ctx) rollbackEntries(ctx.snapshot); },
-    onSettled: () => qc.invalidateQueries({ queryKey: ENTRIES_KEY }),
-  });
-
-  const deleteEntry = useMutation({
-    mutationFn: (id: number) => deleteDiaryContextEntry(id),
-    onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: ENTRIES_KEY });
-      const snapshot = qc.getQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }) as EntriesSnapshot;
-      qc.setQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }, (old) =>
-        old ? old.filter((e) => e.id !== id) : old
       );
       return { snapshot };
     },
@@ -154,9 +166,22 @@ export function useDiaryMutations() {
     onMutate: async ({ id, payload }) => {
       await qc.cancelQueries({ queryKey: ENTRIES_KEY });
       const snapshot = qc.getQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }) as EntriesSnapshot;
+      const nextStatus = payload.status;
       qc.setQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }, (old) =>
         old
-          ? old.map((e) => e.id === id ? { ...e, ...payload, updated_at: new Date().toISOString() } : e)
+          ? old
+              .map((e) => e.id === id ? {
+                ...e,
+                content: payload.text ?? e.content,
+                raw_text: payload.text ?? e.raw_text,
+                status: nextStatus ?? e.status,
+                entity_type: payload.scope_type ?? e.entity_type,
+                entity_id: payload.scope_id ?? e.entity_id,
+                linked_to: payload.linked_to ?? e.linked_to,
+                expires_at: payload.expires_at ?? e.expires_at,
+                updated_at: new Date().toISOString(),
+              } : e)
+              .filter((entry) => !nextStatus || VISIBLE_ENTRY_STATUSES.has(entry.status))
           : old
       );
       return { snapshot };
@@ -223,5 +248,97 @@ export function useDiaryMutations() {
     onSettled: () => qc.invalidateQueries({ queryKey: CONTACTS_KEY }),
   });
 
-  return { createEntry, updateEntry, deleteEntry, createContact, updateContact, deleteContact };
+  const correctCategory = useMutation({
+    mutationFn: ({ id, category }: { id: number; category: DiaryEntryType }) =>
+      correctCaptureCategory(id, category),
+    onMutate: async ({ id, category }) => {
+      await qc.cancelQueries({ queryKey: ENTRIES_KEY });
+      const snapshot = qc.getQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }) as EntriesSnapshot;
+      qc.setQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }, (old) =>
+        old
+          ? old.map((e) =>
+              e.id === id
+                ? { ...e, type: category, classification_status: "user_corrected" as const, user_corrected: true, updated_at: new Date().toISOString() }
+                : e
+            )
+          : old
+      );
+      return { snapshot };
+    },
+    onError: (_err, _vars, ctx) => { if (ctx) rollbackEntries(ctx.snapshot); },
+    onSettled: () => qc.invalidateQueries({ queryKey: ENTRIES_KEY }),
+  });
+
+  const updateCapture = useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: Parameters<typeof patchContextCapture>[1] }) =>
+      patchContextCapture(id, payload),
+    onMutate: async ({ id, payload }) => {
+      await qc.cancelQueries({ queryKey: ENTRIES_KEY });
+      const snapshot = qc.getQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }) as EntriesSnapshot;
+      const nextStatus = payload.status;
+      qc.setQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }, (old) =>
+        old
+          ? old
+              .map((entry) =>
+                entry.id === id
+                  ? {
+                      ...entry,
+                      ...(payload.type ? { type: payload.type } : null),
+                      ...(payload.text ? { content: payload.text, raw_text: payload.text } : null),
+                      ...(payload.scope_type ? { entity_type: payload.scope_type } : null),
+                      ...(payload.scope_id !== undefined ? { entity_id: payload.scope_id } : null),
+                      ...(payload.linked_to !== undefined ? { linked_to: payload.linked_to } : null),
+                      ...(payload.status ? { status: payload.status } : null),
+                      ...(payload.expires_at !== undefined ? { expires_at: payload.expires_at } : null),
+                      ...(payload.links ? { links: payload.links } : null),
+                      updated_at: new Date().toISOString(),
+                    }
+                  : entry
+              )
+              .filter((entry) => !nextStatus || VISIBLE_ENTRY_STATUSES.has(entry.status))
+          : old
+      );
+      return { snapshot };
+    },
+    onError: (_err, _vars, ctx) => { if (ctx) rollbackEntries(ctx.snapshot); },
+    onSettled: () => qc.invalidateQueries({ queryKey: ENTRIES_KEY }),
+  });
+
+  const removeCaptureLink = useMutation({
+    mutationFn: ({ id, entityType, entityId }: { id: number; entityType: string; entityId: string }) =>
+      removeContextCaptureLink(id, { entity_type: entityType, entity_id: entityId }),
+    onMutate: async ({ id, entityType, entityId }) => {
+      await qc.cancelQueries({ queryKey: ENTRIES_KEY });
+      const snapshot = qc.getQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }) as EntriesSnapshot;
+      qc.setQueriesData<DiaryContextEntry[]>({ queryKey: ENTRIES_KEY }, (old) =>
+        old
+          ? old.map((entry) =>
+              entry.id === id
+                ? {
+                    ...entry,
+                    links: (entry.links ?? []).filter(
+                      (link) => !(link.entity_type === entityType && link.entity_id === entityId)
+                    ),
+                    updated_at: new Date().toISOString(),
+                  }
+                : entry
+            )
+          : old
+      );
+      return { snapshot };
+    },
+    onError: (_err, _vars, ctx) => { if (ctx) rollbackEntries(ctx.snapshot); },
+    onSettled: () => qc.invalidateQueries({ queryKey: ENTRIES_KEY }),
+  });
+
+  return {
+    createEntry,
+    updateEntry,
+    updateCapture,
+    removeCaptureLink,
+    correctCategory,
+    createContact,
+    updateContact,
+    deleteContact,
+  };
 }

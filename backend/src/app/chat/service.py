@@ -22,6 +22,7 @@ import logging
 import time
 import os
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.data.models import (
@@ -45,6 +46,7 @@ from .orchestrator import ChatOrchestrator
 from .approval_intent import ApprovalIntentKind, PendingActionRef, parse_approval_intent
 from .tool_policy import CONTEXT_QUERY_PHRASES
 from app.services.hot_context_cache import get_hot_context_cache_service
+from app.services.context_memory_policy import is_retrieval_status_allowed
 from app.services.mention_context import MentionContextService
 from app.services.warm_cache import get_warm_cache_service
 from app.services.entity_cache_coordinator import EntityCacheCoordinator
@@ -136,6 +138,26 @@ _EMAIL_SCOPE_HINT_RE = re.compile(
     r"(@\S+|\bthread\b|\bmessage\b|\breply to\b|\brespond to\b|\babout\b|\bregarding\b|\bfrom\b)",
     re.IGNORECASE,
 )
+_ENTITY_RESOLUTION_PATTERNS = [
+    re.compile(r"\bwith\s+([A-Za-z0-9][\w&.'-]*(?:\s+[A-Za-z0-9][\w&.'-]*){0,3})", re.IGNORECASE),
+    re.compile(r"\babout\s+([A-Za-z0-9][\w&.'-]*(?:\s+[A-Za-z0-9][\w&.'-]*){0,3})", re.IGNORECASE),
+    re.compile(r"\bapprove(?:d)?\s+([A-Za-z0-9][\w&.'-]*(?:\s+[A-Za-z0-9][\w&.'-]*){0,3})", re.IGNORECASE),
+    re.compile(r"\bknow about\s+([A-Za-z0-9][\w&.'-]*(?:\s+[A-Za-z0-9][\w&.'-]*){0,3})", re.IGNORECASE),
+    re.compile(r"\bfor\s+([A-Za-z0-9][\w&.'-]*(?:\s+[A-Za-z0-9][\w&.'-]*){0,3})", re.IGNORECASE),
+]
+_ENTITY_CANDIDATE_STOPWORDS = {
+    "me",
+    "us",
+    "them",
+    "this",
+    "that",
+    "it",
+    "today",
+    "yesterday",
+    "tomorrow",
+    "next week",
+    "last week",
+}
 
 
 def detect_tool_intent(message: str) -> bool:
@@ -344,42 +366,17 @@ class ChatService:
                 else:
                     contact = None
                     if ref_id:
-                        contact = (
-                            self.db.query(Contact)
-                            .filter(
-                                Contact.user_id == self.user_id,
-                                (Contact.email == ref_id.lower())
-                                | (Contact.name.ilike(ref_id))
-                                | (Contact.name.ilike(f"%{ref_id}%")),
-                            )
-                            .first()
-                        )
+                        contact = self._find_unique_contact_by_exact_name(ref_id)
                     if not contact and label_lookup:
-                        contact = (
-                            self.db.query(Contact)
-                            .filter(
-                                Contact.user_id == self.user_id,
-                                (Contact.name.ilike(label_lookup)) | (Contact.name.ilike(f"%{label_lookup}%")),
-                            )
-                            .first()
-                        )
+                        contact = self._find_unique_contact_by_exact_name(label_lookup)
                     if contact:
                         email = (contact.email or "").lower()
                     if not email:
                         legacy_contact = None
                         if ref_id:
-                            legacy_contact = self.db.query(ContactContext).filter(
-                                ContactContext.user_id == self.user_id,
-                                (ContactContext.contact_email == ref_id) |
-                                (ContactContext.contact_name.ilike(ref_id)) |
-                                (ContactContext.contact_name.ilike(f"%{ref_id}%"))
-                            ).first()
+                            legacy_contact = self._find_unique_legacy_contact_by_exact_name(ref_id)
                         if not legacy_contact and label_lookup:
-                            legacy_contact = self.db.query(ContactContext).filter(
-                                ContactContext.user_id == self.user_id,
-                                (ContactContext.contact_name.ilike(label_lookup)) |
-                                (ContactContext.contact_name.ilike(f"%{label_lookup}%"))
-                            ).first()
+                            legacy_contact = self._find_unique_legacy_contact_by_exact_name(label_lookup)
                         if legacy_contact:
                             email = legacy_contact.contact_email
                 if email:
@@ -599,7 +596,7 @@ class ChatService:
                         ContextEntry.id == entry_id,
                         ContextEntry.user_id == self.user_id,
                     ).first()
-                if entry:
+                if entry and is_retrieval_status_allowed(status=getattr(entry, "status", None)):
                     resolved_memory.append(
                         {
                             "id": entry.id,
@@ -608,7 +605,6 @@ class ChatService:
                             "entity_type": self._sanitize_mention_text(entry.entity_type, max_len=64),
                             "entity_id": self._sanitize_mention_text(entry.entity_id, max_len=220),
                             "status": self._sanitize_mention_text(getattr(entry, "status", None), max_len=32),
-                            "importance_level": self._sanitize_mention_text(entry.importance_level, max_len=32),
                             "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
                         }
                     )
@@ -620,6 +616,301 @@ class ChatService:
             "memory": resolved_memory,
             "entities": resolved_entities,
         }
+
+    def _extract_entity_resolution_candidates(self, content: str) -> List[str]:
+        text = self._sanitize_mention_text(content, max_len=400)
+        if not text:
+            return []
+
+        candidates: List[str] = []
+        seen = set()
+        for pattern in _ENTITY_RESOLUTION_PATTERNS:
+            for match in pattern.finditer(text):
+                candidate = self._normalize_mention_lookup(match.group(1), max_len=120)
+                candidate = re.sub(r"\b(and|or|that|which|where|when|from)\b.*$", "", candidate, flags=re.IGNORECASE).strip()
+                candidate = candidate.strip(".,;:!?")
+                if not candidate:
+                    continue
+                if candidate.lower() in _ENTITY_CANDIDATE_STOPWORDS:
+                    continue
+                key = candidate.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(candidate)
+        return candidates
+
+    def _resolve_memory_query_entities(self, content: str, existing_entities: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        candidates = self._extract_entity_resolution_candidates(content)
+        if not candidates:
+            return {"status": "none", "candidates": [], "resolved_entities": [], "options": [], "candidate": None}
+
+        for candidate in candidates:
+            contact_matches = (
+                self.db.query(Contact)
+                .filter(
+                    Contact.user_id == self.user_id,
+                    func.lower(Contact.name) == candidate.lower(),
+                )
+                .order_by(Contact.updated_at.desc(), Contact.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            if len(contact_matches) == 1 and contact_matches[0].email:
+                contact = contact_matches[0]
+                return {
+                    "status": "resolved",
+                    "candidates": candidates,
+                    "candidate": candidate,
+                    "resolved_entities": [
+                        {
+                            "kind": "contact",
+                            "ref": (contact.email or "").lower(),
+                            "label": (contact.name or contact.email or candidate).strip(),
+                        }
+                    ],
+                    "resolved_contacts": [
+                        {
+                            "email": (contact.email or "").lower(),
+                            "label": (contact.name or contact.email or candidate).strip(),
+                        }
+                    ],
+                    "options": [],
+                }
+            if len(contact_matches) > 1:
+                return {
+                    "status": "ambiguous",
+                    "candidates": candidates,
+                    "candidate": candidate,
+                    "resolved_entities": [],
+                    "resolved_contacts": [],
+                    "options": [self._format_contact_resolution_option(item) for item in contact_matches[:4]],
+                }
+
+            loose_contacts = (
+                self.db.query(Contact)
+                .filter(
+                    Contact.user_id == self.user_id,
+                    func.lower(Contact.name).ilike(f"%{candidate.lower()}%"),
+                )
+                .order_by(Contact.updated_at.desc(), Contact.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            if len(loose_contacts) == 1 and loose_contacts[0].email:
+                contact = loose_contacts[0]
+                return {
+                    "status": "resolved",
+                    "candidates": candidates,
+                    "candidate": candidate,
+                    "resolved_entities": [
+                        {
+                            "kind": "contact",
+                            "ref": (contact.email or "").lower(),
+                            "label": (contact.name or contact.email or candidate).strip(),
+                        }
+                    ],
+                    "resolved_contacts": [
+                        {
+                            "email": (contact.email or "").lower(),
+                            "label": (contact.name or contact.email or candidate).strip(),
+                        }
+                    ],
+                    "options": [],
+                }
+            if len(loose_contacts) > 1:
+                return {
+                    "status": "ambiguous",
+                    "candidates": candidates,
+                    "candidate": candidate,
+                    "resolved_entities": [],
+                    "resolved_contacts": [],
+                    "options": [self._format_contact_resolution_option(item) for item in loose_contacts[:4]],
+                }
+
+            generic_matches = self._search_entity_resolution_candidates(candidate)
+            if len(generic_matches) == 1:
+                item = generic_matches[0]
+                return {
+                    "status": "resolved",
+                    "candidates": candidates,
+                    "candidate": candidate,
+                    "resolved_entities": [
+                        {
+                            "kind": item["kind"],
+                            "ref": item["ref"],
+                            "label": item["label"],
+                        }
+                    ],
+                    "resolved_contacts": [],
+                    "options": [],
+                }
+            if len(generic_matches) > 1:
+                return {
+                    "status": "ambiguous",
+                    "candidates": candidates,
+                    "candidate": candidate,
+                    "resolved_entities": [],
+                    "resolved_contacts": [],
+                    "options": generic_matches[:4],
+                }
+
+        return {
+            "status": "unresolved",
+            "candidates": candidates,
+            "candidate": candidates[0],
+            "resolved_entities": [],
+            "resolved_contacts": [],
+            "options": [],
+        }
+
+    def _search_entity_resolution_candidates(self, candidate: str) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        query = candidate.lower()
+
+        refs = (
+            self.db.query(EntityReference)
+            .filter(
+                EntityReference.user_id == self.user_id,
+                EntityReference.entity_type.in_(["thread", "event"]),
+                func.lower(EntityReference.display_name).ilike(f"%{query}%"),
+            )
+            .order_by(EntityReference.updated_at.desc(), EntityReference.created_at.desc())
+            .limit(4)
+            .all()
+        )
+        for item in refs:
+            results.append(
+                {
+                    "kind": item.entity_type,
+                    "ref": item.ref,
+                    "label": (item.display_name or item.ref or candidate).strip(),
+                    "subtitle": f"{(item.entity_type or 'entity').strip().title()} | {(item.ref or '').strip()}",
+                }
+            )
+
+        tasks = (
+            self.db.query(Task)
+            .filter(
+                Task.user_id == self.user_id,
+                Task.title.ilike(f"%{query}%"),
+            )
+            .order_by(Task.updated_at.desc(), Task.created_at.desc())
+            .limit(4)
+            .all()
+        )
+        for task in tasks:
+            results.append(
+                {
+                    "kind": "task",
+                    "ref": str(task.id),
+                    "label": (task.title or candidate).strip(),
+                    "subtitle": f"Task | {(task.status or 'unknown').strip()}",
+                }
+            )
+
+        deduped: Dict[str, Dict[str, Any]] = {}
+        for item in results:
+            deduped[f"{item['kind']}:{item['ref']}"] = item
+        return list(deduped.values())
+
+    def _format_contact_resolution_option(self, contact: Contact) -> Dict[str, Any]:
+        subtitle_parts = [part for part in [contact.role, contact.organization, contact.email] if part]
+        return {
+            "kind": "contact",
+            "ref": (contact.email or "").lower() or f"contact:{contact.id}",
+            "label": (contact.name or contact.email or f"Contact {contact.id}").strip(),
+            "subtitle": " | ".join(subtitle_parts),
+        }
+
+    def _merge_natural_entity_resolution(
+        self,
+        resolved_mentions: Dict[str, Any],
+        resolution: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(resolved_mentions or {})
+        merged["entity_resolution"] = {
+            "status": resolution.get("status"),
+            "candidate": resolution.get("candidate"),
+            "candidates": resolution.get("candidates") or [],
+        }
+        if resolution.get("status") != "resolved":
+            return merged
+
+        merged_entities = list(merged.get("entities") or [])
+        merged_contacts = list(merged.get("contacts") or [])
+        seen_entities = {f"{item.get('kind')}:{str(item.get('ref') or '').lower()}" for item in merged_entities}
+        seen_contacts = {str(item.get("email") or "").lower() for item in merged_contacts}
+
+        for item in resolution.get("resolved_entities", []) or []:
+            key = f"{item.get('kind')}:{str(item.get('ref') or '').lower()}"
+            if key in seen_entities:
+                continue
+            seen_entities.add(key)
+            merged_entities.append(item)
+
+        for item in resolution.get("resolved_contacts", []) or []:
+            key = str(item.get("email") or "").lower()
+            if not key or key in seen_contacts:
+                continue
+            seen_contacts.add(key)
+            merged_contacts.append(item)
+
+        merged["entities"] = merged_entities
+        merged["contacts"] = merged_contacts
+        return merged
+
+    def _build_entity_resolution_clarification(self, resolution: Dict[str, Any]) -> str:
+        status = (resolution.get("status") or "").strip().lower()
+        candidate = self._sanitize_mention_text(resolution.get("candidate"), max_len=80) or "that"
+        options = resolution.get("options") or []
+
+        if status == "ambiguous" and options:
+            rendered = []
+            for option in options[:3]:
+                label = self._sanitize_mention_text(option.get("label"), max_len=80)
+                subtitle = self._sanitize_mention_text(option.get("subtitle"), max_len=120)
+                rendered.append(f"{label} ({subtitle})" if subtitle else label)
+            return f"I found multiple matches for {candidate}: " + "; ".join(rendered) + ". Which one did you mean?"
+
+        return (
+            f"I couldn't find a direct match for {candidate}. "
+            "If you want, tell me who or what you mean, or ask me to search by topic instead."
+        )
+
+    def _find_unique_contact_by_exact_name(self, lookup: str) -> Optional[Contact]:
+        value = self._normalize_mention_lookup(lookup)
+        if not value:
+            return None
+        matches = (
+            self.db.query(Contact)
+            .filter(
+                Contact.user_id == self.user_id,
+                func.lower(Contact.name) == value.lower(),
+            )
+            .limit(2)
+            .all()
+        )
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
+    def _find_unique_legacy_contact_by_exact_name(self, lookup: str) -> Optional[ContactContext]:
+        value = self._normalize_mention_lookup(lookup)
+        if not value:
+            return None
+        matches = (
+            self.db.query(ContactContext)
+            .filter(
+                ContactContext.user_id == self.user_id,
+                func.lower(ContactContext.contact_name) == value.lower(),
+            )
+            .limit(2)
+            .all()
+        )
+        if len(matches) != 1:
+            return None
+        return matches[0]
 
     def _parse_since_hint(self, content: str) -> Optional[datetime]:
         """
@@ -704,6 +995,49 @@ class ChatService:
             self.db.commit()
         
         return messages
+
+    def get_recent_messages(
+        self,
+        session_id: str,
+        limit: int = 200,
+    ) -> List[ChatMessage]:
+        """
+        Get most recent messages for a session in chronological order.
+
+        This avoids loading only the oldest records when a session grows large.
+        """
+        session = self.get_session(session_id)
+        if not session:
+            return []
+
+        recent_desc = (
+            self.db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session_id)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(max(1, limit))
+            .all()
+        )
+        recent = list(reversed(recent_desc))
+
+        timeout_cutoff = datetime.now(timezone.utc) - timedelta(minutes=PROCESSING_TIMEOUT_MINUTES)
+        updated_any = False
+        for msg in recent:
+            metadata = msg.message_metadata or {}
+            if metadata.get("status") == "processing" and msg.created_at < timeout_cutoff:
+                msg.content = USER_TIMEOUT_MESSAGE
+                msg.message_metadata = {
+                    **metadata,
+                    "status": "timeout",
+                    "error": USER_TIMEOUT_MESSAGE,
+                    "internal_error": "Processing exceeded time limit",
+                    "timed_out_at": datetime.now(timezone.utc).isoformat(),
+                }
+                updated_any = True
+
+        if updated_any:
+            self.db.commit()
+
+        return recent
     
     # =========================================================================
     # Pending Action Operations
@@ -752,11 +1086,13 @@ class ChatService:
         try:
             result = self._execute_approved_action(action)
             action.status = "approved"
+            action.reviewed_at = datetime.now(timezone.utc)
             self.db.commit()
             return {"success": True, "result": result}
         except Exception as e:
             logger.error(f"Error executing action {action_id}: {e}")
             action.status = "failed"
+            action.reviewed_at = datetime.now(timezone.utc)
             self.db.commit()
             return {"success": False, "error": str(e)}
     
@@ -770,6 +1106,7 @@ class ChatService:
             return {"success": False, "error": f"Action already {action.status}"}
         
         action.status = "rejected"
+        action.reviewed_at = datetime.now(timezone.utc)
         self.db.commit()
         return {"success": True}
     
@@ -1086,6 +1423,11 @@ class ChatService:
         mentions = mentions or []
         mentions_started = time.perf_counter()
         resolved_mentions = self._resolve_mentions(mentions)
+        natural_resolution = self._resolve_memory_query_entities(
+            content,
+            existing_entities=resolved_mentions.get("entities", []),
+        )
+        resolved_mentions = self._merge_natural_entity_resolution(resolved_mentions, natural_resolution)
         mentions_ms = int((time.perf_counter() - mentions_started) * 1000)
         logger.info(
             "chat_mentions_resolved user=%s session=%s mentions_in=%s contacts=%s emails=%s knowledge=%s memory=%s entities=%s",
@@ -1154,8 +1496,18 @@ class ChatService:
             session_id,
             "user",
             content,
-            metadata={"mentions": mentions, "resolved_mentions": resolved_mentions},
-            auto_commit=False,
+            metadata={
+                "mentions": mentions,
+                "resolved_mentions": resolved_mentions,
+                "entity_resolution": {
+                    "status": natural_resolution.get("status"),
+                    "candidate": natural_resolution.get("candidate"),
+                    "candidates": natural_resolution.get("candidates") or [],
+                },
+            },
+            # Commit immediately so user input never disappears on refresh,
+            # even if downstream orchestration fails.
+            auto_commit=True,
         )
         get_hot_context_cache_service().append_message(
             tenant_id="default",
@@ -1171,6 +1523,34 @@ class ChatService:
             # Clean up the content for title: remove newlines, extra spaces
             clean_content = " ".join(content.split())
             session.title = clean_content[:50] + ("..." if len(clean_content) > 50 else "")
+
+        if natural_resolution.get("status") == "ambiguous":
+            assistant_text = self._build_entity_resolution_clarification(natural_resolution)
+            assistant_msg = self.add_message(
+                session.id,
+                "assistant",
+                assistant_text,
+                metadata={
+                    "entity_resolution_status": natural_resolution.get("status"),
+                    "entity_resolution_candidate": natural_resolution.get("candidate"),
+                    "entity_resolution_options": natural_resolution.get("options") or [],
+                },
+                auto_commit=False,
+            )
+            get_hot_context_cache_service().append_message(
+                tenant_id="default",
+                user_id=self.user_id,
+                session_id=session.id,
+                role="assistant",
+                content=assistant_text,
+            )
+            self.db.commit()
+            return ChatResponse(
+                status=ProcessingStatus.COMPLETE,
+                message_id=assistant_msg.id,
+                response=assistant_text,
+                pending_actions=None,
+            )
 
         # REFLECTION MODE: Always synchronous
         if session.session_type == "reflection":
@@ -1287,7 +1667,8 @@ class ChatService:
             "user",
             content,
             metadata={"approval_intent": intent.kind.value, "approval_reason": intent.reason},
-            auto_commit=False,
+            # Persist user command first for reliable chat history.
+            auto_commit=True,
         )
         get_hot_context_cache_service().append_message(
             tenant_id="default",
@@ -1427,6 +1808,7 @@ class ChatService:
                 "action_data": action.action_data,
                 "status": action.status,
                 "message_id": action.message_id,
+                "reviewed_at": action.reviewed_at.isoformat() if action.reviewed_at else None,
             }
             for action in actions
         ]
@@ -1510,7 +1892,8 @@ class ChatService:
                     "action_type": pa.action_type,
                     "action_data": pa.action_data,
                     "status": pa.status,
-                    "message_id": pa.message_id
+                    "message_id": pa.message_id,
+                    "reviewed_at": pa.reviewed_at.isoformat() if pa.reviewed_at else None,
                 })
             pending_ms = int((time.perf_counter() - pending_started) * 1000)
 

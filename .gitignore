@@ -49,6 +49,8 @@ tests/
 !knowledge-vault-prd.md
 !backend/principles.md
 
+!dodo_payments/*.md
+
 # Google credentials
 credentials.json
 token.json

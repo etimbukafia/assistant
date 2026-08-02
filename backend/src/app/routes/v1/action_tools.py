@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.security.auth import get_current_user, get_db_for_user, require_active_subscription, AuthenticatedUser
+from app.security.auth import get_db_for_user, require_active_subscription, AuthenticatedUser
 from app.superpowers.email_drafting import EmailDraftingService
 from app.superpowers.meeting_brief import MeetingBriefService
 
@@ -60,7 +60,7 @@ def draft_email(
 @router.post("/meeting-brief")
 def generate_meeting_brief(
     request: MeetingBriefRequest,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_active_subscription),
     db: Session = Depends(get_db_for_user),
 ):
     service = MeetingBriefService(db=db, user_id=user.user_id)

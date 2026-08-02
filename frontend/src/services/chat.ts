@@ -222,7 +222,14 @@ export const chatService = {
     },
 
     async deleteSession(sessionId: string): Promise<void> {
-        await api.delete(`/chat/sessions/${sessionId}`);
+        try {
+            await api.delete(`/chat/sessions/${sessionId}`);
+        } catch (error: any) {
+            // Deletion is idempotent from UX perspective.
+            // If the session is already gone, treat as success.
+            if (error?.response?.status === 404) return;
+            throw error;
+        }
     },
 
     // =============================================================================

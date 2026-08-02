@@ -3,7 +3,9 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from app.data.models import ThreadState, ContactContext, VaultMetricsDaily, VaultProposal
+from sqlalchemy import func
+
+from app.data.models import Contact, ThreadState, ContactContext, VaultMetricsDaily, VaultProposal
 from app.services.vault import VaultService
 
 
@@ -149,6 +151,14 @@ class VaultIngestionService:
             email = (p.get("email") or "").lower()
             if not email:
                 continue
+            canonical_contact = self.db.query(Contact.id).filter(
+                Contact.user_id == self.user_id,
+                Contact.email.isnot(None),
+                func.lower(Contact.email) == email,
+            ).first()
+            if canonical_contact:
+                continue
+
             contact = self.db.query(ContactContext).filter(
                 ContactContext.user_id == self.user_id,
                 ContactContext.contact_email == email,

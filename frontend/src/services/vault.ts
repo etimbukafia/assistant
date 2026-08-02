@@ -21,15 +21,18 @@ export interface VaultNote {
   last_referenced_at?: string | null;
 }
 
-export type DiaryEntryType = "decision" | "commitment" | "preferences" | "risks" | "relationships";
+export const CONTEXT_CAPTURE_MAX_CHARS = 2000;
+
+export type DiaryEntryType = "decision" | "commitment" | "preference" | "risk" | "insight";
 export type DiaryEntityType = "global" | "contact" | "thread" | "event" | "message" | "task";
-export type DiaryImportance = "low" | "normal" | "high";
-export type DiaryStatus = "active" | "resolved" | "stale" | "archived";
+export type DiaryCaptureScopeType = "global" | "contact" | "message" | "event" | "task";
+export type DiaryStatus = "active" | "resolved" | "stale" | "archived" | "forgotten";
 
 export interface DiaryEntryLink {
   entity_type: string;
   entity_id: string;
   display_name: string;
+  source: "user" | "teeks";
 }
 
 export interface DiaryContextEntry {
@@ -37,12 +40,16 @@ export interface DiaryContextEntry {
   user_id: string;
   type: DiaryEntryType;
   content: string;
+  raw_text?: string | null;
   entity_type: DiaryEntityType;
   entity_id?: string | null;
   linked_to?: string | null;
   created_by: "Teeks" | "You";
-  importance_level: DiaryImportance;
   status: DiaryStatus;
+  classification_status: "pending" | "classified" | "user_corrected";
+  classification_confidence?: number | null;
+  user_corrected: boolean;
+  scope_resolved?: boolean;
   expires_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -109,45 +116,82 @@ export async function fetchDiaryContextEntries(params?: {
   entity_type?: DiaryEntityType;
   entity_id?: string;
 }): Promise<DiaryContextEntry[]> {
-  const response = await api.get("/vault/diary/context-entries", { params });
+  const response = await api.get("/context/captures", { params });
   return response.data;
 }
 
 export async function createDiaryContextEntry(payload: {
-  type: DiaryEntryType;
-  content: string;
-  entity_type?: DiaryEntityType;
-  entity_id?: string | null;
-  created_by?: "Teeks" | "You";
-  importance_level?: DiaryImportance;
-  status?: DiaryStatus;
-  expires_at?: string | null;
+  text: string;
+  scope_type: DiaryCaptureScopeType;
+  scope_id?: string | null;
+  linked_to?: string | null;
   links?: DiaryEntryLink[];
 }): Promise<DiaryContextEntry> {
-  const response = await api.post("/vault/diary/context-entries", payload);
+  const response = await api.post("/context/captures", payload);
   return response.data;
 }
 
+// Use correctCaptureCategory (PATCH /context/captures/{id}) for category changes.
+// This function intentionally does not accept `type` to prevent bypassing the audit trail.
 export async function updateDiaryContextEntry(
   id: number,
-  payload: Partial<Pick<DiaryContextEntry, "content" | "importance_level" | "status" | "expires_at">>
+  payload: {
+    text?: string;
+    status?: DiaryStatus;
+    scope_type?: DiaryCaptureScopeType;
+    scope_id?: string | null;
+    linked_to?: string | null;
+    expires_at?: string | null;
+  }
 ): Promise<DiaryContextEntry> {
-  const response = await api.put(`/vault/diary/context-entries/${id}`, payload);
+  const response = await api.patch(`/context/captures/${id}`, payload);
   return response.data;
 }
 
-export async function deleteDiaryContextEntry(id: number): Promise<{ deleted: boolean; id: number }> {
-  const response = await api.delete(`/vault/diary/context-entries/${id}`);
+// Canonical category correction — sets user_corrected=true and preserves audit trail
+export async function correctCaptureCategory(
+  id: number,
+  category: DiaryEntryType
+): Promise<DiaryContextEntry> {
+  const response = await api.patch(`/context/captures/${id}`, { type: category });
+  return response.data;
+}
+
+export async function patchContextCapture(
+  id: number,
+  payload: {
+    type?: DiaryEntryType;
+    text?: string;
+    scope_type?: DiaryCaptureScopeType;
+    scope_id?: string | null;
+    linked_to?: string | null;
+    status?: DiaryStatus;
+    expires_at?: string | null;
+    links?: DiaryEntryLink[];
+  }
+): Promise<DiaryContextEntry> {
+  const response = await api.patch(`/context/captures/${id}`, payload);
+  return response.data;
+}
+
+export async function removeContextCaptureLink(
+  id: number,
+  params: {
+    entity_type: string;
+    entity_id: string;
+  }
+): Promise<DiaryContextEntry> {
+  const response = await api.delete(`/context/captures/${id}/links`, { params });
   return response.data;
 }
 
 export async function fetchDiaryContacts(q?: string): Promise<DiaryContact[]> {
-  const response = await api.get("/vault/diary/contacts", { params: { q: q || undefined } });
+  const response = await api.get("/contacts", { params: { q: q || undefined } });
   return response.data;
 }
 
 export async function fetchContactByEmail(email: string): Promise<DiaryContact> {
-  const response = await api.get(`/vault/diary/contacts/by-email/${encodeURIComponent(email)}`);
+  const response = await api.post("/contacts/lookup", { email });
   return response.data;
 }
 
@@ -159,7 +203,7 @@ export async function createDiaryContact(payload: {
   notes?: string | null;
   category?: string | null;
 }): Promise<DiaryContact> {
-  const response = await api.post("/vault/diary/contacts", payload);
+  const response = await api.post("/contacts", payload);
   return response.data;
 }
 
@@ -167,12 +211,12 @@ export async function updateDiaryContact(
   id: number,
   payload: Partial<Pick<DiaryContact, "name" | "email" | "role" | "organization" | "notes" | "category">>
 ): Promise<DiaryContact> {
-  const response = await api.put(`/vault/diary/contacts/${id}`, payload);
+  const response = await api.put(`/contacts/${id}`, payload);
   return response.data;
 }
 
 export async function deleteDiaryContact(id: number): Promise<{ deleted: boolean; id: number }> {
-  const response = await api.delete(`/vault/diary/contacts/${id}`);
+  const response = await api.delete(`/contacts/${id}`);
   return response.data;
 }
 

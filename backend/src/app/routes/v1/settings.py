@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.security.auth import get_user_settings, get_db_for_user
 from app.data.models import UserSettings
 from app.data.schemas import UserSettingsResponse, UserSettingsUpdateRequest
+from app.services.warm_cache import get_warm_cache_service
+from app.services.warm_context_snapshot import build_profile_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,16 @@ def get_settings(
     db: Session = Depends(get_db_for_user)
 ):
     """Get current user settings. Auto-creates on first access."""
+    try:
+        get_warm_cache_service().get_or_build(
+            tenant_id="default",
+            user_id=settings.user_id,
+            scope="profile",
+            builder=lambda: build_profile_snapshot(db, settings.user_id),
+        )
+    except Exception:
+        logger.debug("settings_profile_prewarm_failed user=%s", settings.user_id, exc_info=True)
+
     logger.info(
         f"Settings for user={settings.user_id}: "
         f"tier={settings.subscription_tier}, status={settings.subscription_status}, "
@@ -146,4 +158,9 @@ def update_existing_settings(
 
     db.commit()
     db.refresh(settings)
+    get_warm_cache_service().invalidate_scope(
+        tenant_id="default",
+        user_id=settings.user_id,
+        scope="profile",
+    )
     return _enrich_settings_response(settings, db)

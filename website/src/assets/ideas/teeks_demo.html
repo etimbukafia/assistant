@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teeks - AI Executive Assistant Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap');
+
+        :root {
+            --bg-base: #050B14;
+            --bg-surface: rgba(255,255,255,0.08);
+            --bg-elevated: rgba(22,33,62,0.6);
+            --accent-auburn: #7E2E2E;
+            --accent-copper: #D97745;
+            --accent-teal: #1A5F7A;
+            --accent-mint: #A0E8AF;
+            --text-primary: #FFFFFF;
+            --text-secondary: #A0AEC0;
+            --text-muted: #64748B;
+            --border: rgba(255,255,255,0.1);
+            --border-strong: rgba(255,255,255,0.2);
+            --success: #8A9A5B;
+            --error: #FF6B6B;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0a1628 0%, #050B14 50%, #0d1a2d 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .font-serif {
+            font-family: 'Playfair Display', serif;
+        }
+
+        /* Custom Scrollbar */
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+        /* Glass Effects */
+        .glass {
+            background: var(--bg-surface);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+        }
+
+        .glass-heavy {
+            background: rgba(5,11,20,0.85);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .glass-warm {
+            background: rgba(217,119,69,0.12);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(217,119,69,0.3);
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideInRight {
+            from { opacity: 0; transform: translateX(30px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+
+        @keyframes sparkle {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.9); }
+        }
+
+        @keyframes typing {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
+
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        .animate-fade-in {
+            animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        .animate-slide-in {
+            animation: slideInRight 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        .animate-pulse {
+            animation: pulse 2s infinite;
+        }
+
+        .animate-sparkle {
+            animation: sparkle 1.5s ease-in-out infinite;
+        }
+
+        .shimmer {
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+        }
+
+        .typing-dot {
+            animation: typing 1s infinite;
+        }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        /* Gradient Overlays */
+        .gradient-overlay {
+            background: linear-gradient(135deg,
+                rgba(126,46,46,0.15) 0%,
+                transparent 40%,
+                rgba(26,95,122,0.1) 100%
+            );
+        }
+
+        /* Status Badges */
+        .badge-urgent {
+            background: var(--error);
+            color: white;
+        }
+
+        .badge-pending {
+            background: rgba(217,119,69,0.2);
+            color: var(--accent-copper);
+            border: 1px dashed var(--accent-copper);
+        }
+
+        .badge-approved {
+            background: rgba(138,154,91,0.2);
+            color: var(--success);
+        }
+
+        /* Left Border Accents */
+        .border-accent-urgent {
+            border-left: 3px solid var(--accent-auburn);
+        }
+
+        .border-accent-insight {
+            border-left: 3px solid var(--accent-teal);
+        }
+
+        .border-accent-pending {
+            border-left: 3px solid var(--accent-copper);
+        }
+
+        /* Phone Frame */
+        .phone-frame {
+            background: var(--bg-base);
+            border-radius: 50px;
+            box-shadow:
+                0 0 0 2px rgba(255,255,255,0.1),
+                0 25px 50px -12px rgba(0,0,0,0.5),
+                0 0 100px rgba(126,46,46,0.1);
+        }
+
+        /* Notch */
+        .notch {
+            width: 120px;
+            height: 30px;
+            background: #000;
+            border-radius: 0 0 20px 20px;
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+        }
+
+        /* Bottom Navigation Pill */
+        .nav-pill {
+            background: rgba(5,11,20,0.9);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        /* Summary Box */
+        .summary-box {
+            background: rgba(30,58,138,0.08);
+            border-left: 2px solid var(--accent-teal);
+        }
+
+        /* Task Item */
+        .task-pending {
+            border: 1px dashed var(--accent-copper);
+            background: rgba(217,119,69,0.08);
+        }
+
+        .task-approved {
+            border: 1px solid rgba(138,154,91,0.3);
+            background: rgba(138,154,91,0.08);
+        }
+
+        /* Calendar Event */
+        .calendar-event {
+            border-left: 3px solid var(--accent-teal);
+        }
+
+        /* Hidden by default */
+        .hidden { display: none !important; }
+
+        /* Ensure visibility */
+        .visible { display: block !important; }
+    </style>
+</head>
+<body>
+
+    <!-- Phone Container -->
+    <div class="phone-frame relative w-full max-w-[375px] h-[812px] max-h-[95vh] overflow-hidden flex flex-col">
+
+        <!-- Gradient Overlay -->
+        <div class="absolute inset-0 gradient-overlay pointer-events-none z-0"></div>
+
+        <!-- Notch -->
+        <div class="notch"></div>
+
+        <!-- Status Bar -->
+        <div class="flex justify-between items-center px-8 pt-14 pb-2 text-white text-xs z-10">
+            <span>9:41</span>
+            <div class="flex items-center gap-1">
+                <i class="fa-solid fa-signal text-[10px]"></i>
+                <i class="fa-solid fa-wifi text-[10px]"></i>
+                <i class="fa-solid fa-battery-full text-[10px]"></i>
+            </div>
+        </div>
+
+        <!-- Header -->
+        <div id="header" class="flex justify-between items-center px-5 py-3 z-10">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-[#D97745] to-[#7E2E2E] flex items-center justify-center text-white font-semibold text-sm">
+                    SA
+                </div>
+                <div>
+                    <h1 class="font-serif text-white text-lg font-semibold">Inbox</h1>
+                </div>
+            </div>
+            <div class="flex items-center gap-4">
+                <button class="text-white/70 hover:text-white transition-colors">
+                    <i class="fa-solid fa-magnifying-glass text-lg"></i>
+                </button>
+                <div class="relative">
+                    <button class="text-white/70 hover:text-white transition-colors">
+                        <i class="fa-solid fa-bell text-lg"></i>
+                    </button>
+                    <span class="absolute -top-1 -right-1 w-4 h-4 bg-[#7E2E2E] rounded-full text-[10px] text-white flex items-center justify-center">3</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Chips -->
+        <div id="filter-chips" class="flex gap-2 px-5 py-2 z-10">
+            <button class="px-4 py-1.5 rounded-full text-xs font-medium bg-white/10 text-white border border-white/20">
+                All
+            </button>
+            <button class="px-4 py-1.5 rounded-full text-xs font-medium text-white/60 hover:bg-white/5 transition-colors">
+                Needs Reply
+            </button>
+            <button class="px-4 py-1.5 rounded-full text-xs font-medium text-white/60 hover:bg-white/5 transition-colors">
+                Today
+            </button>
+        </div>
+
+        <!-- Main Content Area -->
+        <div id="main-content" class="flex-1 overflow-y-auto px-4 pt-2 pb-24 scrollbar-hide z-10">
+
+            <!-- Messages Container -->
+            <div id="messages-container" class="flex flex-col gap-3">
+                <!-- Dynamic content injected here -->
+            </div>
+
+            <!-- Processing Indicator -->
+            <div id="processing-indicator" class="hidden mt-4">
+                <div class="glass rounded-2xl p-4 flex items-center gap-3">
+                    <div class="flex gap-1">
+                        <div class="w-2 h-2 bg-[#D97745] rounded-full typing-dot"></div>
+                        <div class="w-2 h-2 bg-[#D97745] rounded-full typing-dot"></div>
+                        <div class="w-2 h-2 bg-[#D97745] rounded-full typing-dot"></div>
+                    </div>
+                    <span class="text-white/60 text-sm" id="processing-text">Donna is analyzing...</span>
+                </div>
+            </div>
+
+            <!-- AI Insight Panel -->
+            <div id="insight-panel" class="hidden mt-4 animate-fade-in-up">
+                <!-- Dynamic content -->
+            </div>
+
+            <!-- Draft Reply Panel -->
+            <div id="draft-panel" class="hidden mt-4 animate-fade-in-up">
+                <!-- Dynamic content -->
+            </div>
+
+        </div>
+
+        <!-- Bottom Navigation -->
+        <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-20">
+            <div class="nav-pill rounded-full px-2 py-2 flex items-center gap-1">
+                <button class="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 text-white">
+                    <i class="fa-solid fa-envelope text-sm"></i>
+                    <span class="text-xs font-medium">Inbox</span>
+                </button>
+                <button class="flex items-center gap-2 px-4 py-2 rounded-full text-white/50 hover:text-white/80 transition-colors">
+                    <i class="fa-solid fa-bolt text-sm"></i>
+                </button>
+                <button class="flex items-center gap-2 px-4 py-2 rounded-full text-white/50 hover:text-white/80 transition-colors">
+                    <i class="fa-solid fa-calendar text-sm"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Chat FAB -->
+        <button id="chat-fab" class="absolute bottom-24 right-5 w-14 h-14 rounded-full bg-gradient-to-br from-[#D97745] to-[#7E2E2E] flex items-center justify-center shadow-lg z-20 hover:scale-105 transition-transform">
+            <i class="fa-solid fa-wand-magic-sparkles text-white text-lg"></i>
+        </button>
+
+        <!-- Home Indicator -->
+        <div class="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-white/30 rounded-full z-30"></div>
+
+    </div>
+
+    <!-- Templates -->
+
+    <!-- Email Card Template -->
+    <template id="email-card-template">
+        <div class="email-card glass rounded-2xl p-4 animate-fade-in-up cursor-pointer hover:bg-white/[0.12] transition-all">
+            <div class="flex justify-between items-start mb-2">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-full bg-gradient-to-br from-[#1A5F7A] to-[#0d3344] flex items-center justify-center text-white text-xs font-semibold sender-avatar">
+                        JD
+                    </div>
+                    <div>
+                        <span class="text-white text-sm font-medium sender-name">John Doe</span>
+                        <span class="text-white/40 text-xs ml-2 email-time">2:30 PM</span>
+                    </div>
+                </div>
+                <div class="badges flex gap-2">
+                    <!-- Badges injected here -->
+                </div>
+            </div>
+            <h3 class="text-white font-medium text-sm mb-1 email-subject">Email Subject</h3>
+            <p class="text-white/50 text-xs line-clamp-2 email-preview">Email preview text...</p>
+
+            <!-- AI Summary (hidden by default) -->
+            <div class="ai-summary hidden mt-3 summary-box rounded-lg p-3 animate-fade-in">
+                <div class="flex items-center gap-2 mb-2">
+                    <i class="fa-solid fa-wand-magic-sparkles text-[#1A5F7A] text-xs animate-sparkle"></i>
+                    <span class="text-[#1A5F7A] text-[10px] font-bold uppercase tracking-wider">Donna's Summary</span>
+                </div>
+                <p class="text-white/80 text-xs italic summary-text">AI summary here...</p>
+            </div>
+
+            <!-- Extracted Tasks (hidden by default) -->
+            <div class="extracted-tasks hidden mt-3 space-y-2 animate-fade-in">
+                <!-- Tasks injected here -->
+            </div>
+        </div>
+    </template>
+
+    <!-- Task Item Template -->
+    <template id="task-item-template">
+        <div class="task-item task-pending rounded-xl p-3 flex items-center justify-between animate-slide-in">
+            <div class="flex items-center gap-3">
+                <i class="fa-solid fa-wand-magic-sparkles text-[#D97745] text-sm animate-sparkle"></i>
+                <div>
+                    <p class="text-white text-xs font-medium task-title">Task title</p>
+                    <span class="text-white/40 text-[10px] task-meta">Suggested by AI</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <button class="approve-btn w-7 h-7 rounded-full bg-[#8A9A5B]/20 flex items-center justify-center hover:bg-[#8A9A5B]/40 transition-colors">
+                    <i class="fa-solid fa-check text-[#8A9A5B] text-xs"></i>
+                </button>
+                <button class="dismiss-btn w-7 h-7 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors">
+                    <i class="fa-solid fa-xmark text-white/50 text-xs"></i>
+                </button>
+            </div>
+        </div>
+    </template>
+
+    <!-- Calendar Event Template -->
+    <template id="calendar-event-template">
+        <div class="calendar-event glass rounded-2xl p-4 animate-fade-in-up">
+            <div class="flex justify-between items-start">
+                <div>
+                    <span class="text-[#1A5F7A] text-[10px] font-bold uppercase tracking-wider">Upcoming</span>
+                    <h3 class="text-white font-medium text-sm mt-1 event-title">Meeting Title</h3>
+                    <p class="text-white/50 text-xs mt-1 event-time">10:00 AM - 11:00 AM</p>
+                </div>
+                <div class="flex items-center gap-2 bg-[#D97745]/20 px-2 py-1 rounded-full">
+                    <i class="fa-solid fa-wand-magic-sparkles text-[#D97745] text-[10px]"></i>
+                    <span class="text-[#D97745] text-[10px] font-medium">Prep needed</span>
+                </div>
+            </div>
+            <div class="briefing hidden mt-3 pt-3 border-t border-white/10 animate-fade-in">
+                <!-- Briefing content -->
+            </div>
+        </div>
+    </template>
+
+    <!-- Contact Context Template -->
+    <template id="contact-context-template">
+        <div class="glass-warm rounded-xl p-3 animate-fade-in">
+            <div class="flex items-center gap-2 mb-2">
+                <i class="fa-solid fa-user-circle text-[#D97745] text-sm"></i>
+                <span class="text-[#D97745] text-[10px] font-bold uppercase tracking-wider">Contact Memory</span>
+            </div>
+            <div class="space-y-1 text-xs">
+                <div class="flex justify-between">
+                    <span class="text-white/60">Last interaction:</span>
+                    <span class="text-white context-last-interaction">3 days ago</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-white/60">Response time:</span>
+                    <span class="text-white context-response-time">Usually within 2 hours</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-white/60">Relationship:</span>
+                    <span class="text-white context-relationship">VIP Client</span>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <!-- Decision Pattern Template -->
+    <template id="decision-pattern-template">
+        <div class="glass rounded-xl p-3 animate-fade-in border-l-2 border-[#A0E8AF]">
+            <div class="flex items-center gap-2 mb-2">
+                <i class="fa-solid fa-brain text-[#A0E8AF] text-sm"></i>
+                <span class="text-[#A0E8AF] text-[10px] font-bold uppercase tracking-wider">Pattern Learned</span>
+            </div>
+            <p class="text-white/80 text-xs pattern-text">You usually respond to this sender within 1 hour</p>
+        </div>
+    </template>
+
+    <!-- Draft Reply Template -->
+    <template id="draft-reply-template">
+        <div class="glass rounded-2xl p-4 animate-fade-in-up border border-[#7E2E2E]/30">
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-pen-fancy text-[#7E2E2E] text-sm"></i>
+                    <span class="text-[#7E2E2E] text-xs font-bold uppercase tracking-wider">Draft Reply</span>
+                </div>
+                <span class="text-white/40 text-[10px]">Suggest > Act</span>
+            </div>
+            <div class="bg-black/20 rounded-xl p-3 mb-3">
+                <p class="text-white/90 text-sm leading-relaxed draft-text">Draft reply content...</p>
+            </div>
+            <div class="flex gap-2">
+                <button class="flex-1 py-2.5 rounded-xl bg-[#7E2E2E] text-white text-xs font-medium hover:bg-[#9a3a3a] transition-colors">
+                    <i class="fa-solid fa-paper-plane mr-2"></i>Send
+                </button>
+                <button class="flex-1 py-2.5 rounded-xl bg-white/10 text-white text-xs font-medium hover:bg-white/20 transition-colors">
+                    <i class="fa-solid fa-pen mr-2"></i>Edit
+                </button>
+            </div>
+        </div>
+    </template>
+
+    <script>
+        // ============================================
+        // TEEKS DEMO - Configuration & Data
+        // ============================================
+
+        const messagesContainer = document.getElementById('messages-container');
+        const processingIndicator = document.getElementById('processing-indicator');
+        const processingText = document.getElementById('processing-text');
+        const insightPanel = document.getElementById('insight-panel');
+        const draftPanel = document.getElementById('draft-panel');
+
+        // Demo Emails
+        const emails = [
+            {
+                id: 1,
+                sender: "Sarah Chen",
+                senderInitials: "SC",
+                senderColor: "from-[#7E2E2E] to-[#5a2020]",
+                time: "Just now",
+                subject: "Q4 Strategy Review - Action Required",
+                preview: "Hi, I wanted to follow up on our discussion about the Q4 roadmap. We need to finalize the budget allocation by Friday...",
+                isUrgent: true,
+                needsReply: true,
+                summary: "Sarah needs budget approval for Q4 roadmap by Friday. She's proposing a 15% increase for the AI initiative and requests your sign-off on three key decisions.",
+                tasks: [
+                    { title: "Review Q4 budget proposal", priority: "urgent" },
+                    { title: "Approve AI initiative allocation", priority: "high" },
+                    { title: "Schedule follow-up with finance team", priority: "normal" }
+                ],
+                contactContext: {
+                    lastInteraction: "Yesterday",
+                    responseTime: "Usually within 30 mins",
+                    relationship: "Direct Report"
+                },
+                decisionPattern: "You typically approve Sarah's budget requests within 24 hours",
+                draftReply: "Hi Sarah,\n\nThank you for the detailed Q4 proposal. I've reviewed the budget allocation and I'm aligned with the 15% increase for the AI initiative.\n\nLet's schedule a quick sync with finance tomorrow to finalize the remaining items.\n\nBest,\nAlex"
+            },
+            {
+                id: 2,
+                sender: "Marcus Webb",
+                senderInitials: "MW",
+                senderColor: "from-[#1A5F7A] to-[#0d3344]",
+                time: "10:15 AM",
+                subject: "Board Presentation - Draft Ready",
+                preview: "The board presentation deck is ready for your review. I've incorporated the feedback from last week...",
+                isUrgent: false,
+                needsReply: false,
+                summary: "Marcus has completed the board presentation deck with your previous feedback incorporated. He's asking for a final review before the Thursday meeting.",
+                tasks: [
+                    { title: "Review board presentation deck", priority: "high" }
+                ],
+                contactContext: {
+                    lastInteraction: "2 days ago",
+                    responseTime: "Usually within 2 hours",
+                    relationship: "Strategy Lead"
+                }
+            },
+            {
+                id: 3,
+                sender: "Calendar",
+                senderInitials: "CA",
+                senderColor: "from-[#A0E8AF] to-[#6ab377]",
+                time: "9:00 AM",
+                subject: "Upcoming: Investor Call with Sequoia",
+                preview: "Your meeting with Sequoia partners is in 2 hours. Here's your briefing...",
+                isUrgent: false,
+                needsReply: false,
+                isCalendar: true,
+                calendarEvent: {
+                    title: "Investor Call - Sequoia",
+                    time: "11:00 AM - 12:00 PM",
+                    attendees: ["Alex (You)", "Mike Liu (Sequoia)", "Jenny Park (Sequoia)"],
+                    briefing: {
+                        agenda: "Series B discussion, growth metrics review",
+                        lastDiscussion: "Discussed TAM expansion in December",
+                        openTasks: "Send updated financials (due today)",
+                        prepNote: "Mike mentioned interest in enterprise pipeline"
+                    }
+                }
+            }
+        ];
+
+        // ============================================
+        // DEMO SCENARIO
+        // ============================================
+
+        const scenario = [
+            // Initial inbox load
+            { type: 'load-emails', delay: 500 },
+
+            // User taps first email - ThreadState processing
+            { type: 'select-email', emailId: 1, delay: 2500 },
+            { type: 'show-processing', text: 'Analyzing thread context...', delay: 500 },
+            { type: 'show-processing', text: 'Extracting action items...', delay: 1200 },
+            { type: 'show-processing', text: 'Building contact context...', delay: 1000 },
+            { type: 'hide-processing', delay: 800 },
+
+            // Show AI Summary (ThreadState Machine)
+            { type: 'show-summary', emailId: 1, delay: 300 },
+
+            // Show Contact Context Memory
+            { type: 'show-contact-context', emailId: 1, delay: 1500 },
+
+            // Show Decision Pattern Learning
+            { type: 'show-decision-pattern', emailId: 1, delay: 1500 },
+
+            // Show Extracted Tasks (Suggest > Act)
+            { type: 'show-tasks', emailId: 1, delay: 1500 },
+
+            // User approves a task
+            { type: 'approve-task', emailId: 1, taskIndex: 0, delay: 2000 },
+
+            // Show Draft Reply
+            { type: 'show-draft', emailId: 1, delay: 2000 },
+
+            // Pause to view
+            { type: 'pause', delay: 5000 },
+
+            // Reset and show Calendar Integration
+            { type: 'reset', delay: 500 },
+            { type: 'switch-to-calendar', delay: 500 },
+            { type: 'show-calendar-briefing', delay: 2000 },
+
+            // Final pause then restart
+            { type: 'pause', delay: 6000 },
+            { type: 'restart', delay: 500 }
+        ];
+
+        let currentStep = 0;
+        let currentSelectedEmail = null;
+
+        // ============================================
+        // DEMO ENGINE
+        // ============================================
+
+        function startDemo() {
+            currentStep = 0;
+            messagesContainer.innerHTML = '';
+            insightPanel.innerHTML = '';
+            insightPanel.classList.add('hidden');
+            draftPanel.innerHTML = '';
+            draftPanel.classList.add('hidden');
+            processStep();
+        }
+
+        function processStep() {
+            if (currentStep >= scenario.length) {
+                return;
+            }
+
+            const step = scenario[currentStep];
+
+            setTimeout(() => {
+                executeStep(step);
+                currentStep++;
+                processStep();
+            }, step.delay);
+        }
+
+        function executeStep(step) {
+            switch (step.type) {
+                case 'load-emails':
+                    loadEmails();
+                    break;
+                case 'select-email':
+                    selectEmail(step.emailId);
+                    break;
+                case 'show-processing':
+                    showProcessing(step.text);
+                    break;
+                case 'hide-processing':
+                    hideProcessing();
+                    break;
+                case 'show-summary':
+                    showSummary(step.emailId);
+                    break;
+                case 'show-contact-context':
+                    showContactContext(step.emailId);
+                    break;
+                case 'show-decision-pattern':
+                    showDecisionPattern(step.emailId);
+                    break;
+                case 'show-tasks':
+                    showTasks(step.emailId);
+                    break;
+                case 'approve-task':
+                    approveTask(step.emailId, step.taskIndex);
+                    break;
+                case 'show-draft':
+                    showDraft(step.emailId);
+                    break;
+                case 'switch-to-calendar':
+                    switchToCalendar();
+                    break;
+                case 'show-calendar-briefing':
+                    showCalendarBriefing();
+                    break;
+                case 'reset':
+                    resetDemo();
+                    break;
+                case 'restart':
+                    startDemo();
+                    break;
+                case 'pause':
+                    // Do nothing, just wait
+                    break;
+            }
+        }
+
+        // ============================================
+        // UI FUNCTIONS
+        // ============================================
+
+        function loadEmails() {
+            messagesContainer.innerHTML = '';
+
+            // Section header
+            const header = document.createElement('div');
+            header.className = 'flex items-center gap-2 mb-3 mt-2';
+            header.innerHTML = `
+                <span class="text-white/40 text-[10px] font-bold uppercase tracking-wider">Today</span>
+                <div class="flex-1 h-px bg-white/10"></div>
+            `;
+            messagesContainer.appendChild(header);
+
+            // Add emails with staggered animation
+            emails.forEach((email, index) => {
+                setTimeout(() => {
+                    addEmailCard(email);
+                }, index * 150);
+            });
+        }
+
+        function addEmailCard(email) {
+            const template = document.getElementById('email-card-template');
+            const card = template.content.cloneNode(true);
+            const cardElement = card.querySelector('.email-card');
+
+            cardElement.dataset.emailId = email.id;
+
+            // Set sender info
+            const avatar = card.querySelector('.sender-avatar');
+            avatar.textContent = email.senderInitials;
+            avatar.className = `w-8 h-8 rounded-full bg-gradient-to-br ${email.senderColor} flex items-center justify-center text-white text-xs font-semibold sender-avatar`;
+
+            card.querySelector('.sender-name').textContent = email.sender;
+            card.querySelector('.email-time').textContent = email.time;
+            card.querySelector('.email-subject').textContent = email.subject;
+            card.querySelector('.email-preview').textContent = email.preview;
+
+            // Add badges
+            const badgesContainer = card.querySelector('.badges');
+            if (email.isUrgent) {
+                badgesContainer.innerHTML += `<span class="badge-urgent px-2 py-0.5 rounded-full text-[10px] font-bold uppercase">Urgent</span>`;
+            }
+            if (email.needsReply) {
+                badgesContainer.innerHTML += `<span class="bg-white/10 text-white/70 px-2 py-0.5 rounded-full text-[10px]">Needs Reply</span>`;
+            }
+
+            // Add accent border for urgent
+            if (email.isUrgent) {
+                cardElement.classList.add('border-accent-urgent');
+            }
+
+            messagesContainer.appendChild(card);
+        }
+
+        function selectEmail(emailId) {
+            currentSelectedEmail = emails.find(e => e.id === emailId);
+
+            // Highlight selected email
+            const cards = document.querySelectorAll('.email-card');
+            cards.forEach(card => {
+                if (parseInt(card.dataset.emailId) === emailId) {
+                    card.classList.add('ring-1', 'ring-[#D97745]/50');
+                    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            });
+        }
+
+        function showProcessing(text) {
+            processingIndicator.classList.remove('hidden');
+            processingText.textContent = text;
+        }
+
+        function hideProcessing() {
+            processingIndicator.classList.add('hidden');
+        }
+
+        function showSummary(emailId) {
+            const card = document.querySelector(`.email-card[data-email-id="${emailId}"]`);
+            const email = emails.find(e => e.id === emailId);
+
+            if (card && email) {
+                const summaryBox = card.querySelector('.ai-summary');
+                summaryBox.querySelector('.summary-text').textContent = email.summary;
+                summaryBox.classList.remove('hidden');
+            }
+        }
+
+        function showContactContext(emailId) {
+            const email = emails.find(e => e.id === emailId);
+            if (!email || !email.contactContext) return;
+
+            const template = document.getElementById('contact-context-template');
+            const context = template.content.cloneNode(true);
+
+            context.querySelector('.context-last-interaction').textContent = email.contactContext.lastInteraction;
+            context.querySelector('.context-response-time').textContent = email.contactContext.responseTime;
+            context.querySelector('.context-relationship').textContent = email.contactContext.relationship;
+
+            insightPanel.innerHTML = '';
+            insightPanel.appendChild(context);
+            insightPanel.classList.remove('hidden');
+        }
+
+        function showDecisionPattern(emailId) {
+            const email = emails.find(e => e.id === emailId);
+            if (!email || !email.decisionPattern) return;
+
+            const template = document.getElementById('decision-pattern-template');
+            const pattern = template.content.cloneNode(true);
+
+            pattern.querySelector('.pattern-text').textContent = email.decisionPattern;
+
+            const container = document.createElement('div');
+            container.className = 'mt-3';
+            container.appendChild(pattern);
+            insightPanel.appendChild(container);
+        }
+
+        function showTasks(emailId) {
+            const card = document.querySelector(`.email-card[data-email-id="${emailId}"]`);
+            const email = emails.find(e => e.id === emailId);
+
+            if (card && email && email.tasks) {
+                const tasksContainer = card.querySelector('.extracted-tasks');
+                tasksContainer.innerHTML = `
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="text-[#D97745] text-[10px] font-bold uppercase tracking-wider">Suggested Tasks</span>
+                    </div>
+                `;
+
+                email.tasks.forEach((task, index) => {
+                    setTimeout(() => {
+                        const template = document.getElementById('task-item-template');
+                        const taskElement = template.content.cloneNode(true);
+
+                        taskElement.querySelector('.task-title').textContent = task.title;
+
+                        const taskItem = taskElement.querySelector('.task-item');
+                        taskItem.dataset.taskIndex = index;
+
+                        if (task.priority === 'urgent') {
+                            taskElement.querySelector('.task-meta').innerHTML = `<span class="text-[#FF6B6B]">Urgent</span> • Suggested by AI`;
+                        }
+
+                        tasksContainer.appendChild(taskElement);
+                    }, index * 200);
+                });
+
+                tasksContainer.classList.remove('hidden');
+            }
+        }
+
+        function approveTask(emailId, taskIndex) {
+            const card = document.querySelector(`.email-card[data-email-id="${emailId}"]`);
+            if (!card) return;
+
+            const taskItem = card.querySelector(`.task-item[data-task-index="${taskIndex}"]`);
+            if (taskItem) {
+                // Animate approval
+                taskItem.classList.remove('task-pending');
+                taskItem.classList.add('task-approved');
+                taskItem.style.borderStyle = 'solid';
+
+                const icon = taskItem.querySelector('.fa-wand-magic-sparkles');
+                icon.className = 'fa-solid fa-check text-[#8A9A5B] text-sm';
+
+                const meta = taskItem.querySelector('.task-meta');
+                meta.innerHTML = `<span class="text-[#8A9A5B]">Approved</span> • Added to Focus`;
+
+                // Hide buttons
+                const buttons = taskItem.querySelectorAll('button');
+                buttons.forEach(btn => btn.style.display = 'none');
+            }
+        }
+
+        function showDraft(emailId) {
+            const email = emails.find(e => e.id === emailId);
+            if (!email || !email.draftReply) return;
+
+            const template = document.getElementById('draft-reply-template');
+            const draft = template.content.cloneNode(true);
+
+            draft.querySelector('.draft-text').textContent = email.draftReply;
+
+            draftPanel.innerHTML = '';
+            draftPanel.appendChild(draft);
+            draftPanel.classList.remove('hidden');
+            draftPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function switchToCalendar() {
+            // Update header
+            document.querySelector('h1').textContent = 'Schedule';
+
+            // Update nav
+            const navButtons = document.querySelectorAll('.nav-pill button');
+            navButtons[0].classList.remove('bg-white/10');
+            navButtons[0].innerHTML = '<i class="fa-solid fa-envelope text-sm"></i>';
+            navButtons[2].classList.add('bg-white/10');
+            navButtons[2].innerHTML = '<i class="fa-solid fa-calendar text-sm"></i><span class="text-xs font-medium ml-2">Schedule</span>';
+
+            // Clear and load calendar
+            messagesContainer.innerHTML = '';
+            insightPanel.innerHTML = '';
+            insightPanel.classList.add('hidden');
+            draftPanel.innerHTML = '';
+            draftPanel.classList.add('hidden');
+
+            // Section header
+            const header = document.createElement('div');
+            header.className = 'flex items-center gap-2 mb-3 mt-2';
+            header.innerHTML = `
+                <span class="text-white/40 text-[10px] font-bold uppercase tracking-wider">Upcoming</span>
+                <div class="flex-1 h-px bg-white/10"></div>
+            `;
+            messagesContainer.appendChild(header);
+
+            // Add calendar event
+            const calendarEmail = emails.find(e => e.isCalendar);
+            if (calendarEmail) {
+                const template = document.getElementById('calendar-event-template');
+                const event = template.content.cloneNode(true);
+
+                event.querySelector('.event-title').textContent = calendarEmail.calendarEvent.title;
+                event.querySelector('.event-time').textContent = calendarEmail.calendarEvent.time;
+
+                messagesContainer.appendChild(event);
+            }
+        }
+
+        function showCalendarBriefing() {
+            const eventCard = document.querySelector('.calendar-event');
+            const calendarEmail = emails.find(e => e.isCalendar);
+
+            if (eventCard && calendarEmail) {
+                const briefing = eventCard.querySelector('.briefing');
+                const data = calendarEmail.calendarEvent.briefing;
+
+                briefing.innerHTML = `
+                    <div class="space-y-3">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i class="fa-solid fa-wand-magic-sparkles text-[#D97745] text-xs animate-sparkle"></i>
+                            <span class="text-[#D97745] text-[10px] font-bold uppercase tracking-wider">Meeting Briefing</span>
+                        </div>
+
+                        <div class="glass rounded-xl p-3 animate-fade-in" style="animation-delay: 0.1s">
+                            <span class="text-white/50 text-[10px] uppercase tracking-wider">Agenda</span>
+                            <p class="text-white text-xs mt-1">${data.agenda}</p>
+                        </div>
+
+                        <div class="glass rounded-xl p-3 animate-fade-in" style="animation-delay: 0.2s">
+                            <span class="text-white/50 text-[10px] uppercase tracking-wider">Last Discussion</span>
+                            <p class="text-white text-xs mt-1">${data.lastDiscussion}</p>
+                        </div>
+
+                        <div class="glass-warm rounded-xl p-3 animate-fade-in" style="animation-delay: 0.3s">
+                            <span class="text-[#D97745] text-[10px] uppercase tracking-wider">Open Task</span>
+                            <p class="text-white text-xs mt-1">${data.openTasks}</p>
+                        </div>
+
+                        <div class="glass rounded-xl p-3 border-l-2 border-[#A0E8AF] animate-fade-in" style="animation-delay: 0.4s">
+                            <span class="text-[#A0E8AF] text-[10px] uppercase tracking-wider">Prep Note</span>
+                            <p class="text-white text-xs mt-1">${data.prepNote}</p>
+                        </div>
+
+                        <div class="flex gap-2 mt-4 animate-fade-in" style="animation-delay: 0.5s">
+                            <button class="flex-1 py-2.5 rounded-xl bg-[#1A5F7A] text-white text-xs font-medium">
+                                <i class="fa-solid fa-video mr-2"></i>Join Call
+                            </button>
+                            <button class="py-2.5 px-4 rounded-xl bg-white/10 text-white text-xs font-medium">
+                                <i class="fa-solid fa-ellipsis"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+
+                briefing.classList.remove('hidden');
+            }
+        }
+
+        function resetDemo() {
+            // Reset header
+            document.querySelector('h1').textContent = 'Inbox';
+
+            // Reset nav
+            const navButtons = document.querySelectorAll('.nav-pill button');
+            navButtons[0].classList.add('bg-white/10');
+            navButtons[0].innerHTML = '<i class="fa-solid fa-envelope text-sm"></i><span class="text-xs font-medium ml-2">Inbox</span>';
+            navButtons[2].classList.remove('bg-white/10');
+            navButtons[2].innerHTML = '<i class="fa-solid fa-calendar text-sm"></i>';
+
+            // Clear content
+            messagesContainer.innerHTML = '';
+            insightPanel.innerHTML = '';
+            insightPanel.classList.add('hidden');
+            draftPanel.innerHTML = '';
+            draftPanel.classList.add('hidden');
+            currentSelectedEmail = null;
+        }
+
+        // ============================================
+        // START DEMO
+        // ============================================
+
+        window.addEventListener('load', () => {
+            setTimeout(startDemo, 800);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,66 +1,48 @@
 "use client";
 
-import { useRef, useState, useCallback, useMemo } from "react";
+import { useRef, useState, useCallback, useMemo, useEffect } from "react";
 import { toast } from "sonner";
-import { Plus, Link2, X, Trash2 } from "lucide-react";
+import { Plus, Link2, X, Trash2, SlidersHorizontal } from "lucide-react";
 import { useMentionComposer } from "@/hooks/useMentionComposer";
 import { useDiaryEntries, useDiaryContacts, useDiaryMutations } from "@/hooks/useVault";
-import type { DiaryEntryType, DiaryImportance, DiaryContextEntry, DiaryContact } from "@/services/vault";
+import { useNotificationsFeed } from "@/hooks/useNotifications";
+import { useAuth } from "@/context/AuthContext";
+import { VoiceCaptureButton } from "@/components/vault/VoiceCaptureButton";
+import {
+    CONTEXT_CAPTURE_MAX_CHARS,
+    type DiaryEntryType,
+    type DiaryCaptureScopeType,
+    type DiaryContextEntry,
+    type DiaryContact,
+} from "@/services/vault";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const CARD_SHADOW = "0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)";
 
 const ENTRY_TYPES: { value: DiaryEntryType; label: string }[] = [
-    { value: "risks", label: "Risk" },
+    { value: "risk", label: "Risk" },
     { value: "decision", label: "Decision" },
     { value: "commitment", label: "Commitment" },
-    { value: "preferences", label: "Preference" },
-    { value: "relationships", label: "Relationship" },
+    { value: "preference", label: "Preference" },
+    { value: "insight", label: "Insight" },
 ];
 
 const TYPE_COLORS: Record<DiaryEntryType, string> = {
-    risks: "border-obsidian/30 text-obsidian/70 bg-obsidian/[0.04]",
+    risk: "border-obsidian/30 text-obsidian/70 bg-obsidian/[0.04]",
     decision: "border-copper/40 text-copper bg-copper/[0.06]",
     commitment: "border-sage/40 text-sage bg-sage/[0.06]",
-    preferences: "border-teal/40 text-teal bg-teal/[0.06]",
-    relationships: "border-burgundy/40 text-burgundy bg-burgundy/[0.06]",
+    preference: "border-teal/40 text-teal bg-teal/[0.06]",
+    insight: "border-burgundy/40 text-burgundy bg-burgundy/[0.06]",
 };
-
-const ENTRY_PLACEHOLDERS: Record<DiaryEntryType, string> = {
-    risks: "Note a concern, blocker, or watchout you have spotted. Teeks will factor this in before suggesting actions or sending anything on your behalf. @mention to tie it to a thread or contact.",
-    decision: "Log a decision that has been made, what was decided, by whom, and the reasoning. Teeks will reference this so nothing gets re-litigated or contradicted. @mention to link to the source.",
-    commitment: "Record a promise or commitment, who said what and by when. Teeks will keep track so nothing slips through and you can follow up with confidence. @mention to link to the thread or person.",
-    preferences: "Note how a specific contact prefers to be communicated with, or what a particular event requires. Teeks will apply this when drafting or acting on anything involving them. @mention to link.",
-    relationships: "Describe how a person, thread, or event connects to you or the executive and the context behind the relationship. Teeks will use this to handle communications with the right tone and awareness. @mention to link.",
-};
+const PENDING_TYPE_COLOR = "border-secondary/40 text-secondary bg-secondary/[0.08]";
 
 const ENTITY_ICONS: Record<string, string> = {
     contact: "👤",
     task: "✓",
     event: "📅",
     thread: "✉",
+    message: "✉",
 };
-
-function toLocalDateTimeInput(value?: string | null): string {
-    if (!value) return "";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "";
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    const hh = String(date.getHours()).padStart(2, "0");
-    const mi = String(date.getMinutes()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
-}
-
-function toIsoOrNull(value: string): string | null {
-    if (!value.trim()) return null;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return null;
-    return date.toISOString();
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
 
 function groupEntriesByDate(entries: DiaryContextEntry[]) {
     const groups: { dateLabel: string; entries: DiaryContextEntry[] }[] = [];
@@ -103,17 +85,36 @@ function renderContentWithMentions(content: string, links: DiaryContextEntry["li
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
+const CONFIDENCE_UNCERTAIN_THRESHOLD = 0.7;
+
 function EntryCard({
     entry,
-    onDelete,
+    onForget,
     onEdit,
+    onCorrectCategory,
 }: {
     entry: DiaryContextEntry;
-    onDelete: (id: number) => void;
+    onForget: (id: number) => void;
     onEdit: (entry: DiaryContextEntry) => void;
+    onCorrectCategory: (id: number, category: DiaryEntryType) => void;
 }) {
+    const [pickerOpen, setPickerOpen] = useState(false);
     const typeLabel = ENTRY_TYPES.find((t) => t.value === entry.type)?.label ?? entry.type;
     const time = new Date(entry.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+
+    const isPending = entry.classification_status === "pending";
+    const isUncertain =
+        entry.classification_status === "classified" &&
+        typeof entry.classification_confidence === "number" &&
+        entry.classification_confidence < CONFIDENCE_UNCERTAIN_THRESHOLD;
+    const badgeLabel = isPending ? "Remembering" : typeLabel;
+    const badgeClass = isPending ? PENDING_TYPE_COLOR : TYPE_COLORS[entry.type];
+
+    const handlePickCategory = (e: React.MouseEvent, category: DiaryEntryType) => {
+        e.stopPropagation();
+        onCorrectCategory(entry.id, category);
+        setPickerOpen(false);
+    };
 
     return (
         <div
@@ -122,21 +123,71 @@ function EntryCard({
             onClick={() => onEdit(entry)}
         >
             <div className="flex items-center justify-between gap-2">
-                <span className={`text-[10px] font-bold uppercase tracking-[1.2px] px-2 py-0.5 rounded-full border font-inter ${TYPE_COLORS[entry.type]}`}>
-                    {typeLabel}
-                </span>
+                {/* Type badge — doubles as the picker trigger */}
                 <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setPickerOpen((v) => !v); }}
+                        className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[1.2px] px-2 py-0.5 rounded-full border font-inter transition-opacity hover:opacity-80 ${badgeClass}`}
+                        title={isPending ? "Remembering" : "Change category"}
+                    >
+                        {isUncertain ? (
+                            <span className="font-bold">?</span>
+                        ) : null}
+                        {badgeLabel}
+                    </button>
+                    {isUncertain && (
+                        <span className="text-[12px] text-muted-foreground font-inter">Teeks wasn't certain</span>
+                    )}
+                    {entry.entity_type !== "global" && entry.scope_resolved !== false && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground border border-border/60 rounded-full px-2 py-0.5 font-inter max-w-[150px]">
+                            <span aria-hidden>{ENTITY_ICONS[entry.entity_type] ?? ""}</span>
+                            <span className="truncate">{entry.linked_to ?? entry.entity_type}</span>
+                        </span>
+                    )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                    {entry.created_by === "Teeks" ? (
+                        <span className="text-[10px] font-medium border border-secondary/30 bg-secondary/[0.06] text-secondary rounded-full px-2 py-0.5 font-inter">
+                            Teeks
+                        </span>
+                    ) : (
+                        <span className="text-[10px] text-muted-foreground/50 font-inter">You</span>
+                    )}
                     <span className="text-[11px] text-muted-foreground font-inter">{time}</span>
                     <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); onDelete(entry.id); }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-burgundy"
-                        aria-label="Delete entry"
+                        onClick={(e) => { e.stopPropagation(); onForget(entry.id); }}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] font-medium text-muted-foreground hover:text-burgundy font-inter"
+                        aria-label="Forget this entry"
                     >
-                        <Trash2 size={13} />
+                        Forget this
                     </button>
                 </div>
             </div>
+
+            {/* Inline category picker */}
+            {pickerOpen && (
+                <div
+                    className="flex flex-wrap gap-1.5 pt-1 border-t border-border/40"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <span className="text-[10px] font-bold uppercase tracking-[1px] text-muted-foreground font-inter self-center mr-1">
+                        Change to:
+                    </span>
+                    {ENTRY_TYPES.filter((t) => t.value !== entry.type).map((t) => (
+                        <button
+                            key={t.value}
+                            type="button"
+                            onClick={(e) => handlePickCategory(e, t.value)}
+                            className={`text-[10px] font-bold uppercase tracking-[1.2px] px-2 py-0.5 rounded-full border font-inter transition-opacity hover:opacity-80 ${TYPE_COLORS[t.value]}`}
+                        >
+                            {t.label}
+                        </button>
+                    ))}
+                </div>
+            )}
 
             <p className="text-sm text-foreground leading-relaxed font-inter whitespace-pre-wrap">
                 {renderContentWithMentions(entry.content, entry.links ?? [])}
@@ -198,15 +249,58 @@ function ContactCard({
     );
 }
 
+// ── Feed skeleton ──────────────────────────────────────────────────────────
+
+function FeedSkeleton() {
+    return (
+        <div className="space-y-8">
+            {[0, 1].map((g) => (
+                <div key={g} className="space-y-3">
+                    <div className="flex items-center gap-3">
+                        <div className="h-3 w-36 rounded bg-muted-foreground/10 animate-pulse" />
+                        <div className="flex-1 h-px bg-border/40" />
+                    </div>
+                    <div className="space-y-3">
+                        {[0, 1, 2].map((i) => (
+                            <div
+                                key={i}
+                                className="bg-white border border-border rounded-[14px] p-4 space-y-3 animate-pulse"
+                                style={{ boxShadow: CARD_SHADOW }}
+                            >
+                                <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="h-5 w-16 rounded-full bg-muted-foreground/10" />
+                                        <div className="h-4 w-20 rounded-full bg-muted-foreground/[0.07]" />
+                                    </div>
+                                    <div className="h-3 w-10 rounded bg-muted-foreground/[0.07]" />
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="h-3.5 w-full rounded bg-muted-foreground/[0.07]" />
+                                    <div className="h-3.5 w-4/5 rounded bg-muted-foreground/[0.07]" />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
 
 export default function DiaryPage() {
+    const { settings } = useAuth();
+    const isPro = settings?.subscription_tier === "pro";
+
     const [activeView, setActiveView] = useState<"diary" | "people">("diary");
+    const recentCaptureIdsRef = useRef<Set<number>>(new Set());
+    const seenClassificationNotificationIdsRef = useRef<Set<number>>(new Set());
 
     // Composer state
     const [content, setContent] = useState("");
-    const [entryType, setEntryType] = useState<DiaryEntryType>("risks");
-    const [deadlineInput, setDeadlineInput] = useState("");
+    const [entryType, setEntryType] = useState<DiaryEntryType | "all">("all");
+    const [selectedScopeKey, setSelectedScopeKey] = useState("global");
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     // People state
@@ -218,18 +312,19 @@ export default function DiaryPage() {
     const [editingEntry, setEditingEntry] = useState<DiaryContextEntry | null>(null);
     const [editEntryFields, setEditEntryFields] = useState<{
         content: string;
-        importance_level: DiaryImportance;
-        expires_at: string;
-    }>({ content: "", importance_level: "normal", expires_at: "" });
+        type: DiaryEntryType;
+    }>({ content: "", type: "insight" });
 
     // Edit state — contacts
     const [editingContact, setEditingContact] = useState<DiaryContact | null>(null);
     const [editContactFields, setEditContactFields] = useState({ name: "", email: "", role: "", organization: "", notes: "" });
+    const [pendingRefreshMs, setPendingRefreshMs] = useState<number | false>(false);
+    const [filterOpen, setFilterOpen] = useState(false);
 
     // Data
-    const { data: entriesData, isLoading: entriesLoading } = useDiaryEntries();
+    const { data: entriesData, isLoading: entriesLoading } = useDiaryEntries(undefined, { refetchInterval: pendingRefreshMs });
     const { data: contacts = [], isLoading: contactsLoading } = useDiaryContacts(contactSearch || undefined);
-    const { createEntry, updateEntry, deleteEntry, createContact, updateContact, deleteContact } = useDiaryMutations();
+    const { createEntry, updateEntry, correctCategory, createContact, updateContact, deleteContact } = useDiaryMutations();
 
     // @mention support
     const {
@@ -252,42 +347,116 @@ export default function DiaryPage() {
     });
 
     const entries = useMemo(() => entriesData ?? [], [entriesData]);
+    const pendingEntryCount = useMemo(
+        () => entries.filter((entry) => entry.classification_status === "pending").length,
+        [entries]
+    );
+    const hasPendingEntries = pendingEntryCount > 0;
+    const classificationNotifications = useNotificationsFeed(10, 0, activeView === "diary" && hasPendingEntries);
+    const scopeOptions = useMemo(() => {
+        const options: Array<{
+            key: string;
+            label: string;
+            scopeType: DiaryCaptureScopeType;
+            scopeId: string | null;
+            linkedTo: string | null;
+        }> = [
+            { key: "global", label: "Global", scopeType: "global", scopeId: null, linkedTo: null },
+        ];
 
-    // Filter feed by the currently selected type chip
+        for (const mention of selectedMentions) {
+            if (!["contact", "message", "event", "task"].includes(mention.kind)) continue;
+            options.push({
+                key: `${mention.kind}:${mention.ref}`,
+                label: `${mention.kind[0].toUpperCase()}${mention.kind.slice(1)}: ${mention.label}`,
+                scopeType: mention.kind as DiaryCaptureScopeType,
+                scopeId: mention.ref,
+                linkedTo: mention.label,
+            });
+        }
+
+        return options;
+    }, [selectedMentions]);
+    const selectedScope = useMemo(
+        () => scopeOptions.find((option) => option.key === selectedScopeKey) ?? scopeOptions[0],
+        [scopeOptions, selectedScopeKey]
+    );
+    const activeEntryTypeLabel = useMemo(
+        () => entryType === "all" ? "All" : (ENTRY_TYPES.find((type) => type.value === entryType)?.label ?? entryType),
+        [entryType]
+    );
+
+    // Timeline: show all entries by default, optionally filtered by category
     const grouped = useMemo(() => {
-        const filtered = entries.filter((e) => e.type === entryType);
+        const filtered = entryType === "all" ? entries : entries.filter((e) => e.type === entryType);
         return groupEntriesByDate([...filtered].reverse());
     }, [entries, entryType]);
 
     const showDropdown = Boolean(mentionContext || loadingSuggestions);
 
+    useEffect(() => {
+        setPendingRefreshMs(activeView === "diary" && hasPendingEntries ? 5_000 : false);
+    }, [activeView, hasPendingEntries]);
+
+    useEffect(() => {
+        const notifications = classificationNotifications.data?.notifications ?? [];
+        if (!notifications.length) return;
+
+        for (const notification of notifications) {
+            if (seenClassificationNotificationIdsRef.current.has(notification.id)) {
+                continue;
+            }
+            seenClassificationNotificationIdsRef.current.add(notification.id);
+
+            if (notification.target_type !== "context_entry" || !notification.target_id) {
+                continue;
+            }
+
+            const entryId = Number(notification.target_id);
+            if (!Number.isFinite(entryId) || !recentCaptureIdsRef.current.has(entryId)) {
+                continue;
+            }
+
+            toast(notification.title, {
+                description: notification.body || undefined,
+            });
+            recentCaptureIdsRef.current.delete(entryId);
+        }
+    }, [classificationNotifications.data]);
+
     const handleSubmit = useCallback(async () => {
         const trimmed = content.trim();
         if (!trimmed) return;
+        if (trimmed.length > CONTEXT_CAPTURE_MAX_CHARS) {
+            toast.error(`Keep this under ${CONTEXT_CAPTURE_MAX_CHARS} characters.`);
+            return;
+        }
 
         const links = parseMentions(trimmed).map((m) => ({
             entity_type: m.kind,
             entity_id: m.ref,
             display_name: m.label,
+            source: "user" as const,
         }));
-        const expiresAt = toIsoOrNull(deadlineInput);
 
-        // Clear form immediately — cache updates optimistically in the mutation
         setContent("");
-        setDeadlineInput("");
+        setSelectedScopeKey("global");
         clearMentionState();
 
         try {
-            await createEntry.mutateAsync({
-                type: entryType,
-                content: trimmed,
-                expires_at: expiresAt,
+            const created = await createEntry.mutateAsync({
+                text: trimmed,
+                scope_type: selectedScope.scopeType,
+                scope_id: selectedScope.scopeId,
+                linked_to: selectedScope.linkedTo,
                 links,
             });
+            recentCaptureIdsRef.current.add(created.id);
+            toast("Got it.");
         } catch {
-            toast.error("That didn't save. Try again.");
+            toast.error("Didn't save. Try again.");
         }
-    }, [content, entryType, parseMentions, createEntry, clearMentionState, deadlineInput]);
+    }, [content, parseMentions, createEntry, clearMentionState, selectedScope]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         onInputKeyDown(e);
@@ -297,14 +466,15 @@ export default function DiaryPage() {
         }
     }, [onInputKeyDown, mentionSuggestions.length, handleSubmit]);
 
-    const handleDeleteEntry = useCallback(async (id: number) => {
+    const handleForgetEntry = useCallback(async (id: number) => {
         if (editingEntry?.id === id) setEditingEntry(null);
         try {
-            await deleteEntry.mutateAsync(id);
+            await updateEntry.mutateAsync({ id, payload: { status: "forgotten" } });
+            toast("Forgotten.");
         } catch {
-            toast.error("Couldn't delete. Try again later.");
+            toast.error("Couldn't forget that. Try again later.");
         }
-    }, [deleteEntry, editingEntry]);
+    }, [editingEntry, updateEntry]);
 
     const handleResolveEntry = useCallback(async (id: number) => {
         setEditingEntry(null);
@@ -319,28 +489,38 @@ export default function DiaryPage() {
         setEditingEntry(entry);
         setEditEntryFields({
             content: entry.content,
-            importance_level: entry.importance_level,
-            expires_at: toLocalDateTimeInput(entry.expires_at),
+            type: entry.type,
         });
     }, []);
+
+    const handleCorrectCategory = useCallback(async (id: number, category: DiaryEntryType) => {
+        try {
+            await correctCategory.mutateAsync({ id, category });
+            toast.success("Category updated.");
+        } catch {
+            toast.error("Could not update the category. Try again.");
+        }
+    }, [correctCategory]);
 
     const handleUpdateEntry = useCallback(async () => {
         if (!editingEntry) return;
         const id = editingEntry.id;
+        const typeChanged = editEntryFields.type !== editingEntry.type;
+        const textChanged = editEntryFields.content !== editingEntry.content;
         setEditingEntry(null);
         try {
-            await updateEntry.mutateAsync({
-                id,
-                payload: {
-                    content: editEntryFields.content,
-                    importance_level: editEntryFields.importance_level,
-                    expires_at: toIsoOrNull(editEntryFields.expires_at),
-                },
-            });
+            const updates: Array<Promise<unknown>> = [];
+            if (textChanged) {
+                updates.push(updateEntry.mutateAsync({ id, payload: { text: editEntryFields.content } }));
+            }
+            if (typeChanged) {
+                updates.push(correctCategory.mutateAsync({ id, category: editEntryFields.type }));
+            }
+            if (updates.length > 0) await Promise.all(updates);
         } catch {
             toast.error("Couldn't update. Try again later.");
         }
-    }, [editingEntry, editEntryFields, updateEntry]);
+    }, [editingEntry, editEntryFields, updateEntry, correctCategory]);
 
     const handleSaveContact = useCallback(async () => {
         if (!newContact.name.trim()) {
@@ -444,30 +624,33 @@ export default function DiaryPage() {
                 ))}
             </div>
 
-            {/* ══ DIARY VIEW ══ */}
+            {/* ══ CONTEXT VIEW ══ */}
             {activeView === "diary" && (
                 <div className="space-y-6">
+                    {hasPendingEntries && (
+                        <div
+                            className="relative overflow-hidden rounded-[14px] border border-border bg-white px-4 py-3"
+                            style={{ boxShadow: CARD_SHADOW }}
+                        >
+                            <div className="absolute inset-x-0 top-0 h-px bg-secondary/70" />
+                            <p className="text-[13px] font-medium text-foreground font-inter">
+                                Teeks is filing {pendingEntryCount} recent {pendingEntryCount === 1 ? "memory" : "memories"}.
+                            </p>
+                        </div>
+                    )}
+
                     {/* Composer */}
                     <div
                         className="bg-white border border-border rounded-[14px] p-4 space-y-3"
                         style={{ boxShadow: CARD_SHADOW }}
                     >
-                        {/* Type chips — also act as filter for the feed */}
-                        <div className="flex flex-wrap gap-2">
-                            {ENTRY_TYPES.map((t) => (
-                                <button
-                                    key={t.value}
-                                    type="button"
-                                    onClick={() => setEntryType(t.value)}
-                                    className={`rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-[1.2px] transition-all font-inter ${
-                                        entryType === t.value
-                                            ? TYPE_COLORS[t.value]
-                                            : "border-border/60 text-muted-foreground hover:border-border hover:text-foreground"
-                                    }`}
-                                >
-                                    {t.label}
-                                </button>
-                            ))}
+                        <div className="space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-[1px] text-muted-foreground font-inter">
+                                Remember this
+                            </p>
+                            <p className="text-[13px] text-muted-foreground font-inter leading-relaxed">
+                                Write the moment in plain language. Teeks will hold onto it.
+                            </p>
                         </div>
 
                         {/* Textarea + mention dropdown */}
@@ -517,22 +700,34 @@ export default function DiaryPage() {
                                 value={content}
                                 onChange={(e) => onInputChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
                                 onKeyDown={handleKeyDown}
-                                placeholder={ENTRY_PLACEHOLDERS[entryType]}
+                                placeholder="What just happened? A decision, a risk, something said — @mention what it's linked to."
                                 rows={4}
                                 className="w-full resize-none rounded-[8px] border border-border bg-linen/20 px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary transition-colors"
                             />
                         </div>
 
-                        <div>
-                            <label className="block text-[10px] font-bold uppercase tracking-[1px] text-muted-foreground font-inter mb-1">
-                                Relevant Until (optional)
-                            </label>
-                            <input
-                                type="datetime-local"
-                                value={deadlineInput}
-                                onChange={(e) => setDeadlineInput(e.target.value)}
-                                className="w-full rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary bg-white"
-                            />
+                        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+                            <div>
+                                <label className="block text-[10px] font-bold uppercase tracking-[1px] text-muted-foreground font-inter mb-1">
+                                    Save To
+                                </label>
+                                <select
+                                    value={selectedScope.key}
+                                    onChange={(e) => setSelectedScopeKey(e.target.value)}
+                                    className="w-full rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary bg-white"
+                                >
+                                    {scopeOptions.map((option) => (
+                                        <option key={option.key} value={option.key}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="flex items-end justify-end">
+                                <p className="text-[11px] text-muted-foreground font-inter">
+                                    {content.length}/{CONTEXT_CAPTURE_MAX_CHARS}
+                                </p>
+                            </div>
                         </div>
 
                         <div className="flex items-center justify-between">
@@ -550,23 +745,97 @@ export default function DiaryPage() {
                             ) : (
                                 <p className="text-[11px] text-muted-foreground/60 font-inter">⌘↵ to save</p>
                             )}
-                            <button
-                                type="button"
-                                onClick={handleSubmit}
-                                disabled={!content.trim() || createEntry.isPending}
-                                className="rounded-[8px] bg-primary px-4 py-2 text-[13px] font-semibold text-white hover:bg-primary/90 active:scale-[0.97] transition-all disabled:opacity-40 font-inter"
-                            >
-                                {createEntry.isPending ? "Saving…" : "Save"}
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <VoiceCaptureButton
+                                    scopeType={selectedScope.scopeType}
+                                    scopeId={selectedScope.scopeId}
+                                    linkedTo={selectedScope.linkedTo}
+                                    isPro={isPro}
+                                    disabled={createEntry.isPending}
+                                    onCaptureSaved={(entry) => {
+                                        recentCaptureIdsRef.current.add(entry.id);
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleSubmit}
+                                    disabled={!content.trim() || createEntry.isPending}
+                                    className="rounded-[8px] bg-primary px-4 py-2 text-[13px] font-semibold text-white hover:bg-primary/90 active:scale-[0.97] transition-all disabled:opacity-40 font-inter"
+                                >
+                                    {createEntry.isPending ? "Saving…" : "Remember"}
+                                </button>
+                            </div>
                         </div>
                     </div>
+                    {/* Feed header */}
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                            <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
+                                Memory
+                            </p>
+                            {entryType !== "all" && (
+                                <span className={`text-[10px] font-bold uppercase tracking-[1.2px] px-2 py-0.5 rounded-full border font-inter ${TYPE_COLORS[entryType]}`}>
+                                    {activeEntryTypeLabel}
+                                </span>
+                            )}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setFilterOpen((v) => !v)}
+                            title="Filter by type"
+                            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium font-inter transition-colors ${
+                                filterOpen || entryType !== "all"
+                                    ? "border-foreground/30 text-foreground bg-card"
+                                    : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
+                            }`}
+                        >
+                            <SlidersHorizontal size={11} />
+                            Filter
+                        </button>
+                    </div>
+
+                    {/* Filter pills — hidden by default */}
+                    {filterOpen && (
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setEntryType("all")}
+                                className={`rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-[1.2px] transition-all font-inter ${
+                                    entryType === "all"
+                                        ? "border-border text-foreground bg-card"
+                                        : "border-border/60 text-muted-foreground hover:border-border hover:text-foreground bg-white"
+                                }`}
+                            >
+                                All
+                            </button>
+                            {ENTRY_TYPES.map((t) => (
+                                <button
+                                    key={t.value}
+                                    type="button"
+                                    onClick={() => setEntryType(t.value)}
+                                    className={`rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-[1.2px] transition-all font-inter ${
+                                        entryType === t.value
+                                            ? TYPE_COLORS[t.value]
+                                            : "border-border/60 text-muted-foreground hover:border-border hover:text-foreground bg-white"
+                                    }`}
+                                >
+                                    {t.label}
+                                </button>
+                            ))}
+                        </div>
+                    )}
 
                     {/* Entry feed — filtered by selected type */}
                     {entriesLoading ? (
-                        <p className="text-sm text-muted-foreground font-inter">Loading entries…</p>
+                        <FeedSkeleton />
+                    ) : entries.length === 0 ? (
+                        <div className="py-16 text-center space-y-1">
+                            <p className="text-[15px] text-foreground font-inter">Nothing here yet.</p>
+                            <p className="text-[13px] text-muted-foreground font-inter">The best insights disappear in hours. Capture one now — Teeks will hold onto it.</p>
+                        </div>
                     ) : grouped.length === 0 ? (
                         <p className="py-12 text-sm text-muted-foreground font-inter text-center">
-                            No {ENTRY_TYPES.find((t) => t.value === entryType)?.label.toLowerCase() ?? entryType} entries yet.
+                            Nothing {activeEntryTypeLabel.toLowerCase()}-related yet.
                         </p>
                     ) : (
                         <div className="space-y-8">
@@ -583,8 +852,9 @@ export default function DiaryPage() {
                                             <EntryCard
                                                 key={entry.id}
                                                 entry={entry}
-                                                onDelete={handleDeleteEntry}
+                                                onForget={handleForgetEntry}
                                                 onEdit={handleEditEntry}
+                                                onCorrectCategory={handleCorrectCategory}
                                             />
                                         ))}
                                     </div>
@@ -725,32 +995,21 @@ export default function DiaryPage() {
                             className="w-full resize-none rounded-[8px] border border-border px-3 py-2.5 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
                         />
 
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="block text-[10px] font-bold uppercase tracking-[1px] text-muted-foreground font-inter mb-1">
-                                    Importance
-                                </label>
-                                <select
-                                    value={editEntryFields.importance_level}
-                                    onChange={(e) => setEditEntryFields((p) => ({ ...p, importance_level: e.target.value as DiaryImportance }))}
-                                    className="w-full rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary bg-white"
-                                >
-                                    <option value="low">Low</option>
-                                    <option value="normal">Normal</option>
-                                    <option value="high">High</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-[10px] font-bold uppercase tracking-[1px] text-muted-foreground font-inter mb-1">
-                                    Relevant Until
-                                </label>
-                                <input
-                                    type="datetime-local"
-                                    value={editEntryFields.expires_at}
-                                    onChange={(e) => setEditEntryFields((p) => ({ ...p, expires_at: e.target.value }))}
-                                    className="w-full rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary bg-white"
-                                />
-                            </div>
+                        <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-[1px] text-muted-foreground font-inter mb-1">
+                                Category
+                            </label>
+                            <select
+                                value={editEntryFields.type}
+                                onChange={(e) => setEditEntryFields((p) => ({ ...p, type: e.target.value as DiaryEntryType }))}
+                                className="w-full rounded-[8px] border border-border px-3 py-2 text-sm font-inter focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary bg-white"
+                            >
+                                {ENTRY_TYPES.map((type) => (
+                                    <option key={type.value} value={type.value}>
+                                        {type.label}
+                                    </option>
+                                ))}
+                            </select>
                         </div>
 
                         <div className="flex gap-2 pt-1">
@@ -863,3 +1122,11 @@ export default function DiaryPage() {
         </div>
     );
 }
+
+
+
+
+
+
+
+

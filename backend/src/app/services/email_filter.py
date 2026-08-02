@@ -456,7 +456,7 @@ class EmailFilterService:
         Check if user historically replies to this sender often.
 
         If reply rate > threshold (default 30%), sender is likely important.
-        Uses ContactContext metadata for efficient lookup (O(1) query).
+        Uses legacy ContactContext-derived metadata for efficient lookup (O(1) query).
         """
         from app.data.models import ContactContext
 
@@ -551,7 +551,7 @@ class EmailFilterService:
         """
         Get VIP emails and domains for this user (cached).
 
-        Checks both Contact.category (canonical) and ContactContext.category (legacy).
+        Checks Contact.category first and falls back to legacy ContactContext.category.
 
         Returns:
             tuple: (set of VIP emails, set of VIP domains)

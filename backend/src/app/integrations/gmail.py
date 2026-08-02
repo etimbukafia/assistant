@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+from app.security.privacy_utils import mask_email
 from sqlalchemy.orm import Session
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -128,7 +130,7 @@ class GmailClient:
         try:
             profile = self.service.users().getProfile(userId='me').execute()
             email = profile.get('emailAddress')
-            logger.info(f"Successfully got user email: {email}")
+            logger.info("Successfully got user email: %s", mask_email(email))
         except Exception as e:
             logger.error(f"Failed to get user profile: {str(e)}", exc_info=True)
             raise Exception(f"Failed to get user email from Gmail API: {str(e)}")
@@ -237,10 +239,10 @@ class GmailClient:
         account = query.first()
 
         if not account:
-            logger.warning(f"No GmailAccount found for user_id={self.user_id}, email={email}")
+            logger.warning("No GmailAccount found for user_id=%s email=%s", self.user_id, mask_email(email))
             return False
 
-        logger.info(f"Loaded GmailAccount for user_id={self.user_id}, email={account.email}")
+        logger.info("Loaded GmailAccount for user_id=%s email=%s", self.user_id, mask_email(account.email))
 
         # Decrypt tokens
         try:
@@ -274,7 +276,7 @@ class GmailClient:
                 # Save updated tokens back to database
                 self._save_to_database(account.email)
             except Exception as e:
-                logger.error(f"Gmail token refresh failed for {account.email}: {e}")
+                logger.error("Gmail token refresh failed for %s: %s", mask_email(account.email), e)
                 return False
 
         if self.creds and self.creds.valid:

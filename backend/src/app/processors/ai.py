@@ -397,6 +397,9 @@ class AIProcessor:
             subject=message_data.get('subject', ''),
             body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
         )
+        custom_instructions = (message_data.get('custom_instructions') or "").strip()
+        if custom_instructions:
+            prompt += f"\n\n**CUSTOM TASK DETECTION INSTRUCTIONS (user-defined):**\n{custom_instructions}"
 
         try:
             result = self._orchestrator.generate(prompt)
@@ -458,6 +461,9 @@ class AIProcessor:
                 subject=msg.get('subject', ''),
                 body=_prepare_body(msg.get('body', ''), self.MAX_BODY_LENGTH)
             )
+            custom_instructions = (msg.get('custom_instructions') or "").strip()
+            if custom_instructions:
+                prompt += f"\n\n**CUSTOM TASK DETECTION INSTRUCTIONS (user-defined):**\n{custom_instructions}"
             prompts.append(prompt)
         
         try:
@@ -543,6 +549,9 @@ class AIProcessor:
             subject=message_data.get('subject', ''),
             body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
         )
+        custom_instructions = (message_data.get('custom_instructions') or "").strip()
+        if custom_instructions:
+            prompt += f"\n\n**CUSTOM TASK DETECTION INSTRUCTIONS (user-defined):**\n{custom_instructions}"
 
         try:
             result = self._orchestrator.generate(prompt)
@@ -641,6 +650,9 @@ class AIProcessor:
                 subject=message_data.get('subject', ''),
                 body=_prepare_body(message_data.get('body', ''), self.MAX_BODY_LENGTH)
             )
+            custom_instructions = (message_data.get('custom_instructions') or "").strip()
+            if custom_instructions:
+                prompt += f"\n\n**CUSTOM TASK DETECTION INSTRUCTIONS (user-defined):**\n{custom_instructions}"
             prompts.append(prompt)
 
         try:

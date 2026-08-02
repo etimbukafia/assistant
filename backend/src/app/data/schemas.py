@@ -188,6 +188,71 @@ class UserSettingsUpdateRequest(BaseModel):
 
 
 # ========================================
+# Automations
+# ========================================
+
+class AutomationConnectorResponse(BaseModel):
+    id: str
+    label: str
+    required: bool
+    description: str
+    connected: bool
+
+
+class AutomationRunResponse(BaseModel):
+    id: int
+    status: str
+    trigger: str
+    summary: Optional[str] = None
+    run_metadata: Dict[str, Any] = {}
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AutomationResponse(BaseModel):
+    id: str
+    name: str
+    outcome: str
+    description: str
+    status: str
+    safety_mode: str
+    execution_mode: str
+    enabled: bool
+    required_connectors: List[AutomationConnectorResponse]
+    optional_connectors: List[AutomationConnectorResponse]
+    degraded_behavior: Optional[str] = None
+    recent_runs: List[AutomationRunResponse] = []
+    workload: Optional[Dict[str, int]] = None
+    next_event: Optional[Dict[str, Any]] = None
+
+
+class AutomationListResponse(BaseModel):
+    automations: List[AutomationResponse]
+
+
+class AutomationUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+
+
+class InboxCopilotRunRequest(BaseModel):
+    trigger: str = "manual"
+
+
+class MeetingPrepRunRequest(BaseModel):
+    event_id: Optional[str] = None
+    include_recent_context: bool = True
+    trigger: str = "manual"
+
+
+class AutomationRunEnvelope(BaseModel):
+    run: AutomationRunResponse
+    preview: Optional[Dict[str, Any]] = None
+    brief: Optional[Dict[str, Any]] = None
+
+
+# ========================================
 # Task Schemas
 # ========================================
 
@@ -385,6 +450,7 @@ class OrchestratorRunResponse(BaseModel):
     suggested_slots: List[Dict[str, Any]]  # [{start_time, end_time, label}]
     draft_reply: str
     reasoning: Optional[str] = None  # brief explanation of slot choices
+    availability_check: Optional[Dict[str, Any]] = None
 
 
 class IntentSendRequest(BaseModel):
@@ -639,9 +705,9 @@ class ContactContextListResponse(BaseModel):
 class ContextType(str, Enum):
     decision = "decision"
     commitment = "commitment"
-    preferences = "preferences"
-    risks = "risks"
-    relationships = "relationships"
+    preference = "preference"
+    risk = "risk"
+    insight = "insight"
 
 
 class ContextEntityType(str, Enum):
@@ -653,15 +719,17 @@ class ContextEntityType(str, Enum):
     task = "task"
 
 
+class ContextCaptureScopeType(str, Enum):
+    global_ = "global"
+    contact = "contact"
+    message = "message"
+    event = "event"
+    task = "task"
+
+
 class ContextCreatedBy(str, Enum):
     teeks = "Teeks"
     you = "You"
-
-
-class ContextImportanceLevel(str, Enum):
-    low = "low"
-    normal = "normal"
-    high = "high"
 
 
 class ContextEntryStatus(str, Enum):
@@ -669,6 +737,7 @@ class ContextEntryStatus(str, Enum):
     resolved = "resolved"
     stale = "stale"
     archived = "archived"
+    forgotten = "forgotten"
 
 
 class ContextEntryBase(BaseModel):
@@ -680,7 +749,6 @@ class ContextEntryBase(BaseModel):
     linked_to: Optional[str] = None
     created_by: ContextCreatedBy
     created_at: datetime
-    importance_level: ContextImportanceLevel = ContextImportanceLevel.normal
     status: ContextEntryStatus = ContextEntryStatus.active
     expires_at: Optional[datetime] = None
 
@@ -689,28 +757,28 @@ class DiaryEntryLinkSchema(BaseModel):
     entity_type: str
     entity_id: str
     display_name: str
+    source: str = "user"
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class ContextEntryCreate(BaseModel):
-    type: ContextType
-    content: str
-    entity_type: ContextEntityType = ContextEntityType.global_
-    entity_id: Optional[str] = None
+class ContextCaptureCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    scope_type: ContextCaptureScopeType
+    scope_id: Optional[str] = None
     linked_to: Optional[str] = None
-    created_by: ContextCreatedBy = ContextCreatedBy.you
-    importance_level: ContextImportanceLevel = ContextImportanceLevel.normal
-    status: ContextEntryStatus = ContextEntryStatus.active
-    expires_at: Optional[datetime] = None
     links: List[DiaryEntryLinkSchema] = []
 
 
-class ContextEntryUpdate(BaseModel):
-    content: Optional[str] = None
-    importance_level: Optional[ContextImportanceLevel] = None
+class ContextCaptureUpdate(BaseModel):
+    text: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    type: Optional[ContextType] = None
+    scope_type: Optional[ContextCaptureScopeType] = None
+    scope_id: Optional[str] = None
+    linked_to: Optional[str] = None
     status: Optional[ContextEntryStatus] = None
     expires_at: Optional[datetime] = None
+    links: Optional[List[DiaryEntryLinkSchema]] = None
 
 
 class ContextEntryResponse(ContextEntryBase):
@@ -719,6 +787,14 @@ class ContextEntryResponse(ContextEntryBase):
     links: List[DiaryEntryLinkSchema] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ContextCaptureResponse(ContextEntryResponse):
+    raw_text: Optional[str] = None
+    classification_status: str = "classified"
+    classification_confidence: Optional[float] = None
+    user_corrected: bool = False
+    scope_resolved: bool = True
 
 
 class ContactCreate(BaseModel):
@@ -752,6 +828,131 @@ class ContactResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ContactListResponse(BaseModel):
+    contacts: List[ContactResponse]
+    total: int
+
+
+class ContactDeleteResponse(BaseModel):
+    deleted: bool
+    id: int
+
+
+class ContactLookupRequest(BaseModel):
+    email: str
+
+
+class ContactBriefStatsResponse(BaseModel):
+    total_messages: int = 0
+    total_threads: int = 0
+    open_tasks: int = 0
+    upcoming_events: int = 0
+    needs_reply_threads: int = 0
+    last_interaction_at: Optional[datetime] = None
+    primary_channel: Optional[str] = None
+    reply_rate: Optional[float] = None
+    avg_response_latency_hours: Optional[float] = None
+
+
+class ContactBriefSignalResponse(BaseModel):
+    key: str
+    label: str
+    severity: str = "info"
+    detail: Optional[str] = None
+
+
+class ContactBriefMemoryItemResponse(BaseModel):
+    id: str
+    content: str
+    source_type: str
+    source_ref: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class ContactBriefCommitmentResponse(BaseModel):
+    id: str
+    title: str
+    detail: Optional[str] = None
+    status: str
+    source_type: str
+    source_ref: Optional[str] = None
+    due_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+class ContactBriefDecisionResponse(BaseModel):
+    id: str
+    decision: str
+    source_type: str
+    source_ref: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class ContactBriefInteractionResponse(BaseModel):
+    id: str
+    interaction_type: str
+    subject: Optional[str] = None
+    summary: Optional[str] = None
+    thread_id: Optional[str] = None
+    thread_resolved: Optional[bool] = None
+    occurred_at: datetime
+    needs_reply: bool = False
+
+
+class ContactBriefEventResponse(BaseModel):
+    id: int
+    title: str
+    start_time: datetime
+    end_time: datetime
+    location: Optional[str] = None
+    organizer: Optional[str] = None
+    participant_count: int = 0
+
+
+class ContactBriefSummaryResponse(BaseModel):
+    headline: str
+    category: Optional[str] = None
+    role: Optional[str] = None
+    organization: Optional[str] = None
+    manual_notes: Optional[str] = None
+    relationship_notes: List[str] = []
+    preferred_tone: Optional[str] = None
+
+
+class ContactBriefResponse(BaseModel):
+    contact: ContactResponse
+    summary: ContactBriefSummaryResponse
+    stats: ContactBriefStatsResponse
+    preferences: List[ContactBriefMemoryItemResponse] = []
+    commitments: List[ContactBriefCommitmentResponse] = []
+    decisions: List[ContactBriefDecisionResponse] = []
+    recent_interactions: List[ContactBriefInteractionResponse] = []
+    upcoming_events: List[ContactBriefEventResponse] = []
+    signals: List[ContactBriefSignalResponse] = []
+
+
+class ContactTimelineItemResponse(BaseModel):
+    id: str
+    kind: str
+    title: str
+    detail: Optional[str] = None
+    occurred_at: datetime
+    source_type: str
+    source_ref: Optional[str] = None
+    source_resolved: Optional[bool] = None
+    status: Optional[str] = None
+
+
+class ContactTimelineResponse(BaseModel):
+    contact: ContactResponse
+    timeline: List[ContactTimelineItemResponse] = []
+
+
+class ContactSignalsResponse(BaseModel):
+    contact: ContactResponse
+    signals: List[ContactBriefSignalResponse] = []
 
 
 class EntityReferenceType(str, Enum):

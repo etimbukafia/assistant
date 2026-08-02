@@ -626,6 +626,12 @@ class SchedulingModule(BaseModule):
             if not description:
                 description = suggestion.draft_event_description
 
+            event_label = CalendarService._classify_event_label(
+                title=title,
+                description=description,
+                participants=suggestion.participants or [],
+            )
+
             # Create CalendarEvent record
             calendar_event = CalendarEvent(
                 user_id=user_id,
@@ -640,7 +646,8 @@ class SchedulingModule(BaseModule):
                 source_suggestion_id=suggestion.id,
                 provider="google",
                 status="pending",
-                calendar_id=calendar_id or "primary"
+                calendar_id=calendar_id or "primary",
+                label=event_label,
             )
             db.add(calendar_event)
             db.commit()
@@ -677,9 +684,9 @@ class SchedulingModule(BaseModule):
             suggestion.status = "accepted"
             db.commit()
 
-            # Schedule briefing if enabled
+            # Schedule briefing only for meeting-labelled events
             settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
-            if settings and settings.auto_briefing_enabled:
+            if settings and settings.auto_briefing_enabled and calendar_event.label == "meeting":
                 briefing_time = start_time - timedelta(hours=settings.briefing_hours_before or 1)
                 if briefing_time > datetime.now(timezone.utc):
                     from app.jobs.queue import enqueue_task

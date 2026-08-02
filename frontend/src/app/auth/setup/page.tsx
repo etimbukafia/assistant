@@ -7,6 +7,7 @@ import { DonnaText } from "@/components/ui/DonnaText";
 import { completeOnboarding } from "@/services/onboarding";
 import { useRouter } from "next/navigation";
 import { Loader2, RefreshCw } from "lucide-react";
+import { ENABLE_MICROSOFT_UI } from "@/config/featureFlags";
 
 export default function SetupPage() {
     const router = useRouter();
@@ -24,7 +25,7 @@ export default function SetupPage() {
 
     useEffect(() => {
         if (loading) return;
-        if (gmailConnectError || microsoftConnectError) return;
+        if (gmailConnectError || (ENABLE_MICROSOFT_UI && microsoftConnectError)) return;
         if (initOnceRef.current) return;
         initOnceRef.current = true;
 
@@ -42,8 +43,8 @@ export default function SetupPage() {
         run();
     }, [settings, loading, gmailConnectError, microsoftConnectError, refreshProfile, router]);
 
-    const connectError = microsoftConnectError || gmailConnectError;
-    const providerLabel = microsoftConnectError ? "Microsoft" : "Gmail";
+    const connectError = ENABLE_MICROSOFT_UI ? (microsoftConnectError || gmailConnectError) : gmailConnectError;
+    const providerLabel = ENABLE_MICROSOFT_UI && microsoftConnectError ? "Microsoft" : "Gmail";
 
     if (!connectError) {
         return null;
@@ -62,7 +63,7 @@ export default function SetupPage() {
 
                 <div className="mt-6">
                     <DonnaButton
-                        onClick={() => microsoftConnectError ? signInWithMicrosoft() : signInWithGoogle()}
+                        onClick={() => (ENABLE_MICROSOFT_UI && microsoftConnectError) ? signInWithMicrosoft() : signInWithGoogle()}
                         className="flex items-center gap-2 bg-auburn text-white"
                     >
                         <RefreshCw size={16} />

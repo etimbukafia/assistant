@@ -1,0 +1,578 @@
+{
+  "test_run": {
+    "timestamp": "2026-01-26T03:54:43.133306",
+    "models_tested": [
+      "gemma-3-12b-it",
+      "gemini-2.5-flash-lite"
+    ],
+    "emails_tested": 3
+  },
+  "test_emails": [
+    {
+      "name": "Complex Business Planning",
+      "subject": "Q1 2026 Product Launch - Action Items from Today's Meeting",
+      "sender": "Sarah Chen <sarah.chen@company.com>",
+      "body": "Hi team,\n\nThanks for joining today's product launch planning meeting. Here's a summary of what we discussed and the action items we agreed on.\n\n**Key Decisions Made:**\n1. We've decided to move forward with the January 28th launch date for the mobile app v2.0\n2. The marketing budget has been approved at $75,000 for the Q1 campaign\n3. We're partnering with TechReview.com for the exclusive first look\n\n**Action Items:**\n- @John: Please finalize the press release draft by Friday, January 24th at 5pm\n- @Maria: Can you coordinate with the dev team to ensure all beta bugs are resolved by Tuesday?\n- @David: Schedule the all-hands meeting for next Monday at 2pm to discuss launch readiness\n- Everyone: Please review the attached launch checklist and add any missing items by EOD tomorrow\n\n**Upcoming Deadlines:**\n- Beta testing completion: January 25th\n- Final QA sign-off: January 27th\n- Public launch: January 28th, 9am PST\n\nDr. Martinez from Legal mentioned he needs to review our Terms of Service updates before launch. I've already sent him the documents but please follow up if you don't hear back by Wednesday.\n\nLet me know if I missed anything from our discussion.\n\nBest,\nSarah",
+      "description": "Tests: Tasks, Dates, People, Decisions, Needs Reply\n    This email covers multiple extraction types in a realistic business context.",
+      "expected": {
+        "needs_reply": true,
+        "tasks": [
+          "Finalize press release draft",
+          "Coordinate with dev team on beta bugs",
+          "Schedule all-hands meeting",
+          "Review launch checklist",
+          "Follow up with Dr. Martinez on Terms of Service"
+        ],
+        "dates": [
+          "January 28th",
+          "Friday, January 24th at 5pm",
+          "Tuesday",
+          "next Monday at 2pm",
+          "EOD tomorrow",
+          "January 25th",
+          "January 27th",
+          "Wednesday"
+        ],
+        "people": [
+          "Sarah Chen",
+          "John",
+          "Maria",
+          "David",
+          "Dr. Martinez"
+        ],
+        "decisions": [
+          "January 28th launch date approved",
+          "$75,000 marketing budget approved",
+          "TechReview.com partnership for exclusive first look"
+        ],
+        "scheduling_intent": false,
+        "scheduling_type": "none"
+      }
+    },
+    {
+      "name": "Meeting Scheduling Request",
+      "subject": "Re: Partnership Discussion - Can we find a time to meet?",
+      "sender": "Michael Roberts <m.roberts@partnerco.com>",
+      "body": "Hi,\n\nI hope this email finds you well. Following up on our conversation at the conference last week.\n\nI'd love to schedule a 45-minute call to discuss the potential partnership between our companies. Our CEO, Jennifer Walsh, and I would like to understand more about your API integration capabilities.\n\nWould you be available sometime next week? I'm flexible on Monday or Wednesday afternoon, or Thursday morning works as well. We're in the Pacific timezone.\n\nIf none of those work, please share a few times that would be convenient for you, and I'll make sure we accommodate your schedule.\n\nLooking forward to connecting!\n\nBest regards,\nMichael Roberts\nVP of Business Development\nPartnerCo Inc.",
+      "description": "Tests: Scheduling Intent Detection, Needs Reply, People\n    This email specifically tests the scheduling intent detection capabilities.",
+      "expected": {
+        "needs_reply": true,
+        "tasks": [
+          "Schedule partnership call"
+        ],
+        "dates": [
+          "next week",
+          "Monday",
+          "Wednesday afternoon",
+          "Thursday morning"
+        ],
+        "people": [
+          "Michael Roberts",
+          "Jennifer Walsh"
+        ],
+        "decisions": [],
+        "scheduling_intent": true,
+        "scheduling_type": "availability_request"
+      }
+    },
+    {
+      "name": "Newsletter/Notification",
+      "subject": "[Monthly Newsletter] January 2026 Product Updates",
+      "sender": "Product Team <noreply@updates.saasproduct.com>",
+      "body": "Hi there,\n\nHere's what's new in SaaSProduct this month!\n\n**\ud83d\ude80 New Features**\n\n1. **Dark Mode** - Finally! Switch to dark mode in Settings > Appearance\n2. **Bulk Export** - Export up to 10,000 records at once\n3. **Mobile App Update** - Version 3.2 is now available on iOS and Android\n\n**\ud83d\udc1b Bug Fixes**\n- Fixed: Dashboard loading slowly on Firefox\n- Fixed: Email notifications not sending for some users\n- Fixed: Date picker showing wrong timezone\n\n**\ud83d\udcc5 Upcoming Webinar**\nJoin us on February 5th at 11am EST for our monthly product demo. Register at saasproduct.com/webinar\n\n**\ud83d\udca1 Pro Tip**\nDid you know you can use keyboard shortcuts to navigate faster? Press '?' anywhere in the app to see the full list.\n\nThanks for being a valued customer!\n\nThe SaaSProduct Team\n\n---\nYou're receiving this because you're subscribed to product updates.\nUnsubscribe: https://saasproduct.com/unsubscribe",
+      "description": "Tests: Needs Reply (should be False), Summary, minimal extractions\n    This email tests the model's ability to recognize non-actionable content.",
+      "expected": {
+        "needs_reply": false,
+        "tasks": [],
+        "dates": [
+          "January 2026",
+          "February 5th at 11am EST"
+        ],
+        "people": [],
+        "decisions": [],
+        "scheduling_intent": false,
+        "scheduling_type": "none"
+      }
+    }
+  ],
+  "results_by_model": {
+    "gemma-3-12b-it": [
+      {
+        "email_name": "Complex Business Planning",
+        "processing_time_ms": 49613.312005996704,
+        "error": null,
+        "raw_output": {
+          "summary": "This email summarizes the key decisions and action items from a meeting regarding the Q1 2026 product launch of mobile app v2.0. The launch date is set for January 28th, and various tasks are assigned to team members with specific deadlines.",
+          "needs_reply": true,
+          "extracted_tasks": [
+            "Finalize the press release draft by Friday, January 24th at 5pm",
+            "Coordinate with the dev team to ensure all beta bugs are resolved by Tuesday",
+            "Schedule the all-hands meeting for next Monday at 2pm to discuss launch readiness",
+            "Review the attached launch checklist and add any missing items by EOD tomorrow",
+            "Follow up with Dr. Martinez if you don't hear back by Wednesday"
+          ],
+          "extracted_dates": [
+            "Friday, January 24th",
+            "Tuesday",
+            "next Monday",
+            "EOD tomorrow",
+            "January 25th",
+            "January 27th",
+            "January 28th",
+            "Wednesday"
+          ],
+          "extracted_people": [
+            "Sarah Chen",
+            "John",
+            "Maria",
+            "David",
+            "Dr. Martinez"
+          ],
+          "extracted_decisions": [
+            "Move forward with the January 28th launch date for the mobile app v2.0",
+            "Marketing budget approved at $75,000 for the Q1 campaign",
+            "Partnering with TechReview.com for the exclusive first look"
+          ],
+          "scheduling_intent": true,
+          "scheduling_intent_type": "time_request",
+          "scheduling_intent_confidence": 0.9
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 0.75,
+          "people": 1.0,
+          "decisions": 1.0,
+          "scheduling_intent": 0.0,
+          "scheduling_type": 1.0,
+          "overall": 0.825
+        }
+      },
+      {
+        "email_name": "Meeting Scheduling Request",
+        "processing_time_ms": 3679.020881652832,
+        "error": null,
+        "raw_output": {
+          "summary": "",
+          "needs_reply": null,
+          "extracted_tasks": [],
+          "extracted_dates": [],
+          "extracted_people": [],
+          "extracted_decisions": [],
+          "scheduling_intent": false,
+          "scheduling_intent_type": "none",
+          "scheduling_intent_confidence": 0.0
+        },
+        "scores": {
+          "needs_reply": 0.0,
+          "tasks": 0.0,
+          "dates": 0.0,
+          "people": 0.0,
+          "decisions": 1.0,
+          "scheduling_intent": 0.0,
+          "scheduling_type": 0.5,
+          "overall": 0.2
+        }
+      },
+      {
+        "email_name": "Newsletter/Notification",
+        "processing_time_ms": 91313.37118148804,
+        "error": null,
+        "raw_output": {
+          "summary": "This email is the January 2026 monthly newsletter for SaaSProduct, highlighting new features like dark mode and bulk export, bug fixes, and an upcoming product demo webinar. It also includes a helpful pro tip about keyboard shortcuts.",
+          "needs_reply": false,
+          "extracted_tasks": [],
+          "extracted_dates": [
+            "February 5th",
+            "January 2026"
+          ],
+          "extracted_people": [
+            "John"
+          ],
+          "extracted_decisions": [],
+          "scheduling_intent": true,
+          "scheduling_intent_type": "none",
+          "scheduling_intent_confidence": 0.8
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 0.5,
+          "people": 0.8,
+          "decisions": 1.0,
+          "scheduling_intent": 0.0,
+          "scheduling_type": 1.0,
+          "overall": 0.78
+        }
+      }
+    ],
+    "gemini-2.5-flash-lite": [
+      {
+        "email_name": "Complex Business Planning",
+        "processing_time_ms": 3637.2148990631104,
+        "error": null,
+        "raw_output": {
+          "summary": "This email summarizes the Q1 2026 product launch meeting, detailing key decisions such as the January 28th launch date for mobile app v2.0, an approved marketing budget of $75,000, and a partnership with TechReview.com. It also outlines specific action items for John, Maria, and David, as well as a general task for everyone to review the launch checklist.",
+          "needs_reply": true,
+          "extracted_tasks": [
+            "Finalize the press release draft by Friday, January 24th at 5pm",
+            "Coordinate with the dev team to ensure all beta bugs are resolved by Tuesday",
+            "Schedule the all-hands meeting for next Monday at 2pm to discuss launch readiness",
+            "Review the attached launch checklist and add any missing items by EOD tomorrow",
+            "Follow up with Dr. Martinez if you don't hear back by Wednesday regarding Terms of Service updates"
+          ],
+          "extracted_dates": [
+            "Q1 2026",
+            "January 28th",
+            "Friday, January 24th at 5pm",
+            "Tuesday",
+            "next Monday at 2pm",
+            "EOD tomorrow",
+            "January 25th",
+            "January 27th",
+            "January 28th, 9am PST",
+            "Wednesday"
+          ],
+          "extracted_people": [
+            "Sarah Chen",
+            "John",
+            "Maria",
+            "David",
+            "Dr. Martinez"
+          ],
+          "extracted_decisions": [
+            "Move forward with the January 28th launch date for the mobile app v2.0",
+            "Marketing budget approved at $75,000 for the Q1 campaign",
+            "Partnering with TechReview.com for the exclusive first look"
+          ],
+          "scheduling_intent": true,
+          "scheduling_intent_type": "none",
+          "scheduling_intent_confidence": 0.7
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 1.0,
+          "people": 1.0,
+          "decisions": 1.0,
+          "scheduling_intent": 0.0,
+          "scheduling_type": 1.0,
+          "overall": 0.85
+        }
+      },
+      {
+        "email_name": "Meeting Scheduling Request",
+        "processing_time_ms": 3285.961389541626,
+        "error": null,
+        "raw_output": {
+          "summary": "Michael Roberts from PartnerCo is following up on a previous conversation and wants to schedule a 45-minute call to discuss a potential partnership and API integration capabilities. He is proposing specific times next week and is open to alternative suggestions.",
+          "needs_reply": true,
+          "extracted_tasks": [
+            "Schedule a 45-minute call to discuss potential partnership and API integration capabilities."
+          ],
+          "extracted_dates": [
+            "next week",
+            "Monday or Wednesday afternoon",
+            "Thursday morning"
+          ],
+          "extracted_people": [
+            "Michael Roberts",
+            "Jennifer Walsh"
+          ],
+          "extracted_decisions": [],
+          "scheduling_intent": true,
+          "scheduling_intent_type": "availability_request",
+          "scheduling_intent_confidence": 0.9
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 1.0,
+          "people": 1.0,
+          "decisions": 1.0,
+          "scheduling_intent": 1.0,
+          "scheduling_type": 1.0,
+          "overall": 1.0
+        }
+      },
+      {
+        "email_name": "Newsletter/Notification",
+        "processing_time_ms": 3438.798666000366,
+        "error": null,
+        "raw_output": {
+          "summary": "This is the January 2026 product update newsletter for SaaSProduct. It announces new features like Dark Mode and Bulk Export, lists bug fixes, promotes an upcoming webinar on February 5th, and shares a pro tip about keyboard shortcuts.",
+          "needs_reply": false,
+          "extracted_tasks": [],
+          "extracted_dates": [
+            "January 2026",
+            "February 5th",
+            "11am EST"
+          ],
+          "extracted_people": [],
+          "extracted_decisions": [],
+          "scheduling_intent": false,
+          "scheduling_intent_type": "none",
+          "scheduling_intent_confidence": 0.0
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 0.5,
+          "people": 1.0,
+          "decisions": 1.0,
+          "scheduling_intent": 1.0,
+          "scheduling_type": 1.0,
+          "overall": 0.95
+        }
+      }
+    ]
+  },
+  "results_by_email": {
+    "Complex Business Planning": {
+      "gemma-3-12b-it": {
+        "processing_time_ms": 49613.312005996704,
+        "error": null,
+        "raw_output": {
+          "summary": "This email summarizes the key decisions and action items from a meeting regarding the Q1 2026 product launch of mobile app v2.0. The launch date is set for January 28th, and various tasks are assigned to team members with specific deadlines.",
+          "needs_reply": true,
+          "extracted_tasks": [
+            "Finalize the press release draft by Friday, January 24th at 5pm",
+            "Coordinate with the dev team to ensure all beta bugs are resolved by Tuesday",
+            "Schedule the all-hands meeting for next Monday at 2pm to discuss launch readiness",
+            "Review the attached launch checklist and add any missing items by EOD tomorrow",
+            "Follow up with Dr. Martinez if you don't hear back by Wednesday"
+          ],
+          "extracted_dates": [
+            "Friday, January 24th",
+            "Tuesday",
+            "next Monday",
+            "EOD tomorrow",
+            "January 25th",
+            "January 27th",
+            "January 28th",
+            "Wednesday"
+          ],
+          "extracted_people": [
+            "Sarah Chen",
+            "John",
+            "Maria",
+            "David",
+            "Dr. Martinez"
+          ],
+          "extracted_decisions": [
+            "Move forward with the January 28th launch date for the mobile app v2.0",
+            "Marketing budget approved at $75,000 for the Q1 campaign",
+            "Partnering with TechReview.com for the exclusive first look"
+          ],
+          "scheduling_intent": true,
+          "scheduling_intent_type": "time_request",
+          "scheduling_intent_confidence": 0.9
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 0.75,
+          "people": 1.0,
+          "decisions": 1.0,
+          "scheduling_intent": 0.0,
+          "scheduling_type": 1.0,
+          "overall": 0.825
+        }
+      },
+      "gemini-2.5-flash-lite": {
+        "processing_time_ms": 3637.2148990631104,
+        "error": null,
+        "raw_output": {
+          "summary": "This email summarizes the Q1 2026 product launch meeting, detailing key decisions such as the January 28th launch date for mobile app v2.0, an approved marketing budget of $75,000, and a partnership with TechReview.com. It also outlines specific action items for John, Maria, and David, as well as a general task for everyone to review the launch checklist.",
+          "needs_reply": true,
+          "extracted_tasks": [
+            "Finalize the press release draft by Friday, January 24th at 5pm",
+            "Coordinate with the dev team to ensure all beta bugs are resolved by Tuesday",
+            "Schedule the all-hands meeting for next Monday at 2pm to discuss launch readiness",
+            "Review the attached launch checklist and add any missing items by EOD tomorrow",
+            "Follow up with Dr. Martinez if you don't hear back by Wednesday regarding Terms of Service updates"
+          ],
+          "extracted_dates": [
+            "Q1 2026",
+            "January 28th",
+            "Friday, January 24th at 5pm",
+            "Tuesday",
+            "next Monday at 2pm",
+            "EOD tomorrow",
+            "January 25th",
+            "January 27th",
+            "January 28th, 9am PST",
+            "Wednesday"
+          ],
+          "extracted_people": [
+            "Sarah Chen",
+            "John",
+            "Maria",
+            "David",
+            "Dr. Martinez"
+          ],
+          "extracted_decisions": [
+            "Move forward with the January 28th launch date for the mobile app v2.0",
+            "Marketing budget approved at $75,000 for the Q1 campaign",
+            "Partnering with TechReview.com for the exclusive first look"
+          ],
+          "scheduling_intent": true,
+          "scheduling_intent_type": "none",
+          "scheduling_intent_confidence": 0.7
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 1.0,
+          "people": 1.0,
+          "decisions": 1.0,
+          "scheduling_intent": 0.0,
+          "scheduling_type": 1.0,
+          "overall": 0.85
+        }
+      }
+    },
+    "Meeting Scheduling Request": {
+      "gemma-3-12b-it": {
+        "processing_time_ms": 3679.020881652832,
+        "error": null,
+        "raw_output": {
+          "summary": "",
+          "needs_reply": null,
+          "extracted_tasks": [],
+          "extracted_dates": [],
+          "extracted_people": [],
+          "extracted_decisions": [],
+          "scheduling_intent": false,
+          "scheduling_intent_type": "none",
+          "scheduling_intent_confidence": 0.0
+        },
+        "scores": {
+          "needs_reply": 0.0,
+          "tasks": 0.0,
+          "dates": 0.0,
+          "people": 0.0,
+          "decisions": 1.0,
+          "scheduling_intent": 0.0,
+          "scheduling_type": 0.5,
+          "overall": 0.2
+        }
+      },
+      "gemini-2.5-flash-lite": {
+        "processing_time_ms": 3285.961389541626,
+        "error": null,
+        "raw_output": {
+          "summary": "Michael Roberts from PartnerCo is following up on a previous conversation and wants to schedule a 45-minute call to discuss a potential partnership and API integration capabilities. He is proposing specific times next week and is open to alternative suggestions.",
+          "needs_reply": true,
+          "extracted_tasks": [
+            "Schedule a 45-minute call to discuss potential partnership and API integration capabilities."
+          ],
+          "extracted_dates": [
+            "next week",
+            "Monday or Wednesday afternoon",
+            "Thursday morning"
+          ],
+          "extracted_people": [
+            "Michael Roberts",
+            "Jennifer Walsh"
+          ],
+          "extracted_decisions": [],
+          "scheduling_intent": true,
+          "scheduling_intent_type": "availability_request",
+          "scheduling_intent_confidence": 0.9
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 1.0,
+          "people": 1.0,
+          "decisions": 1.0,
+          "scheduling_intent": 1.0,
+          "scheduling_type": 1.0,
+          "overall": 1.0
+        }
+      }
+    },
+    "Newsletter/Notification": {
+      "gemma-3-12b-it": {
+        "processing_time_ms": 91313.37118148804,
+        "error": null,
+        "raw_output": {
+          "summary": "This email is the January 2026 monthly newsletter for SaaSProduct, highlighting new features like dark mode and bulk export, bug fixes, and an upcoming product demo webinar. It also includes a helpful pro tip about keyboard shortcuts.",
+          "needs_reply": false,
+          "extracted_tasks": [],
+          "extracted_dates": [
+            "February 5th",
+            "January 2026"
+          ],
+          "extracted_people": [
+            "John"
+          ],
+          "extracted_decisions": [],
+          "scheduling_intent": true,
+          "scheduling_intent_type": "none",
+          "scheduling_intent_confidence": 0.8
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 0.5,
+          "people": 0.8,
+          "decisions": 1.0,
+          "scheduling_intent": 0.0,
+          "scheduling_type": 1.0,
+          "overall": 0.78
+        }
+      },
+      "gemini-2.5-flash-lite": {
+        "processing_time_ms": 3438.798666000366,
+        "error": null,
+        "raw_output": {
+          "summary": "This is the January 2026 product update newsletter for SaaSProduct. It announces new features like Dark Mode and Bulk Export, lists bug fixes, promotes an upcoming webinar on February 5th, and shares a pro tip about keyboard shortcuts.",
+          "needs_reply": false,
+          "extracted_tasks": [],
+          "extracted_dates": [
+            "January 2026",
+            "February 5th",
+            "11am EST"
+          ],
+          "extracted_people": [],
+          "extracted_decisions": [],
+          "scheduling_intent": false,
+          "scheduling_intent_type": "none",
+          "scheduling_intent_confidence": 0.0
+        },
+        "scores": {
+          "needs_reply": 1.0,
+          "tasks": 1.0,
+          "dates": 0.5,
+          "people": 1.0,
+          "decisions": 1.0,
+          "scheduling_intent": 1.0,
+          "scheduling_type": 1.0,
+          "overall": 0.95
+        }
+      }
+    }
+  },
+  "summary": {
+    "model_scores": {
+      "gemma-3-12b-it": 0.6016666666666667,
+      "gemini-2.5-flash-lite": 0.9333333333333332
+    },
+    "model_avg_times_ms": {
+      "gemma-3-12b-it": 48201.90135637919,
+      "gemini-2.5-flash-lite": 3453.991651535034
+    },
+    "ranking": [
+      [
+        "gemini-2.5-flash-lite",
+        0.9333333333333332
+      ],
+      [
+        "gemma-3-12b-it",
+        0.6016666666666667
+      ]
+    ]
+  }
+}

@@ -70,23 +70,28 @@ def process_message(
     Returns:
         Dict with processing results (summary, needs_reply, extracted_*, etc.)
     """
+    # Fetch user settings once
+    assistant_name = "Teeks"
+    task_detection_instructions = ""
+    if message.user_id:
+        user_settings = db.query(UserSettings).filter(UserSettings.user_id == message.user_id).first()
+        if user_settings:
+            if user_settings.assistant_name:
+                assistant_name = user_settings.assistant_name
+            if user_settings.task_detection_instructions:
+                task_detection_instructions = user_settings.task_detection_instructions
+
     # Prepare message data for processing
     message_data = {
         "subject": message.subject,
         "body": message.decrypted_body,
-        "sender": message.sender
+        "sender": message.sender,
+        "custom_instructions": task_detection_instructions,
     }
-
-    # Fetch assistant name from user settings
-    assistant_name = "Teeks"  # default
-    if message.user_id:
-        user_settings = db.query(UserSettings).filter(UserSettings.user_id == message.user_id).first()
-        if user_settings and user_settings.assistant_name:
-            assistant_name = user_settings.assistant_name
 
     # Process using state-based thread approach
     logger.info(f"Processing message {message.id} with thread state (thread_id={message.thread_id})")
-    thread_state_service = ThreadStateService(db, assistant_name=assistant_name)
+    thread_state_service = ThreadStateService(db, assistant_name=assistant_name, task_detection_instructions=task_detection_instructions)
     ai_results = thread_state_service.process_message(message, message_data)
 
     # Update message with results
@@ -129,6 +134,7 @@ def process_message(
         enqueue_task(
             task_type="emit_event",
             payload={
+                "user_id": message.user_id,
                 "event_name": "scheduling_intent_detected",
                 "event_payload": {
                     "message_id": message.id,
@@ -201,14 +207,18 @@ def process_messages_batch(
                 to_process.append(message)
 
         if to_process:
-            # Fetch assistant name from user settings
-            assistant_name = "Teeks"  # default
+            # Fetch user settings once for the whole batch
+            assistant_name = "Teeks"
+            task_detection_instructions = ""
             user_settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
-            if user_settings and user_settings.assistant_name:
-                assistant_name = user_settings.assistant_name
+            if user_settings:
+                if user_settings.assistant_name:
+                    assistant_name = user_settings.assistant_name
+                if user_settings.task_detection_instructions:
+                    task_detection_instructions = user_settings.task_detection_instructions
 
             # Use ThreadStateService batch processing (batches LLM calls for new threads)
-            thread_state_service = ThreadStateService(db, assistant_name=assistant_name)
+            thread_state_service = ThreadStateService(db, assistant_name=assistant_name, task_detection_instructions=task_detection_instructions)
             batch_results = thread_state_service.process_messages_batch(to_process)
             
             # Update message records and emit events
@@ -236,6 +246,7 @@ def process_messages_batch(
                     enqueue_task(
                         task_type="emit_event",
                         payload={
+                            "user_id": message.user_id,
                             "event_name": "scheduling_intent_detected",
                             "event_payload": {
                                 "message_id": message.id,

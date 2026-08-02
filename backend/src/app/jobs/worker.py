@@ -11,7 +11,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List
 from datetime import datetime, timedelta, time, timezone
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks 
 
 from core.events import emit_event
 from core.queue import Worker, BatchWorker
@@ -21,10 +21,32 @@ from app.jobs.webhook_health import handle_check_webhook_health, get_next_webhoo
 from app.handlers.vault_handlers import handle_vault_ingest, handle_vault_proposal_cleanup
 from app.infra.config import get_settings
 from sqlalchemy import text
+from app.services.entity_cache_coordinator import EntityCacheCoordinator
 
 logger = logging.getLogger(__name__)
+cache_coordinator = EntityCacheCoordinator()
+
+from app.security.privacy_utils import mask_email, mask_identifier, privacy_ref
 USER_TIMEOUT_MESSAGE = "I couldn't finish that in time. Please send it again."
 USER_RETRY_MESSAGE = "I hit a temporary issue handling that. Please try again."
+ENABLE_DIGEST_NOTIFICATIONS = bool(getattr(get_settings(), "ENABLE_DIGEST_NOTIFICATIONS", False))
+
+
+def _tenant_id() -> str:
+    return "default"
+
+
+def _invalidate_ingested_messages(db, messages: List[Any]) -> None:
+    for message in messages or []:
+        cache_coordinator.invalidate_message_related_contact(
+            db=db,
+            tenant_id=_tenant_id(),
+            user_id=message.user_id,
+            message_db_id=message.id,
+            thread_id=message.thread_id,
+            contact_id=message.contact_id,
+            message_scope_id=message.message_id,
+        )
 
 
 # =============================================================================
@@ -189,6 +211,19 @@ async def handle_emit_event(task_id: int, task_type: str, payload: Dict[str, Any
         f"Emitted event: {event_name}",
         extra={"task_id": task_id, "event_name": event_name, "correlation_id": correlation_id}
     )
+
+
+async def handle_emit_event_batch(user_id: str, tasks: List[Dict[str, Any]]):
+    """
+    Batch handler for emit_event tasks scoped to a user.
+    """
+    for task in tasks:
+        await handle_emit_event(
+            task_id=task["task_id"],
+            task_type="emit_event",
+            payload=task.get("payload") or {},
+            correlation_id=task.get("correlation_id"),
+        )
 
 
 async def handle_send_notification(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
@@ -533,15 +568,32 @@ async def handle_data_cleanup(task_id: int, task_type: str, payload: Dict[str, A
 
     This is the main data lifecycle cleanup job.
     """
-    from app.data.models import Message, Task
+    from app.data.models import (
+        BillingEvent,
+        ChatModelCallMetric,
+        Message,
+        Task,
+        UITelemetryEvent,
+        WebhookDelivery,
+        WebhookLog,
+    )
     from app.infra.database import SessionLocal
     from app.jobs.queue import enqueue_task
 
+    settings = get_settings()
     RETENTION_DAYS = 30
+    audit_retention_specs = [
+        ("billing event", BillingEvent, BillingEvent.received_at, int(settings.BILLING_EVENT_RETENTION_DAYS)),
+        ("webhook log", WebhookLog, WebhookLog.received_at, int(settings.WEBHOOK_LOG_RETENTION_DAYS)),
+        ("webhook delivery", WebhookDelivery, WebhookDelivery.processed_at, int(settings.WEBHOOK_DELIVERY_RETENTION_DAYS)),
+        ("ui telemetry event", UITelemetryEvent, UITelemetryEvent.created_at, int(settings.UI_TELEMETRY_RETENTION_DAYS)),
+        ("chat metric", ChatModelCallMetric, ChatModelCallMetric.created_at, int(settings.CHAT_METRICS_RETENTION_DAYS)),
+    ]
 
     db = SessionLocal()
     try:
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+        now = datetime.now(timezone.utc)
+        cutoff_date = now - timedelta(days=RETENTION_DAYS)
 
         # Step 1: Expire content for messages older than retention period
         expired_count = 0
@@ -586,7 +638,26 @@ async def handle_data_cleanup(task_id: int, task_type: str, payload: Dict[str, A
             db.commit()
             logger.info(f"Hard deleted {deleted_count} source-deleted messages with no open tasks")
 
-        # Step 3: Reschedule for next night
+        # Step 3: Purge aged audit and analytics rows according to retention settings
+        audit_deleted_total = 0
+        for label, model, timestamp_col, retention_days in audit_retention_specs:
+            if retention_days <= 0:
+                continue
+            audit_cutoff = now - timedelta(days=retention_days)
+            removed = db.query(model).filter(timestamp_col < audit_cutoff).delete(synchronize_session=False)
+            audit_deleted_total += int(removed or 0)
+            if removed:
+                logger.info(
+                    "Purged %s %s rows older than %s days",
+                    removed,
+                    label,
+                    retention_days,
+                )
+
+        if audit_deleted_total > 0:
+            db.commit()
+
+        # Step 4: Reschedule for next night
         next_run = get_next_cleanup_time()
         enqueue_task(
             task_type="data_cleanup",
@@ -751,6 +822,7 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
     from app.integrations.gmail import GmailClient
     from app.security.encryption import encrypt_body
     from app.services.email_filter import EmailFilterService, FilterAction
+    from app.services.contact_linking import ContactLinker
     from app.jobs.queue import enqueue_task
     from zoneinfo import ZoneInfo
 
@@ -802,10 +874,12 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
 
         # Initialize filter service
         filter_service = EmailFilterService(db=db, user_id=user_id)
+        contact_linker = ContactLinker(db=db, user_id=user_id)
 
         synced_count = 0
         filtered_count = 0
         message_ids = []  # Messages to process with AI
+        created_messages: list[Message] = []
 
         for msg_data in messages:
             # Check if message already exists
@@ -842,6 +916,11 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
                 subject=msg_data['subject'],
                 sender=msg_data['sender'],
                 recipient=msg_data['recipient'],
+                contact_id=contact_linker.resolve_message_contact_id(
+                    sender_value=msg_data['sender'],
+                    recipient_value=msg_data.get('recipient'),
+                    source="gmail_backfill",
+                ),
                 body=encrypt_body(msg_data['body']),
                 body_encrypted=True,
                 received_at=msg_data['received_at'],
@@ -852,6 +931,8 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
 
             db.add(message)
             db.flush()
+            contact_linker.link_thread_state(message.thread_id, message.contact_id)
+            created_messages.append(message)
             synced_count += 1
 
             # Only queue for AI processing if filter allows
@@ -861,6 +942,7 @@ async def handle_email_backfill(task_id: int, task_type: str, payload: Dict[str,
                 filtered_count += 1
 
         db.commit()
+        _invalidate_ingested_messages(db, created_messages)
 
         # Queue processing tasks for messages that passed the filter
         for msg_id in message_ids:
@@ -923,6 +1005,7 @@ async def handle_outlook_email_backfill(task_id: int, task_type: str, payload: D
     from app.integrations.outlook import OutlookClient
     from app.security.encryption import encrypt_body
     from app.services.email_filter import EmailFilterService, FilterAction
+    from app.services.contact_linking import ContactLinker
     from app.jobs.queue import enqueue_task
     from zoneinfo import ZoneInfo
 
@@ -953,10 +1036,12 @@ async def handle_outlook_email_backfill(task_id: int, task_type: str, payload: D
 
         messages = client.get_messages(max_results=500)
         filter_service = EmailFilterService(db=db, user_id=user_id)
+        contact_linker = ContactLinker(db=db, user_id=user_id)
 
         synced_count = 0
         filtered_count = 0
         message_ids = []
+        created_messages: list[Message] = []
 
         for msg in messages:
             received = msg.get("receivedDateTime")
@@ -1000,6 +1085,13 @@ async def handle_outlook_email_backfill(task_id: int, task_type: str, payload: D
                 subject=subject,
                 sender=sender_email,
                 recipient=",".join([r.get("emailAddress", {}).get("address") for r in msg.get("toRecipients", [])]),
+                contact_id=contact_linker.resolve_message_contact_id(
+                    sender_value=sender_email,
+                    recipient_value=",".join(
+                        [r.get("emailAddress", {}).get("address") for r in msg.get("toRecipients", [])]
+                    ),
+                    source="outlook_backfill",
+                ),
                 body=encrypt_body(body_content),
                 body_encrypted=True,
                 received_at=received_dt if received else datetime.now(timezone.utc),
@@ -1010,6 +1102,8 @@ async def handle_outlook_email_backfill(task_id: int, task_type: str, payload: D
             )
             db.add(message)
             db.flush()
+            contact_linker.link_thread_state(message.thread_id, message.contact_id)
+            created_messages.append(message)
             synced_count += 1
             if filter_result.action == FilterAction.PROCESS:
                 message_ids.append(message.id)
@@ -1017,6 +1111,7 @@ async def handle_outlook_email_backfill(task_id: int, task_type: str, payload: D
                 filtered_count += 1
 
         db.commit()
+        _invalidate_ingested_messages(db, created_messages)
 
         for msg_id in message_ids:
             enqueue_task(
@@ -1124,29 +1219,34 @@ async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
 
     try:
-        user_email = payload.get("user_email")
         digest_type = payload.get("digest_type")
         
         # Get user settings
         settings = db.query(UserSettings).filter(
-            UserSettings.user_email == user_email
+            UserSettings.user_id == user_id
         ).first()
+        if not settings and payload.get("user_email"):
+            legacy_user_email = payload.get("user_email")
+            settings = db.query(UserSettings).filter(
+                UserSettings.user_email == legacy_user_email
+            ).first()
+        user_email = (settings.user_email if settings else payload.get("user_email"))
         
         if not settings:
-            logger.warning(f"No settings found for user {user_email}")
+            logger.warning("No settings found for user=%s", mask_email(user_email))
             return
         
         prefs = settings.digest_preferences or {}
         
         # Check if this digest type is enabled
         if not prefs.get("enabled") or not prefs.get(digest_type, {}).get("enabled"):
-            logger.info(f"Digest {digest_type} disabled for user {user_email}")
+            logger.info("Digest %s disabled for user=%s", digest_type, mask_email(user_email))
             # Still reschedule to check next time
             next_time = get_next_digest_time(digest_type, prefs, settings.default_timezone)
             if next_time:
                 enqueue_task(
                     task_type="generate_digest",
-                    payload={"user_email": user_email, "digest_type": digest_type, "user_id": user_id},
+                    payload={"digest_type": digest_type, "user_id": user_id},
                     scheduled_for=next_time,
                     db=db
                 )
@@ -1157,7 +1257,7 @@ async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str
             next_available = get_next_available_time(settings.reminder_preferences or {})
             enqueue_task(
                 task_type="generate_digest",
-                payload={"user_email": user_email, "digest_type": digest_type, "user_id": user_id},
+                payload={"digest_type": digest_type, "user_id": user_id},
                 scheduled_for=next_available,
                 db=db
             )
@@ -1165,7 +1265,7 @@ async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str
             return
         
         # Generate digest content
-        service = DigestService(db, user_email)
+        service = DigestService(db, user_id=user_id)
         
         if digest_type == "morning_briefing":
             content = service.generate_morning_briefing()
@@ -1211,13 +1311,13 @@ async def handle_generate_digest(task_id: int, task_type: str, payload: Dict[str
         if next_time:
             enqueue_task(
                 task_type="generate_digest",
-                payload={"user_email": user_email, "digest_type": digest_type, "user_id": user_id},
+                payload={"digest_type": digest_type, "user_id": user_id},
                 scheduled_for=next_time,
                 db=db
             )
             logger.info(f"Next {digest_type} scheduled for {next_time}")
         
-        logger.info(f"Generated {digest_type} digest for {user_email}")
+        logger.info("Generated %s digest for user=%s", digest_type, mask_email(user_email))
         
     except Exception as e:
         db.rollback()
@@ -1284,12 +1384,19 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
                 html=True
             )
             
-            logger.info(f"Sent email digest to {digest.user_email}")
+            logger.info("Sent email digest to %s", mask_email(digest.user_email))
 
         elif channel == "telegram":
             # TODO: Send via Telegram bot
-            logger.info(f"Would send Telegram digest to {digest.user_email}")
+            logger.info("Would send Telegram digest to %s", mask_email(digest.user_email))
         elif channel == "push":
+            if not ENABLE_DIGEST_NOTIFICATIONS:
+                logger.info(f"Digest push notifications disabled, skipping push delivery for digest {digest.id}")
+                digest.delivery_status = "sent"
+                digest.delivered_at = datetime.now(timezone.utc)
+                db.commit()
+                return
+
             from app.services.notification import NotificationService
 
             title_map = {
@@ -1329,7 +1436,6 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
                 "event_payload": {
                     "digest_id": digest.id,
                     "digest_type": digest.digest_type,
-                    "user_email": digest.user_email,
                     "user_id": user_id,
                 }
             },
@@ -1337,7 +1443,7 @@ async def handle_deliver_digest(task_id: int, task_type: str, payload: Dict[str,
             db=db
         )
         
-        logger.info(f"Delivered {digest.digest_type} digest to {digest.user_email}")
+        logger.info("Delivered %s digest to %s", digest.digest_type, mask_email(digest.user_email))
         
     except Exception as e:
         if digest:
@@ -1366,9 +1472,13 @@ def schedule_digest_jobs_if_needed(db):
         TaskQueue.status == "pending"
     ).all()
 
-    # Build set of already-scheduled (user_email, digest_type) pairs
+    # Build set of already-scheduled (user_id, digest_type) pairs.
+    # Backward-compatible with older pending jobs keyed by user_email.
     scheduled = {
-        (job.payload.get("user_email"), job.payload.get("digest_type"))
+        (
+            job.payload.get("user_id") or job.payload.get("user_email"),
+            job.payload.get("digest_type"),
+        )
         for job in pending_jobs
     }
 
@@ -1384,19 +1494,20 @@ def schedule_digest_jobs_if_needed(db):
                 continue
 
             # Skip if already scheduled for this user + digest_type
-            if (settings.user_email, digest_type) in scheduled:
-                logger.debug(f"Digest {digest_type} already scheduled for {settings.user_email}")
+            schedule_key = settings.user_id or settings.user_email
+            if (schedule_key, digest_type) in scheduled:
+                logger.debug("Digest %s already scheduled for %s", digest_type, mask_email(settings.user_email))
                 continue
 
             next_time = get_next_digest_time(digest_type, prefs, settings.default_timezone)
             if next_time:
                 enqueue_task(
                     task_type="generate_digest",
-                    payload={"user_email": settings.user_email, "digest_type": digest_type},
+                    payload={"user_id": settings.user_id, "digest_type": digest_type},
                     scheduled_for=next_time,
                     db=db
                 )
-                logger.info(f"Scheduled {digest_type} for {settings.user_email} at {next_time}")
+                logger.info("Scheduled %s for %s at %s", digest_type, mask_email(settings.user_email), next_time)
 
 
 async def handle_process_chat_message(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
@@ -1425,7 +1536,11 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
         logger.error(f"process_chat_message task (id={task_id}) missing required fields")
         return
 
-    logger.info(f"Processing async chat message: job_id={job_id}, session_id={session_id}")
+    logger.info(
+        "Processing async chat message: job_id=%s session_id=%s",
+        mask_identifier(job_id),
+        mask_identifier(session_id),
+    )
 
     db = SessionLocal()
     db.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": user_id})
@@ -1438,7 +1553,7 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
         ).first()
 
         if not session:
-            logger.error(f"Session {session_id} not found")
+            logger.error("Session %s not found", mask_identifier(session_id))
             _update_message_failed(db, assistant_message_id, "Session not found")
             return
 
@@ -1475,7 +1590,11 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
         ).first()
 
         if not assistant_msg:
-            logger.error(f"Assistant message {assistant_message_id} not found for session {session_id}")
+            logger.error(
+                "Assistant message %s not found for session %s",
+                assistant_message_id,
+                mask_identifier(session_id),
+            )
             return
 
         # Update with actual response
@@ -1500,7 +1619,7 @@ async def handle_process_chat_message(task_id: int, task_type: str, payload: Dic
             db.add(pa)
 
         db.commit()
-        logger.info(f"Async chat message complete: job_id={job_id}")
+        logger.info("Async chat message complete: job_id=%s", mask_identifier(job_id))
 
     except Exception as e:
         logger.error(f"Error processing async chat message: {e}", exc_info=True)
@@ -1519,7 +1638,7 @@ def _update_message_failed(db, message_id: int, error: str):
             logger.error(
                 "chat_async_message_failed message_id=%s session_id=%s internal_error=%s",
                 message_id,
-                msg.session_id,
+                mask_identifier(msg.session_id),
                 error,
             )
             user_error = USER_RETRY_MESSAGE
@@ -1801,7 +1920,9 @@ async def handle_process_billing_webhook_event(task_id: int, task_type: str, pay
                     event_type=event.event_type,
                     processed=False,
                     error="no_handler",
-                    customer_id=event.customer_id or event.customer_email,
+                    user_id=user_row.user_id if user_row else None,
+                    provider_customer_id=event.customer_id,
+                    subject_ref=privacy_ref(event.customer_email),
                 )
             )
 
@@ -1815,7 +1936,9 @@ async def handle_process_billing_webhook_event(task_id: int, task_type: str, pay
                     event_type=event.event_type or "unknown",
                     processed=False,
                     error="processing_failed",
-                    customer_id=event.customer_id or event.customer_email,
+                    user_id=user_row.user_id if 'user_row' in locals() and user_row else None,
+                    provider_customer_id=event.customer_id,
+                    subject_ref=privacy_ref(event.customer_email),
                 )
             )
             db.commit()
@@ -1977,6 +2100,113 @@ async def handle_check_dunning_status(task_id: int, task_type: str, payload: Dic
         db.close()
 
 
+async def handle_classify_context_capture(task_id: int, task_type: str, payload: Dict[str, Any], correlation_id: str):
+    """Classify a captured context entry asynchronously and notify the user."""
+    from app.infra.database import SessionLocal
+    from app.data.models import ContextEntry
+    from app.services.context_capture_classifier import classify_context_capture
+    from app.services.notification import NotificationService
+    from app.routes.v1.vault import _validated_capture_links
+
+    entry_id = payload.get("entry_id")
+    user_id = payload.get("user_id")
+    if not entry_id or not user_id:
+        raise ValueError("classify_context_capture requires entry_id and user_id")
+
+    db = SessionLocal()
+    try:
+        entry = (
+            db.query(ContextEntry)
+            .filter(ContextEntry.id == int(entry_id), ContextEntry.user_id == user_id)
+            .first()
+        )
+        if not entry:
+            logger.info("Context capture classification skipped: entry not found entry_id=%s user=%s", entry_id, user_id)
+            return
+        if entry.user_corrected or entry.classification_status == "user_corrected":
+            logger.info("Context capture classification skipped: user_corrected entry_id=%s", entry.id)
+            return
+
+        prior_entry = ContextEntry(
+            user_id=entry.user_id,
+            type=entry.type,
+            content=entry.content,
+            raw_text=entry.raw_text,
+            entity_type=entry.entity_type,
+            entity_id=entry.entity_id,
+            linked_to=entry.linked_to,
+            created_by=entry.created_by,
+            status=entry.status,
+            expires_at=entry.expires_at,
+        )
+
+        started_at = datetime.now(timezone.utc)
+        result = classify_context_capture(entry)
+        applied_category = "insight" if result.uncertain else result.category
+        entry.type = applied_category
+        entry.classification_status = "classified"
+        entry.classification_confidence = result.confidence
+        entry.classification_suggested_type = result.category if result.uncertain and result.category != applied_category else None
+        secondary_link_count = 0
+        if not result.uncertain and result.secondary_links:
+            existing = {(link.entity_type, link.entity_id) for link in (entry.links or [])}
+            for link in _validated_capture_links(
+                db=db,
+                user_id=user_id,
+                links=result.secondary_links,
+                source="teeks",
+            ):
+                dedupe_key = (link.entity_type, link.entity_id)
+                if dedupe_key in existing:
+                    continue
+                existing.add(dedupe_key)
+                link.entry_id = entry.id
+                db.add(link)
+                secondary_link_count += 1
+        entry.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(entry)
+
+        cache_coordinator.invalidate_from_context_entry(
+            _tenant_id(),
+            entry,
+            prior_entry=prior_entry,
+        )
+
+        scope_label = (entry.linked_to or "").strip()
+        title_suffix = f" for {scope_label}" if scope_label else ""
+        if result.uncertain:
+            title = f"Saved as Insight{title_suffix}"
+            body = "Teeks was unsure, so it used Insight. Change category anytime."
+        else:
+            title = f"Saved as {applied_category.title()}{title_suffix}"
+            body = "Change category anytime."
+
+        NotificationService(db, user_id).create_notification(
+            title=title,
+            body=body,
+            category="system",
+            priority="normal",
+            target_type="context_entry",
+            target_id=str(entry.id),
+            send_push=False,
+        )
+
+        elapsed_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+        logger.info(
+            "Context capture classified: entry_id=%s user=%s category=%s confidence=%.3f uncertain=%s latency_ms=%s secondary_links=%s",
+            entry.id,
+            user_id,
+            applied_category,
+            result.confidence,
+            result.uncertain,
+            elapsed_ms,
+            secondary_link_count,
+        )
+    finally:
+        db.close()
+
+
 # Map task types to handlers
 TASK_HANDLERS = {
     "process_email": handle_process_email,
@@ -2001,6 +2231,7 @@ TASK_HANDLERS = {
     "process_billing_webhook_event": handle_process_billing_webhook_event,
     "apply_scheduled_plan_change": handle_apply_scheduled_plan_change,
     "check_dunning_status": handle_check_dunning_status,
+    "classify_context_capture": handle_classify_context_capture,
     "check_trial_expirations": handle_check_trial_expirations,
     "check_webhook_health": handle_check_webhook_health,
 }
@@ -2211,3 +2442,4 @@ if __name__ == "__main__":
     import app.handlers
     # Use batch worker for efficient LLM batching by user
     run_email_batch_worker()
+

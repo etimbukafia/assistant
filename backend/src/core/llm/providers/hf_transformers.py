@@ -86,7 +86,14 @@ class HFTransformersProvider(BaseLLMProvider):
         self._initialized = True
         logger.info(f"Model loaded successfully on {self.device}")
 
-    def _raw_generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def _raw_generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        *,
+        max_output_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
         """Internal: Generate raw text using chat template"""
         messages = []
         if system_prompt:
@@ -119,10 +126,10 @@ class HFTransformersProvider(BaseLLMProvider):
         with self._torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=self.config.hf_max_new_tokens,
-                temperature=self.config.hf_temperature,
+                max_new_tokens=max_output_tokens or self.config.hf_max_new_tokens,
+                temperature=self.config.hf_temperature if temperature is None else temperature,
                 top_p=self.config.hf_top_p,
-                do_sample=self.config.hf_temperature > 0,
+                do_sample=(self.config.hf_temperature if temperature is None else temperature) > 0,
                 pad_token_id=self.tokenizer.eos_token_id,
             )
 

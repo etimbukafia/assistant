@@ -32,6 +32,21 @@ export const OrchestratorResultSchema = z.object({
     })),
     draft_reply: z.string(),
     reasoning: z.string().nullable().optional(),
+    availability_check: z.object({
+        is_available: z.boolean(),
+        requested_checks: z.array(z.object({
+            start_time: z.string(),
+            end_time: z.string(),
+            is_available: z.boolean(),
+            conflicts: z.array(z.object({
+                id: z.number().optional(),
+                title: z.string().optional(),
+                start_time: z.string().nullable().optional(),
+                end_time: z.string().nullable().optional(),
+                label: z.string().nullable().optional(),
+            })).optional(),
+        })),
+    }).nullable().optional(),
 });
 
 export type SchedulingIntent = z.infer<typeof SchedulingIntentSchema>;

@@ -24,7 +24,7 @@ interface AuthContextType {
     microsoftConnectError: string | null;
     microsoftConnectInFlight: boolean;
     microsoftConnected: boolean;
-    signInWithGoogle: () => Promise<void>;
+    signInWithGoogle: (nextPath?: string) => Promise<void>;
     signInWithMicrosoft: () => Promise<void>;
     signOut: () => Promise<void>;
     refreshProfile: () => Promise<void>;
@@ -64,6 +64,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: string;
         accessToken: string;
     } | null>(null);
+    // Counter to discard superseded concurrent settings fetches
+    const settingsFetchCounterRef = useRef(0);
 
     const refreshProfile = useCallback(async () => {
         try {
@@ -77,7 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setMicrosoftConnected(true);
             }
         } catch (error: any) {
-            console.error('[Auth] Failed to fetch settings:', error);
+            console.error('[Auth] Failed to fetch settings:', error?.message ?? 'unknown error');
             // Only clear on 404 (new user). Keep existing settings on transient errors.
             if (error?.response?.status === 404) {
                 setSettings(null);
@@ -99,14 +101,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setGmailConnectInFlight(true);
         setGmailConnectError(null);
 
-        console.log('[Auth] Connecting Gmail for:', pending.email);
         try {
             await connectGmail({
                 provider_token: pending.providerToken,
                 provider_refresh_token: pending.providerRefreshToken,
                 email: pending.email,
             }, pending.accessToken);
-            console.log('[Auth] Gmail connected successfully');
             gmailConnectProcessedRef.current = true;
             setGmailConnected(true);
             setGmailConnectError(null);
@@ -122,7 +122,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const message = typeof detail === 'string'
                 ? detail
                 : 'Failed to connect Gmail. Please try again.';
-            console.error('[Auth] Failed to connect Gmail:', message);
             gmailConnectProcessedRef.current = false;
             setGmailConnectError(message);
         } finally {
@@ -146,14 +145,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setMicrosoftConnectInFlight(true);
         setMicrosoftConnectError(null);
 
-        console.log('[Auth] Connecting Microsoft for:', pending.email);
         try {
             await connectMicrosoft({
                 provider_token: pending.providerToken,
                 provider_refresh_token: pending.providerRefreshToken,
                 email: pending.email,
             }, pending.accessToken);
-            console.log('[Auth] Microsoft connected successfully');
             microsoftConnectProcessedRef.current = true;
             setMicrosoftConnected(true);
             setMicrosoftConnectError(null);
@@ -169,7 +166,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const message = typeof detail === 'string'
                 ? detail
                 : 'Failed to connect Microsoft. Please try again.';
-            console.error('[Auth] Failed to connect Microsoft:', message);
             microsoftConnectProcessedRef.current = false;
             setMicrosoftConnectError(message);
         } finally {
@@ -188,24 +184,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 const provider = session?.user?.app_metadata?.provider;
                 if (session?.provider_token && session?.user?.email) {
                     if (provider === 'azure') {
-                        lastMicrosoftConnectRef.current = {
-                            providerToken: session.provider_token,
-                            providerRefreshToken: session.provider_refresh_token || undefined,
-                            email: session.user.email,
-                            accessToken: session.access_token,
-                        };
+                        // Only update the token ref when not in-flight — prevents
+                        // a TOKEN_REFRESHED event overwriting tokens mid-connection.
+                        if (!microsoftConnectInFlightRef.current) {
+                            lastMicrosoftConnectRef.current = {
+                                providerToken: session.provider_token,
+                                providerRefreshToken: session.provider_refresh_token || undefined,
+                                email: session.user.email,
+                                accessToken: session.access_token,
+                            };
+                        }
                         if (!microsoftConnectProcessedRef.current && !microsoftConnectInFlightRef.current) {
-                            startMicrosoftConnect(lastMicrosoftConnectRef.current);
+                            startMicrosoftConnect(lastMicrosoftConnectRef.current!);
                         }
                     } else {
-                        lastGmailConnectRef.current = {
-                            providerToken: session.provider_token,
-                            providerRefreshToken: session.provider_refresh_token || undefined,
-                            email: session.user.email,
-                            accessToken: session.access_token,
-                        };
+                        if (!gmailConnectInFlightRef.current) {
+                            lastGmailConnectRef.current = {
+                                providerToken: session.provider_token,
+                                providerRefreshToken: session.provider_refresh_token || undefined,
+                                email: session.user.email,
+                                accessToken: session.access_token,
+                            };
+                        }
                         if (!gmailConnectProcessedRef.current && !gmailConnectInFlightRef.current) {
-                            startGmailConnect(lastGmailConnectRef.current);
+                            startGmailConnect(lastGmailConnectRef.current!);
                         }
                     }
                 } else if (_event === 'SIGNED_OUT') {
@@ -215,6 +217,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     microsoftConnectProcessedRef.current = false;
                     microsoftConnectInFlightRef.current = false;
                     lastMicrosoftConnectRef.current = null;
+                    settingsFetchCounterRef.current = 0;
                     setSettings(null);
                     setGmailConnectError(null);
                     setGmailConnected(false);
@@ -222,14 +225,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     setMicrosoftConnected(false);
                 }
 
-                // Fetch settings for authenticated users
+                // Fetch settings for authenticated users.
+                // Counter guards against concurrent fetches from rapid SIGNED_IN +
+                // TOKEN_REFRESHED events — only the most recent fetch wins.
                 if (_event === 'SIGNED_IN' || _event === 'TOKEN_REFRESHED') {
                     if (session?.access_token) {
+                        const counter = ++settingsFetchCounterRef.current;
                         try {
                             setSettingsLoading(true);
                             const data = await fetchSettings(session.access_token);
+                            if (counter !== settingsFetchCounterRef.current) return;
                             setSettings(data);
                         } catch (err: any) {
+                            if (counter !== settingsFetchCounterRef.current) return;
                             // Only clear settings for 404 (truly new user).
                             // For transient errors (401, network), keep existing settings
                             // to avoid false redirect to /auth/subscription.
@@ -238,7 +246,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                                 setSettings(null);
                             }
                         } finally {
-                            setSettingsLoading(false);
+                            if (counter === settingsFetchCounterRef.current) {
+                                setSettingsLoading(false);
+                            }
                         }
                     }
                 }
@@ -246,7 +256,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         );
 
         return () => subscription.unsubscribe();
-    }, [supabase, startGmailConnect]);
+    }, [supabase, startGmailConnect, startMicrosoftConnect]);
 
     useEffect(() => {
         if (settings?.gmail_connected) {
@@ -260,11 +270,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     }, [settings?.outlook_connected]);
 
-    const signInWithGoogle = async () => {
+    const signInWithGoogle = async (nextPath?: string) => {
+        const next = nextPath && nextPath.startsWith("/")
+            ? nextPath
+            : "/dashboard";
+
         await supabase.auth.signInWithOAuth({
             provider: 'google',
             options: {
-                redirectTo: `${window.location.origin}/auth/callback`,
+                redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
                 scopes: 'email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.events.freebusy',
                 queryParams: {
                     access_type: 'offline',

@@ -1,4 +1,5 @@
 from .base import BaseLLMProvider
+from .anthropic import AnthropicProvider
 from .gemini import GeminiProvider
 from .hf_transformers import HFTransformersProvider
 from .sentence_transformer import (
@@ -9,6 +10,7 @@ from .sentence_transformer import (
 
 __all__ = [
     "BaseLLMProvider",
+    "AnthropicProvider",
     "GeminiProvider",
     "HFTransformersProvider",
     "SentenceTransformerProvider",

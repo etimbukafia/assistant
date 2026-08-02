@@ -5,14 +5,13 @@ import { ArrowUp, Check, PanelLeftClose, PanelLeftOpen, Plus, Search, Trash2, X 
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { ApprovalGateComposer } from "@/components/chat/ApprovalGateComposer";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useChat, useChatActionChips, useChatMessages, useChatSessions } from "@/hooks/useChat";
+import { useChat, useChatMessages, useChatSessions } from "@/hooks/useChat";
 import { useMentionComposer } from "@/hooks/useMentionComposer";
 import { cn } from "@/lib/utils";
 import { chatService, type ChatMention, type MentionSuggestion as ApiMentionSuggestion } from "@/services/chat";
@@ -21,12 +20,12 @@ import { trackUIEvent } from "@/services/telemetry";
 const SESSIONS_QUERY_KEY = ["chat", "sessions", { limit: 20, offset: 0 }] as const;
 type SessionsCache = { sessions: Array<{ id: string; title?: string | null }> };
 
-const FALLBACK_ACTION_CHIPS = [
-    { id: "fallback_1", label: "Draft quick update to a contact", prompt: "Draft a concise update email I can send now." },
-    { id: "fallback_2", label: "Prep me for a meeting", prompt: "Prep me for my next meeting: agenda, risks, decisions, and talking points." },
-    { id: "fallback_3", label: "Turn notes into a brief", prompt: "Turn this into a one-page brief with decisions, commitments, and open questions." },
-    { id: "fallback_4", label: "What changed since yesterday?", prompt: "What changed since yesterday? Keep it tight and action-oriented." },
-    { id: "fallback_5", label: "Extract commitments", prompt: "Extract commitments and owners from recent messages, then suggest next actions." },
+const THINKING_STARTER_CHIPS = [
+    { id: "memory_1", label: "What changed since yesterday?", prompt: "What changed since yesterday across my contacts, captures, and active threads?" },
+    { id: "memory_2", label: "When last did we discuss...", prompt: "When last did we discuss [topic], and with whom?" },
+    { id: "memory_3", label: "Any preference I should know?", prompt: "Is there any communication preference I should know about [person]?" },
+    { id: "memory_4", label: "Did we approve this?", prompt: "Did we approve [vendor / topic], and what context should I keep in mind?" },
+    { id: "memory_5", label: "Summarize what we know", prompt: "Summarize what we know about [person / topic / thread] from prior context." },
 ];
 
 type ActionChip = { id: string; label: string; prompt: string };
@@ -58,6 +57,7 @@ type ReferencePaneItem = {
 const CARD_SHADOW = "0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05)";
 const ENTITY_PAGE_SIZE = 30;
 const MEMORY_PAGE_SIZE = 30;
+const MAX_THREAD_SELECTION = 5;
 const PANE_FILTERS: Array<{ key: PaneFilter; label: string }> = [
     { key: "all", label: "All" },
     { key: "contact", label: "@ Contacts" },
@@ -98,6 +98,10 @@ function mentionKey(mention: ChatMention): string {
     return `${mention.kind}:${mention.ref}`;
 }
 
+function isThreadMention(mention: ChatMention): boolean {
+    return mention.kind === "thread";
+}
+
 function formatMentionDate(value?: string): string {
     if (!value) return "";
     const dt = new Date(value);
@@ -110,6 +114,16 @@ function withEllipsis(value: string | undefined, maxChars: number): string {
     if (!text) return "";
     if (text.length <= maxChars) return text;
     return `${text.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
+}
+
+function isRecoverableDeleteError(error: any): boolean {
+    const status = Number(error?.response?.status || 0);
+    const code = String(error?.code || "").toUpperCase();
+    if (status === 404) return true; // already deleted
+    if (status >= 500) return true;
+    if (!status && (code === "ECONNABORTED" || code === "NETWORK_ERROR")) return true;
+    if (!error?.response && !!error?.request) return true;
+    return false;
 }
 
 function normalizeKindLabel(kind: string): string {
@@ -171,6 +185,17 @@ export default function ChatWorkspacePage() {
     const inputRef = React.useRef<HTMLTextAreaElement>(null);
     const scrollRef = React.useRef<HTMLDivElement>(null);
     const frozenActionChipsBySessionRef = React.useRef<Record<string, ActionChip[]>>({});
+    const submitInFlightRef = React.useRef(false);
+    const adjustComposerHeight = React.useCallback(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        const minPx = 44;
+        const maxPx = 240;
+        el.style.height = "auto";
+        const next = Math.min(Math.max(el.scrollHeight, minPx), maxPx);
+        el.style.height = `${next}px`;
+        el.style.overflowY = el.scrollHeight > maxPx ? "auto" : "hidden";
+    }, []);
 
     const queryClient = useQueryClient();
 
@@ -185,8 +210,7 @@ export default function ChatWorkspacePage() {
     } = useChat();
 
     const { data: sessionList } = useChatSessions({ limit: 20, offset: 0, enabled: true });
-    const { data: messages, pendingActions } = useChatMessages(currentSessionId);
-    const { data: personalizedActionChips } = useChatActionChips({ limit: 5, enabled: true });
+    const { data: messages } = useChatMessages(currentSessionId);
 
     React.useEffect(() => {
         if (!currentSessionId && sessionList?.sessions?.length) {
@@ -198,7 +222,11 @@ export default function ChatWorkspacePage() {
         if (scrollRef.current) {
             scrollRef.current.scrollIntoView({ behavior: "smooth" });
         }
-    }, [messages, pendingActions, isSending]);
+    }, [messages, isSending]);
+
+    React.useEffect(() => {
+        adjustComposerHeight();
+    }, [inputValue, adjustComposerHeight]);
 
     React.useEffect(() => {
         setSelectedPaneMentions([]);
@@ -382,6 +410,14 @@ export default function ChatWorkspacePage() {
                 return bTs - aTs;
             });
     }, [entityItems, memoryItems, paneFilter]);
+    const availablePaneItems = React.useMemo(() => {
+        const merged = [...entityItems, ...memoryItems];
+        const byId = new Map<string, ReferencePaneItem>();
+        for (const item of merged) {
+            byId.set(item.id, item);
+        }
+        return Array.from(byId.values());
+    }, [entityItems, memoryItems]);
     const hasMorePaneItems =
         (isEntityFilter(paneFilter) && hasMoreEntities) ||
         (isMemoryFilter(paneFilter) && hasMoreMemory) ||
@@ -391,21 +427,40 @@ export default function ChatWorkspacePage() {
         () => new Set(selectedPaneMentions.map((mention) => mentionKey(mention))),
         [selectedPaneMentions]
     );
+    const selectedPaneThreadCount = React.useMemo(
+        () => selectedPaneMentions.filter(isThreadMention).length,
+        [selectedPaneMentions]
+    );
 
     const togglePaneMention = React.useCallback((mention: ChatMention) => {
         const key = mentionKey(mention);
-        setSelectedPaneMentions((prev) => {
-            if (prev.some((m) => mentionKey(m) === key)) {
-                return prev.filter((m) => mentionKey(m) !== key);
-            }
-            return [...prev, mention];
-        });
-    }, []);
+        const isSelected = selectedPaneMentions.some((m) => mentionKey(m) === key);
+        if (isSelected) {
+            setSelectedPaneMentions((prev) => prev.filter((m) => mentionKey(m) !== key));
+            return;
+        }
+        if (isThreadMention(mention) && selectedPaneThreadCount >= MAX_THREAD_SELECTION) {
+            toast.error(`You can select up to ${MAX_THREAD_SELECTION} threads at once.`);
+            return;
+        }
+        setSelectedPaneMentions((prev) => [...prev, mention]);
+    }, [selectedPaneMentions, selectedPaneThreadCount]);
 
     const removePaneMention = React.useCallback((mention: ChatMention) => {
         const key = mentionKey(mention);
         setSelectedPaneMentions((prev) => prev.filter((m) => mentionKey(m) !== key));
     }, []);
+
+    React.useEffect(() => {
+        if (paneQuery.trim()) return;
+        const availableKeys = new Set(availablePaneItems.map((item) => mentionKey(item.mention)));
+        setSelectedPaneMentions((prev) => prev.filter((mention) => availableKeys.has(mentionKey(mention))));
+        setPreviewItem((prev) => {
+            if (!prev) return prev;
+            const refreshed = availablePaneItems.find((item) => item.id === prev.id);
+            return refreshed ?? null;
+        });
+    }, [availablePaneItems, paneQuery]);
 
     const compileMentionsForMessage = React.useCallback((content: string): ChatMention[] => {
         const inlineMentions = parseMentions(content);
@@ -440,6 +495,10 @@ export default function ChatWorkspacePage() {
         }
         return merged;
     }, [selectedInlineMentions, selectedPaneMentions]);
+    const selectedInputThreadCount = React.useMemo(
+        () => selectedInputMentions.filter(isThreadMention).length,
+        [selectedInputMentions]
+    );
 
     const removeInputMention = React.useCallback((mention: ChatMention) => {
         if (selectedPaneMentions.some((m) => mentionKey(m) === mentionKey(mention))) {
@@ -451,18 +510,25 @@ export default function ChatWorkspacePage() {
     }, [removePaneMention, selectedPaneMentions]);
 
     const submitCurrentMessage = React.useCallback(async () => {
-        if (!inputValue.trim() || isSending || isCreating) return;
+        if (!inputValue.trim() || isSending || isCreating || submitInFlightRef.current) return;
+        submitInFlightRef.current = true;
 
         const content = inputValue.trim();
         const mentions = compileMentionsForMessage(content);
+        const threadMentionCount = mentions.filter(isThreadMention).length;
+        if (threadMentionCount > MAX_THREAD_SELECTION) {
+            toast.error(`Please keep thread selection to ${MAX_THREAD_SELECTION} or fewer.`);
+            submitInFlightRef.current = false;
+            return;
+        }
         setInputValue("");
 
         try {
             if (!currentSessionId) {
-                const session = await createSession({ mode: "action" });
-                await sendMessage({ session_id: session.id, content, mode: "action", mentions });
+                const session = await createSession({ mode: "reflection" });
+                await sendMessage({ session_id: session.id, content, mode: "reflection", mentions });
             } else {
-                await sendMessage({ session_id: currentSessionId, content, mode: "action", mentions });
+                await sendMessage({ session_id: currentSessionId, content, mode: "reflection", mentions });
             }
             clearMentionState();
             setSelectedPaneMentions([]);
@@ -474,6 +540,8 @@ export default function ChatWorkspacePage() {
         } catch {
             toast.error("That didn't send. Try again.");
             setInputValue(content);
+        } finally {
+            submitInFlightRef.current = false;
         }
     }, [
         clearMentionState,
@@ -495,14 +563,31 @@ export default function ChatWorkspacePage() {
     const handleComposerKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         onInputKeyDown(e);
         if (e.defaultPrevented) return;
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            const target = e.currentTarget;
+            const start = target.selectionStart ?? target.value.length;
+            const end = target.selectionEnd ?? start;
+            setInputValue((prev) => `${prev.slice(0, start)}\n${prev.slice(end)}`);
+            requestAnimationFrame(() => {
+                inputRef.current?.focus();
+                inputRef.current?.setSelectionRange(start + 1, start + 1);
+                adjustComposerHeight();
+            });
+            return;
+        }
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             void submitCurrentMessage();
         }
-    }, [onInputKeyDown, submitCurrentMessage]);
+    }, [onInputKeyDown, submitCurrentMessage, adjustComposerHeight]);
 
-    const insertPrompt = (prompt: string) => {
-        trackUIEvent("chat_chip_clicked", { prompt });
+    const insertPrompt = (chipId: string, prompt: string) => {
+        trackUIEvent("chat_chip_clicked", {
+            chip_id: chipId,
+            prompt_length: prompt.length,
+            source: "dashboard_chat",
+        });
         setInputValue(prompt);
         requestAnimationFrame(() => {
             inputRef.current?.focus();
@@ -535,7 +620,28 @@ export default function ChatWorkspacePage() {
 
         try {
             await deleteSession(sessionId);
-        } catch {
+        } catch (error: any) {
+            const recoverable = isRecoverableDeleteError(error);
+            if (recoverable) {
+                // Eventual consistency path: server may have applied delete after client timeout.
+                for (let attempt = 0; attempt < 6; attempt += 1) {
+                    try {
+                        const latest = await chatService.getSessions(20, 0);
+                        queryClient.setQueryData(SESSIONS_QUERY_KEY, latest);
+                        const stillExists = latest.sessions.some((s) => s.id === sessionId);
+                        if (!stillExists) {
+                            if (previousSessionId === sessionId) {
+                                setCurrentSessionId(latest.sessions[0]?.id ?? null);
+                            }
+                            return;
+                        }
+                    } catch {
+                        // keep retrying; we only rollback once retries are exhausted
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 450 * (attempt + 1)));
+                }
+            }
+
             queryClient.setQueryData(SESSIONS_QUERY_KEY, snapshot);
             setCurrentSessionId(previousSessionId);
             toast.error("That didn't delete. Try again.");
@@ -544,9 +650,8 @@ export default function ChatWorkspacePage() {
 
     const handleNewThread = async () => {
         const previousSessionId = currentSessionId;
-        setCurrentSessionId(null);
         try {
-            const session = await createSession({ mode: "action" });
+            const session = await createSession({ mode: "reflection" });
             setCurrentSessionId(session.id);
         } catch {
             setCurrentSessionId(previousSessionId);
@@ -555,9 +660,7 @@ export default function ChatWorkspacePage() {
     };
 
     const chipSessionKey = currentSessionId || "__unsaved_session__";
-    const candidateChips: ActionChip[] = (
-        personalizedActionChips && personalizedActionChips.length > 0 ? personalizedActionChips : FALLBACK_ACTION_CHIPS
-    ).slice(0, 5);
+    const candidateChips: ActionChip[] = THINKING_STARTER_CHIPS.slice(0, 5);
     const actionChips = React.useMemo(() => {
         const existing = frozenActionChipsBySessionRef.current[chipSessionKey];
         if (existing && existing.length > 0) return existing;
@@ -655,7 +758,7 @@ export default function ChatWorkspacePage() {
                         className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-[8px] text-[13px] font-medium text-primary border border-primary/25 bg-primary/[0.04] hover:bg-primary/[0.09] active:scale-[0.98] transition-all font-inter disabled:opacity-50"
                     >
                         <Plus size={15} strokeWidth={2.5} />
-                        New chat
+                        New space
                     </button>
                 </div>
             </aside>
@@ -678,14 +781,14 @@ export default function ChatWorkspacePage() {
                         </button>
                     )}
                     <p className="flex-1 text-sm font-medium text-foreground truncate font-inter">
-                        {hasMessages ? (activeSession?.title || "Chat") : ""}
+                        {hasMessages ? (activeSession?.title || "Memory Reflection Space") : ""}
                     </p>
                     <button
                         type="button"
                         onClick={() => setIsPaneOpen((prev) => !prev)}
                         className="rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-linen font-inter"
                     >
-                        {isPaneOpen ? "Hide references" : "Show references"}
+                        {isPaneOpen ? "Hide memory" : "Show memory"}
                     </button>
                 </div>
 
@@ -697,16 +800,23 @@ export default function ChatWorkspacePage() {
                                     {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
                                 </p>
                                 <h1 className="font-playfair text-[28px] font-semibold text-foreground leading-tight tracking-tight">
-                                    What can I help you with?
+                                    What do you want to remember, verify, or clarify?
                                 </h1>
                             </div>
                         )}
 
-                        {messages?.map((msg) => (
-                            <div key={msg.id} className="flex flex-col">
-                                <MessageBubble role={msg.role} content={msg.content} timestamp={msg.created_at} />
-                            </div>
-                        ))}
+                        {messages?.map((msg) => {
+                            const normalizedRoleRaw = String(msg.role || "").trim().toLowerCase();
+                            const normalizedRole =
+                                normalizedRoleRaw === "assistant" || normalizedRoleRaw === "system"
+                                    ? normalizedRoleRaw
+                                    : "user";
+                            return (
+                                <div key={msg.id} className="flex flex-col">
+                                    <MessageBubble role={normalizedRole} content={msg.content} timestamp={msg.created_at} />
+                                </div>
+                            );
+                        })}
 
                         {isSending && (
                             <div className="flex justify-start">
@@ -726,25 +836,6 @@ export default function ChatWorkspacePage() {
                 </ScrollArea>
 
                 <div className="p-4 border-t border-border">
-                    {currentSessionId && pendingActions?.length > 0 && (
-                        <ApprovalGateComposer
-                            pendingActions={pendingActions}
-                            disabled={isSending || isCreating}
-                            onSendDecision={async (command) => {
-                                await sendMessage({
-                                    session_id: currentSessionId,
-                                    content: command,
-                                    mode: "action",
-                                    mentions: [],
-                                });
-                                trackUIEvent("chat_approval_sent", {
-                                    source: "dashboard_chat",
-                                    pending_count: pendingActions.length,
-                                });
-                            }}
-                        />
-                    )}
-
                     {!hasMessages && (
                         <div className="flex flex-wrap gap-2 mb-3">
                             {actionChips.map((chip) => (
@@ -753,7 +844,7 @@ export default function ChatWorkspacePage() {
                                     aria-label={`Insert prompt: ${chip.label}`}
                                     type="button"
                                     className="rounded-full border border-border/60 bg-linen/40 hover:bg-linen px-3 py-1.5 text-sm transition"
-                                    onClick={() => insertPrompt(chip.prompt)}
+                                    onClick={() => insertPrompt(chip.id, chip.prompt)}
                                 >
                                     {chip.label}
                                 </button>
@@ -762,26 +853,31 @@ export default function ChatWorkspacePage() {
                     )}
 
                     {selectedInputMentions.length > 0 && (
-                        <div className="mb-3 flex flex-wrap gap-1.5">
-                            {selectedInputMentions.map((mention) => (
-                                <span
-                                    key={mentionKey(mention)}
-                                    className={cn(
-                                        "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium font-inter",
-                                        mentionToneClass(mention.kind)
-                                    )}
-                                >
-                                    {mention.kind === "memory" ? "/" : "@"}{mention.label}
-                                    <button
-                                        type="button"
-                                        className="opacity-70 hover:opacity-100"
-                                        onClick={() => removeInputMention(mention)}
-                                        aria-label={`Remove ${mention.label}`}
+                        <div className="mb-3">
+                            <div className="flex flex-wrap gap-1.5">
+                                {selectedInputMentions.map((mention) => (
+                                    <span
+                                        key={mentionKey(mention)}
+                                        className={cn(
+                                            "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium font-inter",
+                                            mentionToneClass(mention.kind)
+                                        )}
                                     >
-                                        <X size={12} />
-                                    </button>
-                                </span>
-                            ))}
+                                        {mention.kind === "memory" ? "/" : "@"}{mention.label}
+                                        <button
+                                            type="button"
+                                            className="opacity-70 hover:opacity-100"
+                                            onClick={() => removeInputMention(mention)}
+                                            aria-label={`Remove ${mention.label}`}
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    </span>
+                                ))}
+                            </div>
+                            <p className="mt-1 text-[11px] text-muted-foreground font-inter">
+                                Threads in view: {selectedInputThreadCount}/{MAX_THREAD_SELECTION}
+                            </p>
                         </div>
                     )}
 
@@ -791,7 +887,7 @@ export default function ChatWorkspacePage() {
                             onClick={() => setIsMobileReferencesOpen(true)}
                             className="lg:hidden h-11 rounded-full border border-border px-3 text-[12px] text-muted-foreground hover:bg-linen font-inter shrink-0"
                         >
-                            References
+                            Memory
                         </button>
                         <div className="relative flex-1">
                             <Textarea
@@ -807,13 +903,14 @@ export default function ChatWorkspacePage() {
                                         ? `${listboxId}-option-${activeSuggestionIndex}`
                                         : undefined
                                 }
-                                placeholder="Ask Teeks?"
+                                placeholder="Ask about captures, people, approvals, preferences, or prior discussions"
                                 rows={1}
-                                className="bg-linen border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 min-h-[44px] max-h-36 text-sm leading-5 transition-colors font-inter resize-none overflow-y-auto"
+                                className="bg-linen border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30 min-h-[44px] text-sm leading-5 transition-colors font-inter resize-none overflow-y-auto"
                                 onChange={(e) => {
                                     const value = e.target.value;
                                     const cursor = e.target.selectionStart ?? value.length;
                                     onInputChange(value, cursor);
+                                    requestAnimationFrame(adjustComposerHeight);
                                 }}
                                 onKeyDown={handleComposerKeyDown}
                                 disabled={isSending || isCreating}
@@ -896,17 +993,20 @@ export default function ChatWorkspacePage() {
                     <div className="flex items-center justify-between gap-2">
                         <div>
                             <p className="text-[11px] font-bold uppercase tracking-[1.2px] text-muted-foreground font-inter">
-                                References
+                                Memory Sources
                             </p>
                             <p className="text-sm text-foreground mt-1 font-inter">
-                                Select what Teeks should use on your next message.
+                                Bring context into view — Teeks will draw from it when answering.
+                            </p>
+                            <p className="text-[11px] text-muted-foreground mt-1 font-inter">
+                                Threads in view: {selectedPaneThreadCount}/{MAX_THREAD_SELECTION}
                             </p>
                         </div>
                         <button
                             type="button"
                             onClick={() => setIsPaneOpen(false)}
                             className="rounded-full border border-border p-1.5 text-muted-foreground hover:bg-linen"
-                            aria-label="Hide references pane"
+                            aria-label="Hide memory pane"
                         >
                             <X size={14} />
                         </button>
@@ -914,10 +1014,10 @@ export default function ChatWorkspacePage() {
                     <div className="relative mt-3">
                         <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                         <Input
-                            aria-label="Search references"
+                            aria-label="Search memory"
                             value={paneQuery}
                             onChange={(e) => setPaneQuery(e.target.value)}
-                            placeholder="Search entities and remember entries"
+                            placeholder="Search people, threads, approvals, and memory"
                             className="h-9 pl-8 text-xs bg-linen border-border focus-visible:bg-white focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary/30"
                         />
                     </div>
@@ -944,24 +1044,30 @@ export default function ChatWorkspacePage() {
                     <div className="p-3 space-y-2">
                         {paneLoading ? (
                             <div className="rounded-[10px] border border-border px-3 py-3 text-xs text-muted-foreground font-inter">
-                                Loading references...
+                                Loading…
                             </div>
                         ) : paneItems.length === 0 ? (
                             <div className="rounded-[10px] border border-border px-3 py-3 text-xs text-muted-foreground font-inter">
-                                No references found.
+                                Nothing here yet.
                             </div>
                         ) : (
                             paneItems.map((item) => {
                                 const selected = selectedPaneMentionKeys.has(mentionKey(item.mention));
+                                const threadCapReached = selectedPaneThreadCount >= MAX_THREAD_SELECTION;
+                                const addDisabled = !selected && isThreadMention(item.mention) && threadCapReached;
                                 return (
                                     <div
                                         key={item.id}
                                         role="button"
                                         tabIndex={0}
-                                        onClick={() => togglePaneMention(item.mention)}
+                                        onClick={() => {
+                                            if (addDisabled) return;
+                                            togglePaneMention(item.mention);
+                                        }}
                                         onKeyDown={(e) => {
                                             if (e.key === "Enter" || e.key === " ") {
                                                 e.preventDefault();
+                                                if (addDisabled) return;
                                                 togglePaneMention(item.mention);
                                             }
                                         }}
@@ -969,7 +1075,8 @@ export default function ChatWorkspacePage() {
                                             "w-full rounded-[10px] border px-3 py-2.5 text-left transition font-inter",
                                             selected
                                                 ? "border-primary/30 bg-primary/[0.06]"
-                                                : "border-border bg-white hover:bg-linen"
+                                                : "border-border bg-white hover:bg-linen",
+                                            addDisabled && "opacity-60"
                                         )}
                                     >
                                         <div className="flex items-start justify-between gap-2">
@@ -997,13 +1104,16 @@ export default function ChatWorkspacePage() {
                                                     type="button"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
+                                                        if (addDisabled) return;
                                                         togglePaneMention(item.mention);
                                                     }}
+                                                    disabled={addDisabled}
                                                     className={cn(
                                                         "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
                                                         selected
                                                             ? "border-primary/30 text-primary bg-primary/[0.08]"
-                                                            : "border-border text-muted-foreground"
+                                                            : "border-border text-muted-foreground",
+                                                        addDisabled && "opacity-60 cursor-not-allowed"
                                                     )}
                                                 >
                                                     {selected ? (
@@ -1012,7 +1122,7 @@ export default function ChatWorkspacePage() {
                                                             Added
                                                         </>
                                                     ) : (
-                                                        "Add"
+                                                        addDisabled ? "Limit reached" : "Add"
                                                     )}
                                                 </button>
                                             </div>
@@ -1046,17 +1156,20 @@ export default function ChatWorkspacePage() {
                 <SheetContent side="bottom" className="h-[78vh] p-0">
                     <div className="h-full flex flex-col">
                         <SheetHeader className="px-4 py-3 border-b border-border">
-                            <SheetTitle className="text-sm">References</SheetTitle>
-                            <p className="text-xs text-muted-foreground">Select what Teeks should use on your next message.</p>
+                            <SheetTitle className="text-sm">Memory Sources</SheetTitle>
+                            <p className="text-xs text-muted-foreground">Select the context Teeks should bring into view.</p>
+                            <p className="text-[11px] text-muted-foreground">
+                                Threads selected: {selectedPaneThreadCount}/{MAX_THREAD_SELECTION}
+                            </p>
                         </SheetHeader>
                         <div className="px-4 py-3 border-b border-border space-y-3">
                             <div className="relative">
                                 <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                                 <Input
-                                    aria-label="Search references"
+                                    aria-label="Search memory"
                                     value={paneQuery}
                                     onChange={(e) => setPaneQuery(e.target.value)}
-                                    placeholder="Search entities and remember entries"
+                                    placeholder="Search people, threads, approvals, and memory"
                                     className="h-9 pl-8 text-xs bg-linen border-border"
                                 />
                             </div>
@@ -1084,24 +1197,30 @@ export default function ChatWorkspacePage() {
                             <div className="p-3 space-y-2">
                                 {paneLoading ? (
                                     <div className="rounded-[10px] border border-border px-3 py-3 text-xs text-muted-foreground font-inter">
-                                        Loading references...
+                                        Loading memory...
                                     </div>
                                 ) : paneItems.length === 0 ? (
                                     <div className="rounded-[10px] border border-border px-3 py-3 text-xs text-muted-foreground font-inter">
-                                        No references found.
+                                        No memory found.
                                     </div>
                                 ) : (
                                     paneItems.map((item) => {
                                         const selected = selectedPaneMentionKeys.has(mentionKey(item.mention));
+                                        const threadCapReached = selectedPaneThreadCount >= MAX_THREAD_SELECTION;
+                                        const addDisabled = !selected && isThreadMention(item.mention) && threadCapReached;
                                         return (
                                             <div
                                                 key={`mobile-${item.id}`}
                                                 role="button"
                                                 tabIndex={0}
-                                                onClick={() => togglePaneMention(item.mention)}
+                                                onClick={() => {
+                                                    if (addDisabled) return;
+                                                    togglePaneMention(item.mention);
+                                                }}
                                                 onKeyDown={(e) => {
                                                     if (e.key === "Enter" || e.key === " ") {
                                                         e.preventDefault();
+                                                        if (addDisabled) return;
                                                         togglePaneMention(item.mention);
                                                     }
                                                 }}
@@ -1109,7 +1228,8 @@ export default function ChatWorkspacePage() {
                                                     "w-full rounded-[10px] border px-3 py-2.5 text-left transition font-inter",
                                                     selected
                                                         ? "border-primary/30 bg-primary/[0.06]"
-                                                        : "border-border bg-white hover:bg-linen"
+                                                        : "border-border bg-white hover:bg-linen",
+                                                    addDisabled && "opacity-60"
                                                 )}
                                             >
                                                 <div className="flex items-start justify-between gap-2">
@@ -1137,16 +1257,19 @@ export default function ChatWorkspacePage() {
                                                             type="button"
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
+                                                                if (addDisabled) return;
                                                                 togglePaneMention(item.mention);
                                                             }}
+                                                            disabled={addDisabled}
                                                             className={cn(
                                                                 "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
                                                                 selected
                                                                     ? "border-primary/30 text-primary bg-primary/[0.08]"
-                                                                    : "border-border text-muted-foreground"
+                                                                    : "border-border text-muted-foreground",
+                                                                addDisabled && "opacity-60 cursor-not-allowed"
                                                             )}
                                                         >
-                                                            {selected ? "Added" : "Add"}
+                                                            {selected ? "Added" : (addDisabled ? "Limit reached" : "Add")}
                                                         </button>
                                                     </div>
                                                 </div>

@@ -17,6 +17,7 @@ from app.infra.database import get_db
 from app.data.models import UserSettings, WebhookDelivery, WebhookLog
 from app.services import get_polar_service, PolarService
 from app.security.auth import get_user_settings, get_db_for_user
+from app.security.privacy_utils import mask_email, mask_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,10 @@ def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
     
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
-        logger.error(f"REVENUE CRITICAL: No user found for Polar customer {customer_id} - payment received but subscription not activated")
+        logger.error(
+            "REVENUE CRITICAL: No user found for Polar customer=%s - payment received but subscription not activated",
+            mask_identifier(customer_id),
+        )
         return
     
     # Idempotency: duplicate/replayed created events should not reset credits repeatedly.
@@ -141,7 +145,7 @@ def handle_subscription_created(event_data: Dict[str, Any], db) -> None:
         from app.services.credits import initialize_credits_for_pro
         initialize_credits_for_pro(user)
 
-    logger.info(f"Subscription created for user {user.user_email}, tier=pro")
+    logger.info("Subscription created for user=%s tier=pro", mask_email(user.user_email))
 
 
 def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
@@ -158,7 +162,7 @@ def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
 
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
-        logger.warning(f"Subscription active event for unknown customer {customer_id}")
+        logger.warning("Subscription active event for unknown customer=%s", mask_identifier(customer_id))
         return
 
     user.subscription_status = "active"
@@ -182,11 +186,11 @@ def handle_subscription_active(event_data: Dict[str, Any], db) -> None:
             if user.credits_period_start is None or new_period_start > user.credits_period_start:
                 from app.services.credits import reset_credits, PRO_CREDIT_LIMIT
                 reset_credits(user, PRO_CREDIT_LIMIT)
-                logger.info(f"Credits reset for user {user.user_email} on renewal")
+                logger.info("Credits reset for user=%s on renewal", mask_email(user.user_email))
         except (ValueError, TypeError):
             pass
 
-    logger.info(f"Subscription active for user {user.user_email}")
+    logger.info("Subscription active for user=%s", mask_email(user.user_email))
 
 
 def handle_subscription_updated(event_data: Dict[str, Any], db) -> None:
@@ -203,7 +207,7 @@ def handle_subscription_updated(event_data: Dict[str, Any], db) -> None:
 
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
-        logger.warning(f"Subscription updated event for unknown customer {customer_id}")
+        logger.warning("Subscription updated event for unknown customer=%s", mask_identifier(customer_id))
         return
     
     # Update status if present
@@ -219,7 +223,7 @@ def handle_subscription_updated(event_data: Dict[str, Any], db) -> None:
         except (ValueError, TypeError):
             pass
     
-    logger.info(f"Subscription updated for user {user.user_email}")
+    logger.info("Subscription updated for user=%s", mask_email(user.user_email))
 
 
 def handle_subscription_canceled(event_data: Dict[str, Any], db) -> None:
@@ -236,13 +240,13 @@ def handle_subscription_canceled(event_data: Dict[str, Any], db) -> None:
 
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
-        logger.warning(f"Subscription canceled event for unknown customer {customer_id}")
+        logger.warning("Subscription canceled event for unknown customer=%s", mask_identifier(customer_id))
         return
     
     user.subscription_status = "cancel_scheduled"
     # Note: Keep tier as "pro" until revoked - user still has access until period end
     
-    logger.info(f"Subscription canceled for user {user.user_email}")
+    logger.info("Subscription canceled for user=%s", mask_email(user.user_email))
 
 
 def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
@@ -259,7 +263,7 @@ def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
 
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
-        logger.warning(f"Subscription revoked event for unknown customer {customer_id}")
+        logger.warning("Subscription revoked event for unknown customer=%s", mask_identifier(customer_id))
         return
     
     user.subscription_tier = "trial"
@@ -271,7 +275,7 @@ def handle_subscription_revoked(event_data: Dict[str, Any], db) -> None:
     from app.services.credits import TRIAL_CREDIT_LIMIT
     user.credits_limit = TRIAL_CREDIT_LIMIT
 
-    logger.info(f"Subscription revoked for user {user.user_email}")
+    logger.info("Subscription revoked for user=%s", mask_email(user.user_email))
 
 
 def handle_subscription_uncanceled(event_data: Dict[str, Any], db) -> None:
@@ -288,12 +292,12 @@ def handle_subscription_uncanceled(event_data: Dict[str, Any], db) -> None:
 
     user = get_user_by_polar_customer_id(db, customer_id)
     if not user:
-        logger.warning(f"Subscription uncanceled event for unknown customer {customer_id}")
+        logger.warning("Subscription uncanceled event for unknown customer=%s", mask_identifier(customer_id))
         return
     
     user.subscription_status = "active"
     
-    logger.info(f"Subscription uncanceled for user {user.user_email}")
+    logger.info("Subscription uncanceled for user=%s", mask_email(user.user_email))
 
 
 # Event handler mapping
@@ -337,6 +341,8 @@ async def handle_polar_webhook(
 
     event_type = event.get("type", "unknown")
     customer_id = _extract_customer_id(event)
+    audit_user = get_user_by_polar_customer_id(db, customer_id) if customer_id else None
+    audit_user_id = audit_user.user_id if audit_user else None
     logger.info(f"Received Polar webhook: {event_type}")
 
     # Idempotency: ignore duplicate delivery IDs once processed.
@@ -352,7 +358,17 @@ async def handle_polar_webhook(
     # Route to handler
     handler = EVENT_HANDLERS.get(event_type)
     if not handler:
-        db.add(WebhookLog(source="polar", event_type=event_type, processed=False, error="no_handler", customer_id=customer_id))
+        db.add(
+            WebhookLog(
+                source="polar",
+                event_type=event_type,
+                processed=False,
+                error="no_handler",
+                user_id=audit_user_id,
+                provider_customer_id=customer_id,
+                subject_ref=None,
+            )
+        )
         db.commit()
         logger.debug(f"No handler for event type: {event_type}")
         return {"received": True, "handled": False}
@@ -366,11 +382,22 @@ async def handle_polar_webhook(
                     source="polar",
                     delivery_id=webhook_id,
                     event_type=event_type,
-                    customer_id=customer_id,
+                    user_id=audit_user_id,
+                    provider_customer_id=customer_id,
+                    subject_ref=None,
                     processed_at=datetime.now(timezone.utc),
                 )
             )
-        db.add(WebhookLog(source="polar", event_type=event_type, processed=True, customer_id=customer_id))
+        db.add(
+            WebhookLog(
+                source="polar",
+                event_type=event_type,
+                processed=True,
+                user_id=audit_user_id,
+                provider_customer_id=customer_id,
+                subject_ref=None,
+            )
+        )
         db.commit()
         return {"received": True, "handled": True}
     except IntegrityError:
@@ -382,7 +409,17 @@ async def handle_polar_webhook(
         db.rollback()
         # Log in a fresh transaction since we rolled back
         try:
-            db.add(WebhookLog(source="polar", event_type=event_type, processed=False, error=str(e)[:500], customer_id=customer_id))
+            db.add(
+                WebhookLog(
+                    source="polar",
+                    event_type=event_type,
+                    processed=False,
+                    error=str(e)[:500],
+                    user_id=audit_user_id,
+                    provider_customer_id=customer_id,
+                    subject_ref=None,
+                )
+            )
             db.commit()
         except Exception:
             pass

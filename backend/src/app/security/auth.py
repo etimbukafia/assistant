@@ -36,6 +36,18 @@ from app.data.models import UserSettings
 logger = logging.getLogger(__name__)
 
 
+def _auth_debug_enabled() -> bool:
+    try:
+        return bool(get_settings().DEBUG)
+    except Exception:
+        return False
+
+
+def _auth_debug(message: str, *args) -> None:
+    if _auth_debug_enabled():
+        logger.debug(message, *args)
+
+
 # =============================================================================
 # JWKS Support for ES256 tokens
 # =============================================================================
@@ -48,7 +60,7 @@ def get_jwks_client(supabase_url: str) -> jwt.PyJWKClient:
     Supabase exposes JWKS at: {supabase_url}/auth/v1/.well-known/jwks.json
     """
     jwks_url = f"{supabase_url}/auth/v1/.well-known/jwks.json"
-    logger.info(f"Initializing JWKS client from: {jwks_url}")
+    _auth_debug("Initializing JWKS client from: %s", jwks_url)
     return jwt.PyJWKClient(jwks_url, cache_keys=True)
 
 
@@ -160,13 +172,13 @@ def verify_jwt(token: str, jwt_secret: str, supabase_url: str = "") -> dict:
         HTTPException: If token is invalid or expired
     """
     alg = get_token_algorithm(token)
-    logger.info(f"AUTH_DEBUG: Token algorithm: {alg}, first 20 chars: {token[:20]}...")
+    _auth_debug("JWT verification started (alg=%s)", alg)
 
     try:
         if alg == "ES256":
             # ES256 requires JWKS public key verification
             if not supabase_url:
-                logger.error("AUTH_DEBUG: ES256 token but SUPABASE_URL not configured")
+                logger.error("ES256 token received but SUPABASE_URL not configured")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Server configuration error: SUPABASE_URL required for ES256 tokens"
@@ -174,7 +186,7 @@ def verify_jwt(token: str, jwt_secret: str, supabase_url: str = "") -> dict:
 
             jwks_client = get_jwks_client(supabase_url)
             signing_key = jwks_client.get_signing_key_from_jwt(token)
-            logger.info(f"AUTH_DEBUG: Got signing key from JWKS, kid: {signing_key.key_id}")
+            _auth_debug("JWKS signing key resolved (kid=%s)", signing_key.key_id)
 
             result = jwt.decode(
                 token,
@@ -191,13 +203,13 @@ def verify_jwt(token: str, jwt_secret: str, supabase_url: str = "") -> dict:
         else:
             # HS256 uses shared secret
             if not jwt_secret:
-                logger.error("AUTH_DEBUG: HS256 token but JWT secret not configured")
+                logger.error("HS256 token received but JWT secret not configured")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Server configuration error: JWT secret not configured"
                 )
 
-            logger.info(f"AUTH_DEBUG: Using HS256 with secret (first 10 chars): {jwt_secret[:10]}...")
+            _auth_debug("Using HS256 verification path")
             result = jwt.decode(
                 token,
                 jwt_secret,
@@ -211,18 +223,18 @@ def verify_jwt(token: str, jwt_secret: str, supabase_url: str = "") -> dict:
                 }
             )
 
-        logger.info(f"AUTH_DEBUG: Token verified successfully for user: {result.get('sub', 'unknown')}")
+        _auth_debug("Token verified successfully for user=%s", result.get("sub", "unknown"))
         return result
 
     except ExpiredSignatureError:
-        logger.warning("AUTH_DEBUG: Token expired")
+        _auth_debug("Token expired")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expired. Please refresh your session.",
             headers={"WWW-Authenticate": "Bearer"}
         )
     except InvalidTokenError as e:
-        logger.warning(f"AUTH_DEBUG: Invalid token error: {str(e)}")
+        _auth_debug("Invalid token error: %s", str(e))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}",
@@ -263,7 +275,7 @@ async def get_current_user(
     token = extract_token_from_header(authorization)
 
     if not token:
-        logger.warning(f"AUTH_DEBUG: No token in request. Authorization header: {authorization[:50] if authorization else 'None'}...")
+        _auth_debug("No bearer token in request")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated. Please sign in.",
@@ -479,7 +491,7 @@ def require_credits_available(
     """
     Require user has credits remaining for AI operations.
 
-    Use on endpoints that consume Gemini tokens.
+    Use on endpoints that can consume billable hosted model tokens.
     Returns HTTP 402 when credits are exhausted.
     """
     from app.services.credits import check_credits_available

@@ -11,6 +11,8 @@ import {
     CheckCircle2, ArrowRight, Zap, Archive, RotateCcw, UserPlus,
 } from "lucide-react";
 import { ContactDialog } from "./ContactDialog";
+import { PreReplyContextCard } from "@/components/contacts/PreReplyContextCard";
+import { InlineContextCaptureCard } from "@/components/vault/InlineContextCaptureCard";
 import { formatDistanceToNow, parseISO, format } from "date-fns";
 import { cn } from "@/lib/utils";
 import React from "react";
@@ -99,6 +101,8 @@ function ThreadContent({
     const actionTargetMessage = statusContext === "archived" ? (archivedTarget || latestMessage) : latestMessage;
     const { markDone, archive, restore } = useMessageMutations();
 
+    const { email: senderEmail, name: senderName } = parseSender(latestMessage?.sender || "");
+
     return (
         <ScrollArea className="flex-1">
             <div className="px-6 py-5 space-y-0">
@@ -109,6 +113,29 @@ function ThreadContent({
                     needsReply={thread_state.needs_reply}
                     summary={thread_state.summary}
                 />
+
+                {/* Pre-reply contact context */}
+                {senderEmail && (
+                    <div className="py-3">
+                        <PreReplyContextCard senderEmail={senderEmail} senderName={senderName} />
+                    </div>
+                )}
+
+                {latestMessage?.id && (
+                    <div className="pb-1">
+                        <InlineContextCaptureCard
+                            scopeType="message"
+                            scopeId={latestMessage.id}
+                            linkedTo={latestMessage.subject || senderName || senderEmail || "Email"}
+                            heading="Remember this"
+                            description="What came out of this conversation that Teeks should hold onto?"
+                            placeholder="A decision, a preference, something said…"
+                            className="bg-accent/[0.02]"
+                            revealStoredCaptureByDefault={false}
+                            allowStoredCaptureCorrection={false}
+                        />
+                    </div>
+                )}
 
                 {/* Quick Actions */}
                 <div className="flex items-center gap-2 py-4">
@@ -380,7 +407,8 @@ function MessageBubble({
 // ─── FORMATTED EMAIL BODY ────────────────────────────────────────────────────
 
 function FormattedEmailBody({ body }: { body: string }) {
-    const lines = body.split('\n');
+    const normalizedBody = normalizeEmailBody(body);
+    const lines = normalizedBody.split('\n');
     const elements: React.ReactElement[] = [];
     let inQuote = false;
     let quoteLines: string[] = [];
@@ -452,4 +480,33 @@ function FormattedEmailBody({ body }: { body: string }) {
     }
 
     return <div>{elements}</div>;
+}
+
+function normalizeEmailBody(rawBody: string): string {
+    const body = (rawBody || "").replace(/\r\n/g, "\n").trim();
+    if (!body) return "";
+
+    const looksLikeHtml = /<\/?[a-z][\s\S]*>/i.test(body);
+    if (!looksLikeHtml) return body;
+
+    const text = body
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<head[\s\S]*?<\/head>/gi, " ")
+        .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+        .replace(/<\/\s*(p|div|li|tr|h[1-6]|blockquote)\s*>/gi, "\n")
+        .replace(/<\s*li[^>]*>/gi, "- ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/gi, "&")
+        .replace(/&lt;/gi, "<")
+        .replace(/&gt;/gi, ">")
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/\u00A0/g, " ")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+
+    return text || body;
 }
